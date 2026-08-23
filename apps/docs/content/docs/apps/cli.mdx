@@ -365,6 +365,15 @@ Optional targeting:
 happier session create --path /path/to/repo --backend <backend-target-key> --tag <tag>
 ```
 
+Development builds can create a local Git worktree before launch:
+
+```bash
+happier session create --path /path/to/repo --worktree feature/auth --worktree-base upstream/dev
+```
+
+The JSON result reports the worktree, session path, branch, repository roots, and cleanup disposition.
+See [CLI sessions](/apps/cli-sessions#create-in-a-managed-git-worktree) for cleanup and retry rules.
+
 `--backend` expects a **backend target key** (not a short name). Common forms:
 
 ```bash

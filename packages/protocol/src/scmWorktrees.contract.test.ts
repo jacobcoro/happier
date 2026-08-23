@@ -4,6 +4,7 @@ import {
   ScmWorktreeCreateRequestSchema,
   ScmWorktreePruneRequestSchema,
   ScmWorktreeRemoveRequestSchema,
+  resolveSessionPathWithinWorktree,
 } from './scmWorktrees.js';
 
 describe('scmWorktrees protocol contracts', () => {
@@ -42,5 +43,34 @@ describe('scmWorktrees protocol contracts', () => {
     });
 
     expect(parsed.worktreePath).toBe('/repo/.dev/worktree/feature-auth');
+  });
+
+  it('maps a nested POSIX selection into the worktree', () => {
+    expect(resolveSessionPathWithinWorktree({
+      selectedPath: '/repo/packages/app',
+      sourceRootPath: '/repo',
+      worktreePath: '/repo/.dev/worktree/feature',
+    })).toBe('/repo/.dev/worktree/feature/packages/app');
+  });
+
+  it('compares Windows paths without case sensitivity', () => {
+    expect(resolveSessionPathWithinWorktree({
+      selectedPath: 'C:\\Repo\\Packages\\App',
+      sourceRootPath: 'c:\\repo',
+      worktreePath: 'C:\\Repo\\.dev\\worktree\\feature',
+    })).toBe('c:/Repo/.dev/worktree/feature/Packages/App');
+  });
+
+  it('falls back for POSIX case mismatches and sibling-prefix collisions', () => {
+    expect(resolveSessionPathWithinWorktree({
+      selectedPath: '/Repo/packages/app',
+      sourceRootPath: '/repo',
+      worktreePath: '/worktree',
+    })).toBe('/worktree');
+    expect(resolveSessionPathWithinWorktree({
+      selectedPath: '/repository/packages/app',
+      sourceRootPath: '/repo',
+      worktreePath: '/worktree',
+    })).toBe('/worktree');
   });
 });

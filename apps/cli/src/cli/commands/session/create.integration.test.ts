@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
+import { join } from 'node:path';
 
 import { DEFAULT_CATALOG_AGENT_ID } from '@/backends/types';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -40,22 +44,49 @@ describe('happier session create (integration)', () => {
     expect(body).not.toHaveProperty('initialPrompt');
   }
 
+  async function initializeWorktreeRepository(params: Readonly<{
+    prefix: string;
+    nestedPath?: readonly string[];
+  }>): Promise<string> {
+    worktreeRepoDir = await createTempDir(params.prefix);
+    const selectedPath = params.nestedPath?.length
+      ? join(worktreeRepoDir, ...params.nestedPath)
+      : worktreeRepoDir;
+    if (selectedPath !== worktreeRepoDir) {
+      await mkdir(selectedPath, { recursive: true });
+    }
+    await writeFile(join(worktreeRepoDir, 'README.md'), 'fixture\n');
+    execFileSync('git', ['init'], { cwd: worktreeRepoDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeRepoDir });
+    execFileSync('git', ['config', 'user.name', 'Happier Test'], { cwd: worktreeRepoDir });
+    execFileSync('git', ['add', 'README.md'], { cwd: worktreeRepoDir });
+    execFileSync('git', ['commit', '-m', 'fixture'], { cwd: worktreeRepoDir });
+    return selectedPath;
+  }
+
   const envKeys = [
     'HAPPIER_SERVER_URL',
     'HAPPIER_WEBAPP_URL',
     'HAPPIER_HOME_DIR',
+    'HAPPIER_ACTIVE_SERVER_ID',
+    'HAPPIER_LOCAL_SERVER_URL',
+    'HAPPIER_PUBLIC_SERVER_URL',
     'HAPPIER_STACK_INVOKED_CWD',
     'HAPPIER_SESSION_REQUESTED_DIRECTORY',
     'HAPPIER_SESSION_SOCKET_CONNECT_TIMEOUT_MS',
+    'HAPPIER_ACTIONS_SETTINGS_V1',
   ] as const;
   let envScope = createEnvKeyScope(envKeys);
   let server: Server | null = null;
   let happyHomeDir = '';
+  let worktreeRepoDir = '';
   let machineKeySeed: Uint8Array;
   let observedInitialMessageRpc = false;
   let observedSpawnBody: Record<string, unknown> | null = null;
   let sessionGetAttempts = 0;
   let sessionGetNotFoundUntil = 0;
+  let spawnResponse: Record<string, unknown>;
+  let dropSpawnConnection = false;
   let sessionSocket: ApiSessionSocketStub;
 
   beforeEach(async () => {
@@ -81,18 +112,47 @@ describe('happier session create (integration)', () => {
     observedSpawnBody = null;
     sessionGetAttempts = 0;
     sessionGetNotFoundUntil = 0;
+    spawnResponse = { success: true, sessionId };
+    dropSpawnConnection = false;
 
     server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
+
+      if (req.method === 'GET' && url.pathname === '/v2/account/settings') {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          version: 1,
+          content: {
+            t: 'plain',
+            v: { schemaVersion: 2 },
+          },
+        }));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/v1/artifacts') {
+        const chunks: Buffer[] = [];
+        for await (const c of req) chunks.push(Buffer.from(c));
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { id?: unknown };
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ id: body.id }));
+        return;
+      }
 
       if (req.method === 'POST' && url.pathname === `/spawn-session`) {
         const chunks: Buffer[] = [];
         for await (const c of req) chunks.push(Buffer.from(c));
         observedSpawnBody = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+        if (dropSpawnConnection) {
+          req.socket.destroy();
+          return;
+        }
 
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ success: true, sessionId }));
+        res.end(JSON.stringify(spawnResponse));
         return;
       }
 
@@ -175,6 +235,9 @@ describe('happier session create (integration)', () => {
     process.env.HAPPIER_WEBAPP_URL = 'http://127.0.0.1:3000';
     process.env.HAPPIER_HOME_DIR = happyHomeDir;
     envScope.patch({
+      HAPPIER_ACTIVE_SERVER_ID: undefined,
+      HAPPIER_LOCAL_SERVER_URL: undefined,
+      HAPPIER_PUBLIC_SERVER_URL: undefined,
       HAPPIER_STACK_INVOKED_CWD: undefined,
       HAPPIER_SESSION_REQUESTED_DIRECTORY: undefined,
     });
@@ -232,6 +295,10 @@ describe('happier session create (integration)', () => {
       await removeTempDir(happyHomeDir);
       happyHomeDir = '';
     }
+    if (worktreeRepoDir) {
+      await removeTempDir(worktreeRepoDir);
+      worktreeRepoDir = '';
+    }
 
     envScope.restore();
     envScope = createEnvKeyScope(envKeys);
@@ -272,6 +339,274 @@ describe('happier session create (integration)', () => {
         agentId: DEFAULT_CATALOG_AGENT_ID,
       });
       expect(observedInitialMessageRpc).toBe(false);
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('creates a managed Git worktree and spawns the session in the matching nested path', async () => {
+    const selectedPath = await initializeWorktreeRepository({
+      prefix: 'happier-cli-session-worktree-',
+      nestedPath: ['packages', 'app'],
+    });
+
+    const { handleSessionCommand } = await import('./index');
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand([
+        'create',
+        '--path', selectedPath,
+        '--worktree', 'digest-review',
+        '--worktree-base', 'HEAD',
+        '--prompt', 'Plan the refactor',
+        '--json',
+      ], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const parsed = output.json();
+      const expectedWorktreePath = join(worktreeRepoDir, '.dev', 'worktree', 'digest-review');
+      const expectedSessionPath = join(expectedWorktreePath, 'packages', 'app');
+      expect(parsed).toMatchObject({
+        v: 1,
+        ok: true,
+        kind: 'session_create',
+        data: {
+          created: true,
+          session: { id: 'sess_integration_create_123' },
+          checkout: {
+            kind: 'git_worktree',
+            worktreePath: expectedWorktreePath,
+            sessionPath: expectedSessionPath,
+            branchName: 'digest-review',
+            sourceRootPath: worktreeRepoDir,
+            repositoryRootPath: worktreeRepoDir,
+            disposition: 'retained',
+          },
+        },
+      });
+      expect(parsed.data?.checkout).toEqual({
+        kind: 'git_worktree',
+        worktreePath: expectedWorktreePath,
+        sessionPath: expectedSessionPath,
+        branchName: 'digest-review',
+        sourceRootPath: worktreeRepoDir,
+        repositoryRootPath: worktreeRepoDir,
+        disposition: 'retained',
+      });
+      expect(observedSpawnBody).toEqual(expect.objectContaining({ directory: expectedSessionPath }));
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('removes the worktree but preserves its branch after an explicit spawn rejection', async () => {
+    await initializeWorktreeRepository({ prefix: 'happier-cli-session-worktree-rejected-' });
+    spawnResponse = {
+      success: false,
+      error: 'Spawn rejected by daemon',
+      errorCode: 'spawn_failed',
+    };
+
+    const { handleSessionCommand } = await import('./index');
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand([
+        'create',
+        '--path', worktreeRepoDir,
+        '--worktree', 'digest-rejected',
+        '--json',
+      ], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const worktreePath = join(worktreeRepoDir, '.dev', 'worktree', 'digest-rejected');
+      expect(output.json()).toMatchObject({
+        v: 1,
+        ok: false,
+        kind: 'session_create',
+        error: {
+          message: 'Spawn rejected by daemon',
+          checkout: {
+            worktreePath,
+            branchName: 'digest-rejected',
+            disposition: 'removed',
+          },
+        },
+      });
+      expect(existsSync(worktreePath)).toBe(false);
+      expect(execFileSync('git', ['branch', '--list', 'digest-rejected'], {
+        cwd: worktreeRepoDir,
+        encoding: 'utf8',
+      }).trim()).toContain('digest-rejected');
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('removes the worktree when no daemon can receive the spawn request', async () => {
+    await initializeWorktreeRepository({ prefix: 'happier-cli-session-worktree-no-daemon-' });
+    await clearDaemonStateForTests();
+
+    const { handleSessionCommand } = await import('./index');
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand([
+        'create',
+        '--path', worktreeRepoDir,
+        '--worktree', 'digest-no-daemon',
+        '--json',
+      ], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const worktreePath = join(worktreeRepoDir, '.dev', 'worktree', 'digest-no-daemon');
+      expect(output.json()).toMatchObject({
+        v: 1,
+        ok: false,
+        kind: 'session_create',
+        error: {
+          message: 'No daemon running, no state file found',
+          checkout: {
+            worktreePath,
+            disposition: 'removed',
+          },
+        },
+      });
+      expect(existsSync(worktreePath)).toBe(false);
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('retains the worktree and returns an exact retry recipe after an uncertain spawn', async () => {
+    await initializeWorktreeRepository({ prefix: 'happier-cli-session-worktree-uncertain-' });
+    dropSpawnConnection = true;
+
+    const { handleSessionCommand } = await import('./index');
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand([
+        'create',
+        '--path', worktreeRepoDir,
+        '--worktree', 'digest-uncertain',
+        '--spawn-attempt-id', 'attempt-uncertain',
+        '--json',
+      ], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const worktreePath = join(worktreeRepoDir, '.dev', 'worktree', 'digest-uncertain');
+      const parsed = output.json();
+      expect(parsed).toMatchObject({
+        v: 1,
+        ok: false,
+        kind: 'session_create',
+        error: {
+          spawnAttemptId: 'attempt-uncertain',
+          checkout: {
+            worktreePath,
+            sessionPath: worktreePath,
+            disposition: 'retained',
+          },
+          retry: {
+            path: worktreePath,
+            spawnAttemptId: 'attempt-uncertain',
+            resumeSpawnAttempt: true,
+            omitWorktreeFlags: true,
+          },
+        },
+      });
+      expect(existsSync(worktreePath)).toBe(true);
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('retains the worktree when session launch requires approval', async () => {
+    await initializeWorktreeRepository({ prefix: 'happier-cli-session-worktree-approval-' });
+    envScope.patch({
+      HAPPIER_ACTIONS_SETTINGS_V1: JSON.stringify({
+        v: 1,
+        actions: {
+          'session.spawn_new': {
+            enabled: true,
+            disabledSurfaces: [],
+            disabledPlacements: [],
+            approvalRequiredSurfaces: ['cli'],
+          },
+        },
+      }),
+    });
+
+    const { handleSessionCommand } = await import('./index');
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand([
+        'create',
+        '--path', worktreeRepoDir,
+        '--worktree', 'digest-approval',
+        '--json',
+      ], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const worktreePath = join(worktreeRepoDir, '.dev', 'worktree', 'digest-approval');
+      expect(output.json()).toMatchObject({
+        v: 1,
+        ok: true,
+        kind: 'session_create',
+        data: {
+          kind: 'approval_request_created',
+          artifactId: expect.any(String),
+          checkout: {
+            worktreePath,
+            disposition: 'retained',
+          },
+        },
+      });
+      expect(existsSync(worktreePath)).toBe(true);
+      expect(observedSpawnBody).toBeNull();
     } finally {
       output.restore();
     }

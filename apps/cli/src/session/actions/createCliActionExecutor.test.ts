@@ -1506,6 +1506,7 @@ describe('createCliActionExecutor', () => {
     });
     spawnDaemonSession.mockResolvedValue({
       error: 'Request failed: /spawn-session, The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()',
+      requestMayHaveBeenSubmitted: true,
     });
     resolveDaemonSpawnSessionByNonce.mockResolvedValue({ status: 'unsupported' });
     const result = await executor.execute(
@@ -1534,6 +1535,7 @@ describe('createCliActionExecutor', () => {
     });
     spawnDaemonSession.mockResolvedValue({
       error: 'Request failed: /spawn-session, The socket connection was closed unexpectedly',
+      requestMayHaveBeenSubmitted: true,
     });
     resolveDaemonSpawnSessionByNonce
       .mockResolvedValueOnce({ status: 'unsupported' })
@@ -1589,6 +1591,7 @@ describe('createCliActionExecutor', () => {
     });
     spawnDaemonSession.mockResolvedValue({
       error: 'Request failed: /spawn-session, The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()',
+      requestMayHaveBeenSubmitted: true,
     });
     resolveDaemonSpawnSessionByNonce.mockResolvedValue({
       status: 'success',

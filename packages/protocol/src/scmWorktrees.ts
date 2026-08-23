@@ -45,3 +45,43 @@ export type ScmWorktreePruneRequest = z.infer<typeof ScmWorktreePruneRequestSche
 
 export const ScmWorktreePruneResponseSchema = ScmWorktreeCommandResponseSchema;
 export type ScmWorktreePruneResponse = z.infer<typeof ScmWorktreePruneResponseSchema>;
+
+function normalizeWorktreePath(value: string): string {
+  const normalizedSeparators = value.trim().replace(/\\+/g, '/');
+  const normalizedDriveLetter = normalizedSeparators.replace(
+    /^([A-Z]):/,
+    (_match, driveLetter: string) => `${driveLetter.toLowerCase()}:`,
+  );
+  const trimmedTrailingSeparator = normalizedDriveLetter.replace(/\/+$/, '');
+  return trimmedTrailingSeparator.length > 0 ? trimmedTrailingSeparator : normalizedDriveLetter;
+}
+
+function isWindowsPath(value: string): boolean {
+  return /^[a-z]:($|\/)/i.test(value);
+}
+
+function normalizeWorktreePathForComparison(value: string): string {
+  return isWindowsPath(value) ? value.toLowerCase() : value;
+}
+
+function isPathAtOrWithinRoot(path: string, rootPath: string): boolean {
+  const comparablePath = normalizeWorktreePathForComparison(path);
+  const comparableRootPath = normalizeWorktreePathForComparison(rootPath);
+  if (comparablePath === comparableRootPath) return true;
+  return comparablePath.startsWith(comparableRootPath)
+    && comparablePath.charAt(comparableRootPath.length) === '/';
+}
+
+export function resolveSessionPathWithinWorktree(params: Readonly<{
+  selectedPath: string;
+  worktreePath: string;
+  sourceRootPath: string;
+}>): string {
+  const selectedPath = normalizeWorktreePath(params.selectedPath);
+  const worktreePath = normalizeWorktreePath(params.worktreePath);
+  const sourceRootPath = normalizeWorktreePath(params.sourceRootPath);
+  if (!isPathAtOrWithinRoot(selectedPath, sourceRootPath)) return params.worktreePath;
+
+  const relativePath = selectedPath.slice(sourceRootPath.length).replace(/^\/+/, '');
+  return relativePath ? `${worktreePath}/${relativePath}` : params.worktreePath;
+}

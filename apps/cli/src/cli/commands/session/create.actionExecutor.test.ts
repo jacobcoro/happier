@@ -5,15 +5,31 @@ import { captureConsoleJsonOutput, captureConsoleText } from '@/testkit/logger/c
 import { SESSION_CREATE_USAGE } from './create/parseSessionCreateSpawnOptions';
 
 const execute = vi.fn();
-const createCliActionExecutorFromCredentials = vi.fn(() => ({ execute }));
+let onSpawnCustodyChange: ((custody: 'submitted' | 'accepted' | 'created' | 'rejected') => void) | undefined;
+const createCliActionExecutorFromCredentials = vi.fn((params?: Readonly<{
+  onSpawnCustodyChange?: typeof onSpawnCustodyChange;
+}>) => {
+  onSpawnCustodyChange = params?.onSpawnCustodyChange;
+  return { execute };
+});
+const materializeSessionCreateCheckout = vi.fn();
+const cleanupSessionCreateCheckout = vi.fn();
 
 vi.mock('@/session/actions/createCliActionExecutorFromCredentials', () => ({
   createCliActionExecutorFromCredentials,
 }));
 
+vi.mock('./create/sessionCreateCheckout', () => ({
+  materializeSessionCreateCheckout,
+  cleanupSessionCreateCheckout,
+}));
+
 beforeEach(() => {
   execute.mockReset();
   createCliActionExecutorFromCredentials.mockClear();
+  materializeSessionCreateCheckout.mockReset();
+  cleanupSessionCreateCheckout.mockReset();
+  onSpawnCustodyChange = undefined;
 });
 
 describe('happier session create (action executor)', () => {
@@ -86,6 +102,55 @@ describe('happier session create (action executor)', () => {
           session: { id: 'sess-1' },
         }),
       }));
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('reports cleanup failure without replacing the primary spawn error', async () => {
+    const retainedCheckout = {
+      kind: 'git_worktree',
+      worktreePath: '/repo/.dev/worktree/feature',
+      sessionPath: '/repo/.dev/worktree/feature',
+      branchName: 'feature',
+      sourceRootPath: '/repo',
+      repositoryRootPath: '/repo',
+      disposition: 'retained',
+    } as const;
+    materializeSessionCreateCheckout.mockResolvedValue(retainedCheckout);
+    cleanupSessionCreateCheckout.mockResolvedValue({
+      checkout: { ...retainedCheckout, disposition: 'remove_failed' },
+      cleanupError: 'worktree is locked',
+    });
+    execute.mockImplementationOnce(async () => {
+      onSpawnCustodyChange?.('submitted');
+      onSpawnCustodyChange?.('rejected');
+      return { ok: false, errorCode: 'spawn_failed', error: 'Spawn rejected by daemon' };
+    });
+
+    const { handleSessionCommand } = await import('./handleSessionCommand');
+    const output = captureConsoleJsonOutput();
+    try {
+      await handleSessionCommand(
+        ['create', '--path', '/repo', '--worktree', 'feature', '--json'],
+        {
+          readCredentialsFn: async () => ({
+            token: 'token_test',
+            encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+          }),
+        },
+      );
+
+      expect(output.json()).toMatchObject({
+        ok: false,
+        kind: 'session_create',
+        error: {
+          code: 'spawn_failed',
+          message: 'Spawn rejected by daemon',
+          cleanupError: 'worktree is locked',
+          checkout: { disposition: 'remove_failed' },
+        },
+      });
     } finally {
       output.restore();
     }

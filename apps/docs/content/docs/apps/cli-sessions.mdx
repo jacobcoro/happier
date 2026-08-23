@@ -52,6 +52,38 @@ Target a different directory:
 happier session create --path /path/to/repo --title "Repo session"
 ```
 
+### Create in a managed Git worktree
+
+Development builds can create a new Git branch and worktree before session launch:
+
+```bash
+happier session create --path /path/to/repo --worktree feature/auth
+```
+
+Choose the new branch base with `--worktree-base`:
+
+```bash
+happier session create --path /path/to/repo --worktree feature/auth --worktree-base upstream/dev
+```
+
+The CLI keeps the selected subdirectory inside the new worktree. It uses the repository root by default.
+
+This option supports local session targets only. You cannot combine it with `--host`, `--machine-id`, or `--resume-spawn-attempt`.
+
+The CLI removes the worktree after a local validation failure or an explicit daemon rejection. It keeps the Git branch.
+The CLI retains the worktree after submission becomes uncertain or accepted. Approval requests also retain it.
+
+With `--json`, successful output includes `data.checkout`. Failed launches include `error.checkout` after worktree creation.
+Inspect `checkout.disposition` for `retained`, `removed`, or `remove_failed`.
+
+If a retained launch is uncertain, retry the same attempt against `checkout.sessionPath`:
+
+```bash
+happier session create --path <checkout.sessionPath> --spawn-attempt-id <id> --resume-spawn-attempt --json
+```
+
+Omit `--worktree` and `--worktree-base` from the retry.
+
 ### Backend targeting (`--backend`)
 
 `--backend` expects a **backend target key**:

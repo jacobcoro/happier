@@ -2195,6 +2195,7 @@ export {
   ScmWorktreePruneResponseSchema,
   ScmWorktreeRemoveRequestSchema,
   ScmWorktreeRemoveResponseSchema,
+  resolveSessionPathWithinWorktree,
   type ScmWorktreeCreateRequest,
   type ScmWorktreeCreateResponse,
   type ScmWorktreeCommandResponse,

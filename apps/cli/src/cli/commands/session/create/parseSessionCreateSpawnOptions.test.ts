@@ -263,4 +263,33 @@ describe('parseSessionCreateSpawnOptions', () => {
       '--launch-profile', 'work',
     ]).actionInput).toMatchObject({ profileId: 'work' });
   });
+
+  it('keeps checkout options separate from the spawn action input', () => {
+    const parsed = parseSessionCreateSpawnOptions([
+      '--path', '/repo/packages/app',
+      '--worktree', 'feature/auth',
+      '--worktree-base', 'upstream/dev',
+    ]);
+
+    expect(parsed.checkoutRequest).toEqual({
+      displayName: 'feature/auth',
+      baseRef: 'upstream/dev',
+    });
+    expect(parsed.actionInput.path).toBe('/repo/packages/app');
+    expect(parsed.actionInput).not.toHaveProperty('worktree');
+  });
+
+  it('rejects a base ref without a worktree name', () => {
+    expect(() => parseSessionCreateSpawnOptions([
+      '--worktree-base', 'upstream/dev',
+    ])).toThrow('Invalid --worktree-base without --worktree.');
+  });
+
+  it.each([
+    ['remote host', ['--worktree', 'feature', '--host', 'remote-host']],
+    ['remote machine', ['--worktree', 'feature', '--machine-id', 'machine-1']],
+    ['spawn resume', ['--worktree', 'feature', '--spawn-attempt-id', 'attempt-1', '--resume-spawn-attempt']],
+  ])('rejects worktree creation with %s', (_label, argv) => {
+    expect(() => parseSessionCreateSpawnOptions(argv)).toThrow();
+  });
 });
