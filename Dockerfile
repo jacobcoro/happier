@@ -44,9 +44,11 @@ COPY packages/cli-common/workspaceBundleLock.mjs packages/cli-common/workspaceLo
 # Shared deps (alpine) for web UI export embeds.
 # We build the web export on the BUILDPLATFORM because the output is architecture-agnostic, and
 # running Node/Yarn under QEMU for linux/arm64 has proven unstable (SIGILL).
-FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION} AS deps-alpine-build
 WORKDIR /repo
-RUN apk add --no-cache libc6-compat python3 build-base
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 build-essential \
+    && rm -rf /var/lib/apt/lists/*
 ENV REDISMS_DISABLE_POSTINSTALL=1
 ENV YARN_CACHE_FOLDER=/tmp/.yarn-cache
 
