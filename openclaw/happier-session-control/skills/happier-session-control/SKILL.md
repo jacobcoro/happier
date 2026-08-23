@@ -70,6 +70,17 @@ Create/load a session by tag:
 happier session create --tag <tag> --json
 ```
 
+In development builds, create a session in a new local Git worktree:
+
+```bash
+happier session create --path <repo> --worktree <new-branch> --worktree-base <ref> --json
+```
+
+Read `data.checkout` on success. Read `error.checkout` if launch fails after worktree creation.
+If `checkout.disposition` is `retained`, preserve the directory.
+For an uncertain spawn, retry with the returned `checkout.sessionPath` and `error.spawnAttemptId`.
+Pass `--resume-spawn-attempt` and omit both worktree flags.
+
 Send a message to a session:
 
 ```bash
@@ -195,4 +206,3 @@ Set a one-off custom server as active:
 ```bash
 happier server set --server-url https://example.com --webapp-url https://example.com --json
 ```
-

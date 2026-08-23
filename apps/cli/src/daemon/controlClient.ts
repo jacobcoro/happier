@@ -418,8 +418,9 @@ async function daemonPost(path: string, body?: any, options: DaemonPostOptions =
     const errorMessage = `Request failed: ${path}, ${error instanceof Error ? error.message : 'Unknown error'}`;
     logger.debug(`[CONTROL CLIENT] ${errorMessage}`);
     return {
-      error: errorMessage
-    }
+      error: errorMessage,
+      requestMayHaveBeenSubmitted: true,
+    };
   }
 }
 

@@ -26,6 +26,7 @@ export type ParsedSessionCreateSpawnOptions = Readonly<{
   spawnAttemptId: string | null;
   resumeSpawnAttempt: boolean;
   connectedServicesAuthIntent?: ConnectedServicesLaunchAuthIntent;
+  checkoutRequest?: Readonly<{ displayName: string; baseRef?: string }>;
   actionInput: SessionCreateSpawnActionInput;
 }>;
 
@@ -34,6 +35,7 @@ export const SESSION_CREATE_USAGE = [
   '',
   'Options:',
   '  [--path <path>] [--backend <backend-target>]',
+  '  [--worktree <branch-name>] [--worktree-base <git-ref>]',
   '  [--title <title>] [--tag <tag>]',
   '  [--prompt <text>|--message <text>]',
   `  [--model <model-id>] [--permission-mode <${SESSION_PERMISSION_MODES.join('|')}>]`,
@@ -211,6 +213,14 @@ export function parseSessionCreateSpawnOptions(argv: readonly string[]): ParsedS
   const profileId = (launchProfileId ?? legacyProfileId ?? '').trim();
   const host = (readFlagValue(argv, '--host') ?? '').trim();
   const machineId = (readFlagValue(argv, '--machine-id') ?? '').trim();
+  const worktreeDisplayName = (readFlagValue(argv, '--worktree') ?? '').trim();
+  const worktreeBaseRef = (readFlagValue(argv, '--worktree-base') ?? '').trim();
+  if (worktreeBaseRef && !worktreeDisplayName) {
+    throw new Error('Invalid --worktree-base without --worktree.');
+  }
+  if (worktreeDisplayName && (host || machineId)) {
+    throw new Error('Managed worktrees require a local session target.');
+  }
   const spawnAttemptId = (readFlagValue(argv, '--spawn-attempt-id') ?? '').trim() || null;
   if (spawnAttemptId && (spawnAttemptId.length > 200 || !/^[A-Za-z0-9._:-]+$/.test(spawnAttemptId))) {
     throw new Error('Invalid --spawn-attempt-id.');
@@ -218,6 +228,9 @@ export function parseSessionCreateSpawnOptions(argv: readonly string[]): ParsedS
   const resumeSpawnAttempt = hasFlag(argv, '--resume-spawn-attempt');
   if (resumeSpawnAttempt && !spawnAttemptId) {
     throw new Error('Invalid --resume-spawn-attempt without --spawn-attempt-id.');
+  }
+  if (resumeSpawnAttempt && worktreeDisplayName) {
+    throw new Error('Managed worktrees cannot be created while resuming a spawn attempt.');
   }
   const transcriptStorageRaw = (readFlagValue(argv, '--transcript-storage') ?? '').trim();
   const codexBackendModeRaw = (readFlagValue(argv, '--codex-backend-mode') ?? '').trim();
@@ -274,6 +287,14 @@ export function parseSessionCreateSpawnOptions(argv: readonly string[]): ParsedS
     spawnAttemptId,
     resumeSpawnAttempt,
     ...(connectedServicesAuthIntent ? { connectedServicesAuthIntent } : {}),
+    ...(worktreeDisplayName
+      ? {
+          checkoutRequest: {
+            displayName: worktreeDisplayName,
+            ...(worktreeBaseRef ? { baseRef: worktreeBaseRef } : {}),
+          },
+        }
+      : {}),
     actionInput: {
       path,
       ...(backendTargetKey ? { backendTargetKey } : { agentId: DEFAULT_CATALOG_AGENT_ID }),

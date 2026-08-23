@@ -11,13 +11,35 @@ import { createCliActionExecutorFromCredentials } from '@/session/actions/create
 import { normalizeActionExecuteResult } from '@/cli/commands/session/shared/normalizeActionExecuteResult';
 import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/tryHandleApprovalRequestCreated';
 import { parseSessionCreateSpawnOptions, SESSION_CREATE_USAGE } from './create/parseSessionCreateSpawnOptions';
+import {
+  cleanupSessionCreateCheckout,
+  materializeSessionCreateCheckout,
+  type SessionCreateCheckout,
+} from './create/sessionCreateCheckout';
 import { resolveConnectedServicesLaunchAuthWithInventory } from '@/cli/connectedServicesLaunchAuth';
+import type { SessionSpawnCustody } from '@/session/services/createSpawnedSession';
 
 function hasSpawnNonce(details: unknown): boolean {
   return Boolean(details && typeof details === 'object'
     && (details as { accepted?: unknown }).accepted === true
     && typeof (details as { spawnNonce?: unknown }).spawnNonce === 'string'
     && (details as { spawnNonce: string }).spawnNonce.trim());
+}
+
+async function settleCheckoutAfterFailure(params: Readonly<{
+  checkout: SessionCreateCheckout | null;
+  custody: 'not_submitted' | SessionSpawnCustody;
+}>): Promise<Readonly<{ checkout: SessionCreateCheckout | null; cleanupError?: string }>> {
+  if (!params.checkout || (params.custody !== 'not_submitted' && params.custody !== 'rejected')) {
+    return { checkout: params.checkout };
+  }
+  return await cleanupSessionCreateCheckout(params.checkout);
+}
+
+function checkoutFailureSuffix(checkout: SessionCreateCheckout | null, cleanupError?: string): string {
+  if (!checkout) return '';
+  const cleanup = cleanupError ? ` Cleanup failed: ${cleanupError}` : '';
+  return ` Worktree ${checkout.disposition}: ${checkout.worktreePath}.${cleanup}`;
 }
 
 async function resolveSessionCreateConnectedServices(params: Readonly<{
@@ -85,13 +107,27 @@ export async function cmdSessionCreate(
     throw new Error(`Usage: ${SESSION_CREATE_USAGE}`);
   }
 
-  const executor = createCliActionExecutorFromCredentials({ credentials });
+  let spawnCustody: 'not_submitted' | SessionSpawnCustody = 'not_submitted';
+  const executor = createCliActionExecutorFromCredentials({
+    credentials,
+    onSpawnCustodyChange: (custody) => {
+      spawnCustody = custody;
+    },
+  });
   let actionRes;
+  let checkout: SessionCreateCheckout | null = null;
   try {
-    const actionInput = await resolveSessionCreateConnectedServices({
+    let actionInput = await resolveSessionCreateConnectedServices({
       executor,
       parsedOptions,
     });
+    if (parsedOptions.checkoutRequest) {
+      checkout = await materializeSessionCreateCheckout({
+        sourcePath: String(actionInput.path),
+        request: parsedOptions.checkoutRequest,
+      });
+      actionInput = { ...actionInput, path: checkout.sessionPath };
+    }
     actionRes = await executor.execute(
       'session.spawn_new',
       actionInput,
@@ -103,6 +139,8 @@ export async function cmdSessionCreate(
       },
     );
   } catch (error) {
+    const settledCheckout = await settleCheckoutAfterFailure({ checkout, custody: spawnCustody });
+    checkout = settledCheckout.checkout;
     const mapped = mapUnknownErrorToControlError(error);
     if (json) {
       await printJsonEnvelope({
@@ -112,11 +150,14 @@ export async function cmdSessionCreate(
           code: mapped.code,
           ...(mapped.message ? { message: mapped.message } : {}),
           ...(((error as { details?: unknown })?.details !== undefined) ? { details: (error as { details?: unknown }).details } : {}),
+          ...(checkout ? { checkout } : {}),
+          ...(settledCheckout.cleanupError ? { cleanupError: settledCheckout.cleanupError } : {}),
         },
       });
       return;
     }
-    throw Object.assign(new Error(mapped.message ?? (error instanceof Error ? error.message : 'Failed to create session')), {
+    const message = mapped.message ?? (error instanceof Error ? error.message : 'Failed to create session');
+    throw Object.assign(new Error(`${message}${checkoutFailureSuffix(checkout, settledCheckout.cleanupError)}`), {
       code: mapped.code,
     });
   }
@@ -124,6 +165,8 @@ export async function cmdSessionCreate(
   const result = normalizeActionExecuteResult(actionRes);
   if (!result.ok) {
     const isAmbiguousSpawn = hasSpawnNonce(result.details);
+    const settledCheckout = await settleCheckoutAfterFailure({ checkout, custody: spawnCustody });
+    checkout = settledCheckout.checkout;
     if (json) {
       await printJsonEnvelope({
         ok: false,
@@ -134,26 +177,59 @@ export async function cmdSessionCreate(
           ...(result.candidates ? { candidates: result.candidates } : {}),
           ...(result.details !== undefined ? { details: result.details } : {}),
           ...(isAmbiguousSpawn ? { spawnAttemptId } : {}),
+          ...(checkout ? { checkout } : {}),
+          ...(isAmbiguousSpawn && checkout?.disposition === 'retained'
+            ? {
+                retry: {
+                  path: checkout.sessionPath,
+                  spawnAttemptId,
+                  resumeSpawnAttempt: true,
+                  omitWorktreeFlags: true,
+                },
+              }
+            : {}),
+          ...(settledCheckout.cleanupError ? { cleanupError: settledCheckout.cleanupError } : {}),
         },
       });
       return;
     }
-    const retryHint = isAmbiguousSpawn
-      ? ` Retry with --spawn-attempt-id ${spawnAttemptId} --resume-spawn-attempt.`
+    const retryHint = isAmbiguousSpawn && checkout?.disposition === 'retained'
+      ? ` Retry with --path ${checkout.sessionPath} --spawn-attempt-id ${spawnAttemptId} --resume-spawn-attempt and omit worktree flags.`
+      : isAmbiguousSpawn
+        ? ` Retry with --spawn-attempt-id ${spawnAttemptId} --resume-spawn-attempt.`
       : '';
-    throw Object.assign(new Error(`${result.errorMessage ?? result.errorCode}${retryHint}`), {
+    throw Object.assign(new Error(`${result.errorMessage ?? result.errorCode}${retryHint}${checkoutFailureSuffix(checkout, settledCheckout.cleanupError)}`), {
       code: result.errorCode,
       ...(result.details !== undefined ? { details: result.details } : {}),
     });
   }
   const created = result.data as any;
-  if (await tryHandleApprovalRequestCreated({ envelopeKind: 'session_create', json, result: created })) {
+  const approvalResult = checkout && created && typeof created === 'object'
+    ? { ...created, checkout }
+    : created;
+  if (await tryHandleApprovalRequestCreated({ envelopeKind: 'session_create', json, result: approvalResult })) {
     return;
   }
   if (!created || typeof created !== 'object') {
-    throw new Error('session_create_failed');
+    const settledCheckout = await settleCheckoutAfterFailure({ checkout, custody: spawnCustody });
+    checkout = settledCheckout.checkout;
+    if (json) {
+      await printJsonEnvelope({
+        ok: false,
+        kind: 'session_create',
+        error: {
+          code: 'session_create_failed',
+          ...(checkout ? { checkout } : {}),
+          ...(settledCheckout.cleanupError ? { cleanupError: settledCheckout.cleanupError } : {}),
+        },
+      });
+      return;
+    }
+    throw new Error(`session_create_failed${checkoutFailureSuffix(checkout, settledCheckout.cleanupError)}`);
   }
   if (created.type === 'error') {
+    const settledCheckout = await settleCheckoutAfterFailure({ checkout, custody: spawnCustody });
+    checkout = settledCheckout.checkout;
     const code = typeof created.errorCode === 'string' ? created.errorCode : 'session_create_failed';
     if (json) {
       await printJsonEnvelope({
@@ -163,18 +239,31 @@ export async function cmdSessionCreate(
           code,
           ...(typeof created.errorMessage === 'string' && created.errorMessage.trim().length > 0 ? { message: created.errorMessage } : {}),
           ...(typeof created.host === 'string' && created.host.trim().length > 0 ? { host: created.host } : {}),
+          ...(checkout ? { checkout } : {}),
+          ...(settledCheckout.cleanupError ? { cleanupError: settledCheckout.cleanupError } : {}),
         },
       });
       return;
     }
-    throw Object.assign(new Error(code), { code });
+    throw Object.assign(new Error(`${code}${checkoutFailureSuffix(checkout, settledCheckout.cleanupError)}`), { code });
   }
 
   if (json) {
-    await printJsonEnvelope({ ok: true, kind: 'session_create', data: { session: created.session, created: created.created } });
+    await printJsonEnvelope({
+      ok: true,
+      kind: 'session_create',
+      data: {
+        session: created.session,
+        created: created.created,
+        ...(checkout ? { checkout } : {}),
+      },
+    });
     return;
   }
 
   console.log(chalk.green('✓'), 'session created');
-  await writeJsonStdout({ created: true, session: created.session }, { pretty: true });
+  if (checkout) {
+    console.log(chalk.green('✓'), `worktree ${checkout.branchName}: ${checkout.sessionPath}`);
+  }
+  await writeJsonStdout({ created: true, session: created.session, ...(checkout ? { checkout } : {}) }, { pretty: true });
 }

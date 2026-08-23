@@ -44,6 +44,8 @@ export type DirectSpawnedSessionTransport = Readonly<{
   resolveSpawnSessionByNonce?: SpawnSessionNonceResolver;
 }>;
 
+export type SessionSpawnCustody = 'submitted' | 'accepted' | 'created' | 'rejected';
+
 /**
  * Immutable source lineage a Replay-seeded child is created from.
  *
@@ -137,6 +139,8 @@ export type CreateSpawnedSessionParams = Readonly<{
   directTransport?: DirectSpawnedSessionTransport;
   /** Tracked-operation cooperative cancellation; never kills a spawned process. */
   signal?: AbortSignal;
+  /** Reports when an ordinary spawn crosses cleanup custody boundaries. */
+  onSpawnCustodyChange?: (custody: SessionSpawnCustody) => void;
 }>;
 
 const DEFAULT_SPAWNED_SESSION_FETCH_TIMEOUT_MS = 10_000;
@@ -160,7 +164,6 @@ const DEFINITE_REPLAY_SEEDED_PRE_ADMISSION_ERROR_CODES = new Set<string>([
   SPAWN_SESSION_ERROR_CODES.DIRECTORY_CREATE_FAILED,
   SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
 ]);
-
 function resolvePositiveIntFromEnv(key: string, fallback: number): number {
   const raw = String(process.env[key] ?? '').trim();
   if (!raw) return fallback;
@@ -228,7 +231,8 @@ function isTransientSpawnFailure(spawnResponse: unknown): boolean {
     ? (spawnResponse as { error: string }).error
     : '';
   if (!message) return false;
-  return SPAWN_TRANSIENT_ERROR_MARKERS.some((marker) => message.includes(marker));
+  // A transport failure can happen after the daemon accepted the request.
+  return (spawnResponse as { requestMayHaveBeenSubmitted?: unknown }).requestMayHaveBeenSubmitted === true;
 }
 
 function readSpawnResponseRecord(spawnResponse: unknown): Readonly<Record<string, unknown>> | null {
@@ -541,9 +545,22 @@ export async function createSpawnedSession(
   }
 
   const spawnRequest = SpawnDaemonSessionRequestSchema.parse(spawnRequestInput);
-  const spawnResponse: unknown = params.resumeOnly === true
-    ? { success: true as const, status: 'pending' as const, sessionIdStatus: 'pending' as const, spawnNonce }
-    : await dispatchSpawnRequest(spawnRequest);
+  let spawnResponse: unknown;
+  if (params.resumeOnly === true) {
+    spawnResponse = { success: true as const, status: 'pending' as const, sessionIdStatus: 'pending' as const, spawnNonce };
+  } else {
+    params.onSpawnCustodyChange?.('submitted');
+    try {
+      spawnResponse = await dispatchSpawnRequest(spawnRequest);
+    } catch (error) {
+      throw createCodedError(
+        error instanceof Error && error.message.trim().length > 0 ? error.message : 'Failed to spawn session',
+        readNonBlankExactString((error as { code?: unknown } | null)?.code)
+          ?? SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        { accepted: true, spawnNonce, spawnResponse: null, spawnDispatchThrew: true },
+      );
+    }
+  }
   throwIfActionOperationAborted(params.signal);
   const spawnResponseRecord = readSpawnResponseRecord(spawnResponse);
   const acceptedWithoutSessionId = isAcceptedPendingSpawn(spawnResponse) || isTransientSpawnFailure(spawnResponse);
@@ -551,6 +568,7 @@ export async function createSpawnedSession(
     && typeof spawnResponseRecord.sessionId === 'string'
     && spawnResponseRecord.sessionId.trim().length > 0;
   if (!acceptedWithoutSessionId && !hasDirectSessionId) {
+    params.onSpawnCustodyChange?.('rejected');
     const error = new Error(
       readNonBlankExactString(spawnResponseRecord?.error) ?? 'Failed to spawn session',
     );
@@ -561,6 +579,7 @@ export async function createSpawnedSession(
     (error as { details?: unknown }).details = spawnResponse ?? null;
     throw error;
   }
+  params.onSpawnCustodyChange?.('accepted');
   const settledSpawn = await awaitSpawnedSessionId({
     result: acceptedWithoutSessionId
       ? { type: 'success', sessionIdStatus: 'pending', spawnNonce }
@@ -604,6 +623,7 @@ export async function createSpawnedSession(
     throw error;
   }
   const sessionId = settledSpawn.sessionId;
+  params.onSpawnCustodyChange?.('created');
 
   const fetchTimeoutMs = resolvePositiveIntFromEnv('HAPPIER_SESSION_SPAWN_FETCH_TIMEOUT_MS', DEFAULT_SPAWNED_SESSION_FETCH_TIMEOUT_MS);
   const pollIntervalMs = resolvePositiveIntFromEnv('HAPPIER_SESSION_SPAWN_FETCH_POLL_INTERVAL_MS', DEFAULT_SPAWNED_SESSION_FETCH_POLL_INTERVAL_MS);

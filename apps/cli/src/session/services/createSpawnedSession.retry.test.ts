@@ -112,6 +112,70 @@ describe('createSpawnedSession retry custody', () => {
     );
   });
 
+  it('reports explicit rejection before returning the spawn error', async () => {
+    const custody: string[] = [];
+    spawnDaemonSession.mockResolvedValue({
+      success: false,
+      error: 'Spawn rejected by daemon',
+      errorCode: 'spawn_failed',
+    });
+
+    await expect(createSpawnedSession({
+      credentials,
+      directory: '/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      onSpawnCustodyChange: (value) => custody.push(value),
+    })).rejects.toMatchObject({ message: 'Spawn rejected by daemon' });
+
+    expect(custody).toEqual(['submitted', 'rejected']);
+  });
+
+  it('leaves custody submitted when dispatch fails without a response', async () => {
+    const custody: string[] = [];
+    spawnDaemonSession.mockRejectedValue(new Error('connection reset'));
+
+    await expect(createSpawnedSession({
+      credentials,
+      directory: '/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      spawnNonce: 'uncertain-attempt',
+      onSpawnCustodyChange: (value) => custody.push(value),
+    })).rejects.toMatchObject({
+      message: 'connection reset',
+      details: {
+        accepted: true,
+        spawnNonce: 'uncertain-attempt',
+        spawnDispatchThrew: true,
+      },
+    });
+
+    expect(custody).toEqual(['submitted']);
+  });
+
+  it('reports acceptance and creation after the daemon returns a session id', async () => {
+    const custody: string[] = [];
+    spawnDaemonSession.mockResolvedValue({ success: true, sessionId: 'session-created' });
+    fetchSessionById.mockResolvedValue({
+      id: 'session-created',
+      createdAt: 1,
+      updatedAt: 1,
+      active: true,
+      activeAt: 1,
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: { path: '/repo', host: 'host' },
+    });
+
+    await expect(createSpawnedSession({
+      credentials,
+      directory: '/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      onSpawnCustodyChange: (value) => custody.push(value),
+    })).resolves.toMatchObject({ sessionId: 'session-created' });
+
+    expect(custody).toEqual(['submitted', 'accepted', 'created']);
+  });
+
   it('refuses a settled source-context retry whose persisted child has different lineage', async () => {
     resolveDaemonSpawnSessionByNonce.mockResolvedValue({
       status: 'success',

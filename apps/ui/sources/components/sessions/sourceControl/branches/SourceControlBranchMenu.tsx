@@ -3,14 +3,13 @@ import { Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
 
-import type { ScmBranchListEntry } from '@happier-dev/protocol';
+import { resolveSessionPathWithinWorktree, type ScmBranchListEntry } from '@happier-dev/protocol';
 
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { repoScmBranchService } from '@/scm/repository/repoScmBranchService';
-import { resolveSessionPathWithinWorktree } from '@/scm/repository/resolveSessionPathWithinWorktree';
 import { useRepoScmBranchList } from '@/scm/repository/useRepoScmBranchList';
 import { repoScmWorktreeService } from '@/scm/repository/repoScmWorktreeService';
 import {

@@ -1,5 +1,6 @@
+import { resolveSessionPathWithinWorktree } from '@happier-dev/protocol';
+
 import { repoScmWorktreeService } from '@/scm/repository/repoScmWorktreeService';
-import { resolveSessionPathWithinWorktree } from '@/scm/repository/resolveSessionPathWithinWorktree';
 import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 
 export interface MaterializeNewSessionCheckoutParams {

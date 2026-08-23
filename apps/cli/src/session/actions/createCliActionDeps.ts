@@ -36,6 +36,7 @@ import {
   createSpawnedSession,
   type CreateSpawnedSessionParams,
   type DirectSpawnedSessionTransport,
+  type SessionSpawnCustody,
 } from '@/session/services/createSpawnedSession';
 import { buildReplaySeededSpawnRecipe } from '@/session/replay/buildReplaySeededSpawnRecipe';
 import { resolveReplaySourceContextAuthority } from '@/session/replay/resolveReplaySourceContextAuthority';
@@ -587,6 +588,7 @@ export function createCliActionDeps(params: Readonly<{
   notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
   directSpawnTransport?: DirectSpawnedSessionTransport;
+  onSpawnCustodyChange?: (custody: SessionSpawnCustody) => void;
 }>): ActionExecutorDeps {
   const inventoryDeps = createCliActionInventoryDeps(params);
   const approvalsStore = params.credentials ? createCliApprovalsArtifactStore({ credentials: params.credentials }) : null;
@@ -1471,6 +1473,7 @@ export function createCliActionDeps(params: Readonly<{
           ...(sourceContext ? { sourceContext } : {}),
           ...(params.directSpawnTransport ? { directTransport: params.directSpawnTransport } : {}),
           ...(signal ? { signal } : {}),
+          ...(params.onSpawnCustodyChange ? { onSpawnCustodyChange: params.onSpawnCustodyChange } : {}),
         });
       } catch (error) {
         const details = error && typeof error === 'object'
