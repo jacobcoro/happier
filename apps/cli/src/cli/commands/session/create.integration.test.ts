@@ -32,11 +32,12 @@ describe('happier session create (integration)', () => {
   function expectSpawnFirstInput(
     body: Record<string, unknown> | null,
     backendTarget: Readonly<{ kind: 'builtInAgent'; agentId: string }>,
+    expectedDirectory = process.cwd(),
   ): void {
     const spawnNonce = typeof body?.spawnNonce === 'string' ? body.spawnNonce : '';
     expect(spawnNonce).not.toBe('');
     expect(body).toEqual(expect.objectContaining({
-      directory: process.cwd(),
+      directory: expectedDirectory,
       backendTarget,
       spawnNonce,
       pendingFirstInput: createPendingFirstInput({ text: 'Plan the refactor', spawnNonce }),
@@ -431,12 +432,13 @@ describe('happier session create (integration)', () => {
     }
   });
 
-  it('creates a managed Git worktree and spawns the session in the matching nested path', async () => {
+  it('creates and retains a managed Git worktree for an equal-permission session with its first prompt', async () => {
     const selectedPath = await initializeWorktreeRepository({
       prefix: 'happier-cli-session-worktree-',
       nestedPath: ['packages', 'app'],
     });
     const { handleSessionCommand } = await import('./index');
+    envScope.patch({ HAPPIER_SESSION_ID: 'sess_integration_caller_123' });
     const output = captureConsoleJsonOutput();
 
     try {
@@ -446,6 +448,7 @@ describe('happier session create (integration)', () => {
         '--worktree', 'digest-review',
         '--worktree-base', 'HEAD',
         '--prompt', 'Plan the refactor',
+        '--permission-mode', 'yolo',
         '--json',
       ], {
         readCredentialsFn: async () => ({
@@ -489,6 +492,12 @@ describe('happier session create (integration)', () => {
         disposition: 'retained',
       });
       expect(observedSpawnBody).toEqual(expect.objectContaining({ directory: expectedSessionPath }));
+      expectSpawnFirstInput(observedSpawnBody, {
+        kind: 'builtInAgent',
+        agentId: DEFAULT_CATALOG_AGENT_ID,
+      }, expectedSessionPath);
+      expect(observedSpawnBody).toEqual(expect.objectContaining({ permissionMode: 'yolo' }));
+      expect(callerSessionGetAttempts).toBeGreaterThan(0);
     } finally {
       output.restore();
     }
