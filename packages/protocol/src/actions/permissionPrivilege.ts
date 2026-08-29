@@ -83,12 +83,14 @@ function normalizeSupportedModes(
   return out;
 }
 
-function parseCallerPermission(rawMode: unknown): Readonly<{
+function parseCallerPermission(rawMode: unknown, callerSurface?: unknown): Readonly<{
   mode: string;
   normalizedMode: SessionPermissionMode;
   ordinal: PermissionPrivilegeOrdinal;
 }> {
-  const normalizedMode = parsePermissionModeForPrivilege(rawMode) ?? 'default';
+  const normalizedMode = callerSurface === 'cli'
+    ? 'yolo'
+    : parsePermissionModeForPrivilege(rawMode) ?? 'default';
   return {
     mode: normalizedMode,
     normalizedMode,
@@ -104,9 +106,10 @@ export function resolvePermissionPrivilegeOrdinal(rawMode: unknown): PermissionP
 export function assertNonEscalatingPermissionMode(params: Readonly<{
   requestedMode: unknown;
   callerMode: unknown;
+  callerSurface?: unknown;
   supportedModes?: readonly string[];
 }>): PermissionEscalationDecision {
-  const caller = parseCallerPermission(params.callerMode);
+  const caller = parseCallerPermission(params.callerMode, params.callerSurface);
   const requestedRaw = typeof params.requestedMode === 'string' ? params.requestedMode.trim() : '';
   const requestedMode = parsePermissionModeForPrivilege(params.requestedMode);
   if (!requestedRaw || !requestedMode) {
@@ -151,13 +154,14 @@ export function assertNonEscalatingPermissionMode(params: Readonly<{
 export function resolveNearestPermissionModeAtOrBelow(params: Readonly<{
   requestedMode: unknown;
   callerMode: unknown;
+  callerSurface?: unknown;
   supportedModes?: readonly string[];
 }>): PermissionEscalationDecision {
   if (typeof params.requestedMode === 'string' && params.requestedMode.trim().length > 0) {
     return assertNonEscalatingPermissionMode(params);
   }
 
-  const caller = parseCallerPermission(params.callerMode);
+  const caller = parseCallerPermission(params.callerMode, params.callerSurface);
   const selected = normalizeSupportedModes(params.supportedModes)
     .filter((mode) => mode.ordinal <= caller.ordinal)
     .sort((a, b) => b.ordinal - a.ordinal)[0];

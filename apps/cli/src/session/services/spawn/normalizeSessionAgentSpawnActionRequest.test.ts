@@ -474,4 +474,63 @@ describe('normalizeSessionAgentSpawnActionRequest', () => {
       },
     });
   });
+
+  it('allows the trusted CLI surface to request full permission without a caller session', async () => {
+    const result = await normalizeSessionAgentSpawnActionRequest({
+      credentials,
+      surface: 'cli',
+      input: {
+        permissionMode: 'yolo',
+      },
+      parentMetadata: null,
+      currentSession: {
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+        machineId: 'machine-1',
+      },
+      spawnPolicy: policy(),
+      resolveConnectedServicesDefaults: noConnectedServiceDefaults,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      createParams: {
+        permissionMode: 'yolo',
+      },
+    });
+  });
+
+  it('still applies a configured permission ceiling to trusted CLI spawns', async () => {
+    const result = await normalizeSessionAgentSpawnActionRequest({
+      credentials,
+      surface: 'cli',
+      input: {
+        permissionMode: 'yolo',
+      },
+      parentMetadata: null,
+      currentSession: {
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+        machineId: 'machine-1',
+      },
+      spawnPolicy: policy({ permissionCeiling: 'default' }),
+      resolveConnectedServicesDefaults: noConnectedServiceDefaults,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      result: {
+        type: 'error',
+        errorCode: 'permission_escalation_denied',
+        errorMessage: 'permission_escalation_denied',
+        details: {
+          requestedMode: 'yolo',
+          requestedOrdinal: 3,
+          callerMode: 'default',
+          callerOrdinal: 1,
+          permissionCeiling: 'default',
+        },
+      },
+    });
+  });
 });

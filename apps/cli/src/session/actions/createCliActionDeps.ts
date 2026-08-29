@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   buildBackendTargetKey,
+  assertNonEscalatingPermissionMode,
   getActionSpec,
   listNativeReviewEngines,
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
@@ -17,7 +18,6 @@ import {
   AGENT_IDS,
   LEGACY_ACP_SESSION_MODES_STATE_KEY,
   SESSION_MODES_STATE_KEY,
-  assertNonEscalatingPermissionMode,
   getProviderCliRuntimeSpec,
   parsePermissionIntentAlias,
   readMetadataAliasValue,
@@ -686,6 +686,10 @@ export function createCliActionDeps(params: Readonly<{
 
   const denyPermissionEscalationForRequestedMode = async (
     requestedMode: unknown,
+    callerContext?: Readonly<{
+      callerSurface?: unknown;
+      callerPermissionMode?: unknown;
+    }>,
   ): Promise<ReturnType<typeof buildPermissionEscalationDeniedResult> | ReturnType<typeof buildInvalidParametersResult> | null> => {
     const normalizedRequestedMode = normalizeString(requestedMode);
     if (!normalizedRequestedMode) return null;
@@ -693,13 +697,20 @@ export function createCliActionDeps(params: Readonly<{
       return buildInvalidParametersResult();
     }
 
-    const callerMode = readLiveCallerPermissionMode()
-      ?? resolvePermissionPrivilegeFromSessionMetadata(await readFreshCurrentSessionMetadata()).mode;
+    const callerMode = readValidPermissionMode(callerContext?.callerPermissionMode)
+      ?? readLiveCallerPermissionMode()
+      ?? (callerContext?.callerSurface === 'cli'
+        ? null
+        : resolvePermissionPrivilegeFromSessionMetadata(await readFreshCurrentSessionMetadata()).mode);
     const permissionDecision = assertNonEscalatingPermissionMode({
       requestedMode: normalizedRequestedMode,
       callerMode,
+      callerSurface: callerContext?.callerSurface,
     });
-    return permissionDecision.ok ? null : buildPermissionEscalationDeniedResult(permissionDecision);
+    if (permissionDecision.ok) return null;
+    return permissionDecision.reason === 'invalid_parameters'
+      ? buildInvalidParametersResult()
+      : buildPermissionEscalationDeniedResult(permissionDecision);
   };
 
   const resolveCurrentSessionValue = async (key: 'path' | 'host' | 'machineId'): Promise<string | null> => {
@@ -1123,8 +1134,8 @@ export function createCliActionDeps(params: Readonly<{
   };
 
   return {
-    executionRunStart: async (sessionId, request) => {
-      const permissionDenied = await denyPermissionEscalationForRequestedMode(request.permissionMode);
+    executionRunStart: async (sessionId, request, callerContext) => {
+      const permissionDenied = await denyPermissionEscalationForRequestedMode(request.permissionMode, callerContext);
       if (permissionDenied) return permissionDenied;
 
       const transport = await resolveTransportForSession(sessionId);
@@ -1247,12 +1258,15 @@ export function createCliActionDeps(params: Readonly<{
         pollIntervalMs,
       });
     },
-    reviewStartInline: async ({ sessionId, input }) => {
+    reviewStartInline: async ({ sessionId, input, callerSurface, callerPermissionMode }) => {
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
 
-      const permissionDenied = await denyPermissionEscalationForRequestedMode(input.permissionMode);
+      const permissionDenied = await denyPermissionEscalationForRequestedMode(input.permissionMode, {
+        callerSurface,
+        callerPermissionMode,
+      });
       if (permissionDenied) return permissionDenied;
 
       return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE, input);
@@ -1321,9 +1335,7 @@ export function createCliActionDeps(params: Readonly<{
       const currentCallerPermissionMode = toolSurface === 'session_agent'
         ? readValidPermissionMode(callerPermissionMode) ?? readLiveCallerPermissionMode()
         : null;
-      const spawnPolicy = toolSurface === 'session_agent'
-        ? await resolveSessionAgentSpawnPolicy({ credentials: params.credentials })
-        : null;
+      const spawnPolicy = await resolveSessionAgentSpawnPolicy({ credentials: params.credentials });
       const normalized = await normalizeSessionAgentSpawnActionRequest({
         credentials: params.credentials,
         surface: toolSurface,
@@ -1559,7 +1571,17 @@ export function createCliActionDeps(params: Readonly<{
     },
     ...(approvalsStore ?? {}),
     ...inventoryDeps,
-    sessionSendMessage: async ({ sessionId, message, requestedAction, wait, timeoutSeconds, permissionModeOverride, modelOverride }) => {
+    sessionSendMessage: async ({
+      sessionId,
+      message,
+      requestedAction,
+      wait,
+      timeoutSeconds,
+      permissionModeOverride,
+      modelOverride,
+      callerSurface,
+      callerPermissionMode,
+    }) => {
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
@@ -1571,7 +1593,10 @@ export function createCliActionDeps(params: Readonly<{
           : 300;
       const normalizedPermissionModeOverride = normalizeString(permissionModeOverride);
       if (normalizedPermissionModeOverride) {
-        const permissionDenied = await denyPermissionEscalationForRequestedMode(normalizedPermissionModeOverride);
+        const permissionDenied = await denyPermissionEscalationForRequestedMode(normalizedPermissionModeOverride, {
+          callerSurface,
+          callerPermissionMode,
+        });
         if (permissionDenied) {
           return permissionDenied;
         }
@@ -1627,7 +1652,7 @@ export function createCliActionDeps(params: Readonly<{
       return { ok: true, sessionId: res.sessionId, title: normalizedTitle };
     },
 
-    sessionPermissionModeSet: async ({ sessionId, permissionMode }) => {
+    sessionPermissionModeSet: async ({ sessionId, permissionMode, callerSurface, callerPermissionMode }) => {
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
@@ -1636,7 +1661,10 @@ export function createCliActionDeps(params: Readonly<{
       if (!parsed) {
         return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
       }
-      const permissionDenied = await denyPermissionEscalationForRequestedMode(normalizedPermissionMode);
+      const permissionDenied = await denyPermissionEscalationForRequestedMode(normalizedPermissionMode, {
+        callerSurface,
+        callerPermissionMode,
+      });
       if (permissionDenied) {
         return permissionDenied;
       }

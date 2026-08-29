@@ -74,6 +74,20 @@ describe('permission privilege policy', () => {
         });
     });
 
+    it('treats the authenticated CLI surface as a full-privilege operator', () => {
+        expect(assertNonEscalatingPermissionMode({
+            requestedMode: 'bypassPermissions',
+            callerMode: undefined,
+            callerSurface: 'cli',
+        })).toEqual({
+            ok: true,
+            requestedMode: 'yolo',
+            requestedOrdinal: 3,
+            callerMode: 'yolo',
+            callerOrdinal: 3,
+        });
+    });
+
     it('maps omitted requests to the nearest supported same-or-lower caller mode', () => {
         expect(resolveNearestPermissionModeAtOrBelow({
             requestedMode: undefined,

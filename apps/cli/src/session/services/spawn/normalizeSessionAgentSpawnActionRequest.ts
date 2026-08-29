@@ -1,6 +1,7 @@
 import {
   DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
   BackendTargetRefSchema,
+  assertNonEscalatingPermissionMode,
   mergeSpawnConfigOptionAliases,
   parseBackendTargetKey,
   readAcpConfiguredBackendV1FromMetadata,
@@ -16,7 +17,7 @@ import {
 import {
   AGENT_IDS,
   DEFAULT_AGENT_ID,
-  assertNonEscalatingPermissionMode,
+  parsePermissionIntentAlias,
   resolveAgentIdFromSessionMetadata,
   type AgentId,
 } from '@happier-dev/agents';
@@ -506,17 +507,37 @@ export async function normalizeSessionAgentSpawnActionRequest(params: Readonly<{
   const currentPermissionMode = normalizeString(params.currentSession.permissionMode);
   const callerPermissionMode = currentPermissionMode ?? inherited.spawn.permissionMode;
   const permissionDecision = assertNonEscalatingPermissionMode({
-    requestedMode: explicitPermissionMode ?? callerPermissionMode,
+    requestedMode: explicitPermissionMode ?? callerPermissionMode ?? 'default',
     callerMode: callerPermissionMode,
+    callerSurface: params.surface,
   });
   if (!permissionDecision.ok) {
+    if (permissionDecision.reason === 'invalid_parameters') {
+      return {
+        ok: false,
+        result: {
+          type: 'error',
+          errorCode: 'invalid_parameters',
+          errorMessage: 'invalid_parameters',
+        },
+      };
+    }
     return {
       ok: false,
-      result: buildPermissionEscalationDeniedResult(permissionDecision),
+      result: buildPermissionEscalationDeniedResult({
+        requestedMode: parsePermissionIntentAlias(permissionDecision.normalizedMode)
+          ?? permissionDecision.normalizedMode,
+        requestedOrdinal: permissionDecision.requestedOrdinal,
+        callerMode: permissionDecision.callerMode,
+        callerOrdinal: permissionDecision.callerOrdinal,
+      }),
     };
   }
 
-  const resolvedPermissionMode = explicitPermissionMode ?? permissionDecision.requestedMode;
+  const resolvedPermissionMode = explicitPermissionMode
+    ? parsePermissionIntentAlias(permissionDecision.normalizedMode)
+      ?? permissionDecision.normalizedMode
+    : permissionDecision.requestedMode;
   const currentPermissionMatchesInherited = Boolean(
     currentPermissionMode
     && inherited.spawn.permissionMode
@@ -535,12 +556,25 @@ export async function normalizeSessionAgentSpawnActionRequest(params: Readonly<{
       ? { kind: 'currentSession', key: 'permissionMode' }
     : inherited.sources.permissionMode ?? { kind: 'default', key: 'callerPermissionDefault' };
 
-  if (effectivePolicy?.permissionCeiling) {
+  const permissionCeiling = params.spawnPolicy?.permissionCeiling
+    ?? effectivePolicy?.permissionCeiling
+    ?? null;
+  if (permissionCeiling) {
     const ceilingDecision = assertNonEscalatingPermissionMode({
       requestedMode: resolvedPermissionMode,
-      callerMode: effectivePolicy.permissionCeiling,
+      callerMode: permissionCeiling,
     });
     if (!ceilingDecision.ok) {
+      if (ceilingDecision.reason === 'invalid_parameters') {
+        return {
+          ok: false,
+          result: {
+            type: 'error',
+            errorCode: 'invalid_parameters',
+            errorMessage: 'invalid_parameters',
+          },
+        };
+      }
       return {
         ok: false,
         result: buildPermissionEscalationDeniedResult({
@@ -548,7 +582,7 @@ export async function normalizeSessionAgentSpawnActionRequest(params: Readonly<{
           requestedOrdinal: ceilingDecision.requestedOrdinal,
           callerMode: ceilingDecision.callerMode,
           callerOrdinal: ceilingDecision.callerOrdinal,
-          permissionCeiling: effectivePolicy.permissionCeiling,
+          permissionCeiling,
         }),
       };
     }
