@@ -60,6 +60,7 @@ let lastSessionClient: {
 } | null = null;
 const runtimeActivityPublisherCloseMock = vi.fn(async () => {});
 const sessionCloseMock = vi.fn(async () => {});
+const enqueueSessionUserMessageMock = vi.fn(async (_params: unknown) => undefined);
 
 function createRuntimeOverridesSynchronizer(
     overrides: Partial<RuntimeOverridesSynchronizer> = {},
@@ -133,6 +134,7 @@ vi.mock('@/agent/runtime/initializeBackendApiContext', () => ({
                 getMetadataSnapshot: vi.fn(() => ({ path: '/srv/project' })),
                 onUserMessage: lastSessionClient.onUserMessage,
                 sendSessionEvent: lastSessionClient.sendSessionEvent,
+                enqueueSessionUserMessage: enqueueSessionUserMessageMock,
                 updateMetadata: vi.fn(),
                 updateAgentState: vi.fn(),
                 getRuntimeActivitySnapshotPublisher: vi.fn(() => ({
@@ -303,6 +305,7 @@ describe('runClaude startup metadata ordering', () => {
             supportsUltracode: true,
         });
         agentStateUpdateSnapshots.length = 0;
+        enqueueSessionUserMessageMock.mockClear();
         runtimeActivityPublisherCloseMock.mockClear();
         sessionCloseMock.mockReset();
         sessionCloseMock.mockResolvedValue(undefined);
@@ -333,6 +336,36 @@ describe('runClaude startup metadata ordering', () => {
         metadataUpdateDeferred.resolve();
 
         await expect(runPromise).resolves.toBe(stopAfterSeed);
+    });
+
+    it('commits the daemon-carried first input for a daemon-started remote session', async () => {
+        currentMetadataVersion = 1;
+        vi.stubEnv('HAPPIER_DAEMON_PENDING_FIRST_INPUT', JSON.stringify({
+            text: 'Plan the refactor',
+            localId: 'spawn-first:abc',
+        }));
+        try {
+            const { runClaude } = await import('./runClaude');
+
+            const runPromise = runClaude(testCredentials, {
+                startedBy: 'daemon',
+                startingMode: 'remote',
+            }).then(
+                () => 'resolved',
+                (error) => error,
+            );
+
+            await waitFor(() => enqueueSessionUserMessageMock.mock.calls.length === 1);
+            expect(enqueueSessionUserMessageMock).toHaveBeenCalledWith(expect.objectContaining({
+                text: 'Plan the refactor',
+                localId: 'spawn-first:abc',
+            }));
+
+            metadataUpdateDeferred.resolve();
+            await expect(runPromise).resolves.toBe(stopAfterSeed);
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 
     it('waits for fresh-session startup metadata writes before seeding runtime overrides', async () => {

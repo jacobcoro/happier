@@ -53,3 +53,53 @@ export function readPendingFirstInputFromEnv(
 export function clearPendingFirstInputFromEnv(env: NodeJS.ProcessEnv = process.env): void {
   delete env[HAPPIER_DAEMON_PENDING_FIRST_INPUT_ENV_KEY];
 }
+
+/**
+ * Minimal session-client surface a runner needs to hand the daemon-carried first
+ * input to the session. Structural so this module stays independent of the API client.
+ */
+export type PendingFirstInputCommitTarget = Readonly<{
+  enqueueSessionUserMessage: (params: Readonly<{
+    text: string;
+    localId?: string;
+    meta?: Record<string, unknown>;
+  }>) => Promise<Readonly<{ recoveryBlocked?: Readonly<{ status: string }> }> | void>;
+}>;
+
+export type PendingFirstInputCustody = Readonly<{
+  /** The carried input, or null when the daemon handed this runner none. */
+  input: PendingFirstInput | null;
+  /**
+   * Commit the carried input exactly once. A failed commit leaves the custody
+   * uncommitted so a later session client can retry it.
+   */
+  commit: (session: PendingFirstInputCommitTarget) => Promise<void>;
+}>;
+
+/**
+ * Single owner of daemon-carried first-input custody for every backend runner.
+ * Backends must not read the handoff env or enqueue the first input themselves;
+ * two consumers would either drop the prompt or deliver it twice.
+ */
+export function createPendingFirstInputCustody(
+  env: NodeJS.ProcessEnv = process.env,
+): PendingFirstInputCustody {
+  const input = readPendingFirstInputFromEnv(env);
+  let committed = input === null;
+  return {
+    input,
+    commit: async (session) => {
+      if (committed || input === null) return;
+      const result = await session.enqueueSessionUserMessage({
+        text: input.text,
+        localId: input.localId,
+        meta: { ...input.meta, source: 'ui', sentFrom: 'cli' },
+      });
+      if (result?.recoveryBlocked) {
+        throw new Error(`Pending first input was blocked: ${result.recoveryBlocked.status}`);
+      }
+      committed = true;
+      clearPendingFirstInputFromEnv(env);
+    },
+  };
+}

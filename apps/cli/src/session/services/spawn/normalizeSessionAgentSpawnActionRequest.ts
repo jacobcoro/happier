@@ -534,10 +534,7 @@ export async function normalizeSessionAgentSpawnActionRequest(params: Readonly<{
     };
   }
 
-  const resolvedPermissionMode = explicitPermissionMode
-    ? parsePermissionIntentAlias(permissionDecision.normalizedMode)
-      ?? permissionDecision.normalizedMode
-    : permissionDecision.requestedMode;
+  const resolvedPermissionMode = explicitPermissionMode ?? permissionDecision.requestedMode;
   const currentPermissionMatchesInherited = Boolean(
     currentPermissionMode
     && inherited.spawn.permissionMode
