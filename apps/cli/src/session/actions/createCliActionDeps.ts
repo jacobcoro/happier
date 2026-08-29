@@ -31,6 +31,7 @@ import { getPreferredHostName } from '@/daemon/machine/metadata';
 import type { Credentials } from '@/persistence';
 import { readSettings } from '@/persistence';
 import { readNonBlankSessionControlIdentifier } from '@/agent/runtime/sessionControlIdentifiers';
+import { readCurrentHappierSessionIdFromEnv } from '@/agent/runtime/session/currentSessionIdEnv';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import {
   createSpawnedSession,
@@ -697,9 +698,12 @@ export function createCliActionDeps(params: Readonly<{
       return buildInvalidParametersResult();
     }
 
+    // A CLI invocation nested inside a session is bounded by that session, exactly like
+    // any other child. Only a CLI invocation with no caller session to inherit from is
+    // the operator at the root of trust.
     const callerMode = readValidPermissionMode(callerContext?.callerPermissionMode)
       ?? readLiveCallerPermissionMode()
-      ?? (callerContext?.callerSurface === 'cli'
+      ?? (callerContext?.callerSurface === 'cli' && !readCurrentHappierSessionIdFromEnv()
         ? null
         : resolvePermissionPrivilegeFromSessionMetadata(await readFreshCurrentSessionMetadata()).mode);
     const permissionDecision = assertNonEscalatingPermissionMode({
@@ -1332,9 +1336,17 @@ export function createCliActionDeps(params: Readonly<{
       }
 
       const toolSurface = normalizeActionToolExposureSurface(surface ?? callerSurface);
+      // A CLI nested inside a session inherits that session's permission authority; only
+      // a CLI with no caller session spawns with operator privilege.
+      const nestedCliCallerSessionId = toolSurface === 'cli'
+        ? readCurrentHappierSessionIdFromEnv()
+        : null;
       const currentCallerPermissionMode = toolSurface === 'session_agent'
         ? readValidPermissionMode(callerPermissionMode) ?? readLiveCallerPermissionMode()
-        : null;
+        : nestedCliCallerSessionId
+          ? readLiveCallerPermissionMode()
+            ?? resolvePermissionPrivilegeFromSessionMetadata(await readFreshCurrentSessionMetadata()).mode
+          : null;
       const spawnPolicy = await resolveSessionAgentSpawnPolicy({ credentials: params.credentials });
       const normalized = await normalizeSessionAgentSpawnActionRequest({
         credentials: params.credentials,

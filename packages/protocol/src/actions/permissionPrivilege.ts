@@ -88,9 +88,12 @@ function parseCallerPermission(rawMode: unknown, callerSurface?: unknown): Reado
   normalizedMode: SessionPermissionMode;
   ordinal: PermissionPrivilegeOrdinal;
 }> {
-  const normalizedMode = callerSurface === 'cli'
-    ? 'yolo'
-    : parsePermissionModeForPrivilege(rawMode) ?? 'default';
+  // An authenticated CLI invocation with no caller session to inherit from is the
+  // operator: they hold the credentials and a shell, so capping them below their own
+  // authority protects nothing. A CLI invocation that DOES carry a caller mode (a CLI
+  // nested inside a session) stays bounded by it like any other child.
+  const parsedMode = parsePermissionModeForPrivilege(rawMode);
+  const normalizedMode = parsedMode ?? (callerSurface === 'cli' ? 'yolo' : 'default');
   return {
     mode: normalizedMode,
     normalizedMode,

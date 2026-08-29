@@ -16,6 +16,20 @@ describe('permission privilege', () => {
     });
   });
 
+  it('keeps a CLI caller that inherits a caller mode bounded by it', () => {
+    expect(assertNonEscalatingPermissionMode({
+      requestedMode: 'yolo',
+      callerMode: 'default',
+      callerSurface: 'cli',
+    })).toMatchObject({
+      ok: false,
+      reason: 'permission_escalation_denied',
+      callerMode: 'default',
+      callerOrdinal: 1,
+      requestedOrdinal: 3,
+    });
+  });
+
   it('keeps an unknown non-CLI caller at the default fallback', () => {
     expect(assertNonEscalatingPermissionMode({
       requestedMode: 'safe-yolo',

@@ -88,6 +88,21 @@ describe('permission privilege policy', () => {
         });
     });
 
+    it('keeps a nested CLI caller bounded by the caller mode it inherits', () => {
+        expect(assertNonEscalatingPermissionMode({
+            requestedMode: 'yolo',
+            callerMode: 'default',
+            callerSurface: 'cli',
+        })).toEqual({
+            ok: false,
+            reason: 'permission_escalation_denied',
+            requestedMode: 'yolo',
+            requestedOrdinal: 3,
+            callerMode: 'default',
+            callerOrdinal: 1,
+        });
+    });
+
     it('maps omitted requests to the nearest supported same-or-lower caller mode', () => {
         expect(resolveNearestPermissionModeAtOrBelow({
             requestedMode: undefined,
