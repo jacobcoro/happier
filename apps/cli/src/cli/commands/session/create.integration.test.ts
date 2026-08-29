@@ -429,6 +429,44 @@ describe('happier session create (integration)', () => {
     }
   });
 
+  it('carries the initial prompt when --path targets another directory', async () => {
+    const { handleSessionCommand } = await import('./index');
+
+    const targetDir = await createTempDir('happier-cli-session-create-path-');
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand([
+        'create',
+        '--path', targetDir,
+        '--message', 'Plan the refactor',
+        '--json',
+      ], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const parsed = output.json();
+      expect(parsed.ok).toBe(true);
+      const spawnNonce = typeof observedSpawnBody?.spawnNonce === 'string' ? observedSpawnBody.spawnNonce : '';
+      expect(spawnNonce).not.toBe('');
+      expect(observedSpawnBody).toEqual(expect.objectContaining({
+        directory: targetDir,
+        pendingFirstInput: createPendingFirstInput({ text: 'Plan the refactor', spawnNonce }),
+      }));
+      expect(observedInitialMessageRpc).toBe(false);
+    } finally {
+      output.restore();
+      await removeTempDir(targetDir);
+    }
+  });
+
   it('accepts --message as an alias for the initial prompt', async () => {
     const { handleSessionCommand } = await import('./index');
 

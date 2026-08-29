@@ -31,10 +31,7 @@ import {
   reportSessionToDaemonIfRunning,
   sendTerminalFallbackMessageIfNeeded,
 } from '@/agent/runtime/startupSideEffects'
-import {
-  clearPendingFirstInputFromEnv,
-  readPendingFirstInputFromEnv,
-} from '@/daemon/spawn/pendingFirstInput'
+import { createPendingFirstInputCustody } from '@/daemon/spawn/pendingFirstInput'
 
 export interface InitializeBackendRunSessionOptions {
   api: Pick<ApiClient, 'getOrCreateSession' | 'sessionSyncClient'>
@@ -219,20 +216,9 @@ export async function initializeBackendRunSession(
       deps.createSessionRuntimeActivityFn ?? createSessionRuntimeActivity,
     )
   const startupSideEffectsOrder = opts.startupSideEffectsOrder ?? 'report-first'
-  const pendingFirstInput = readPendingFirstInputFromEnv()
-  let pendingFirstInputCommitted = pendingFirstInput === null
+  const pendingFirstInputCustody = createPendingFirstInputCustody()
   const commitPendingFirstInput = async (session: ApiSessionClient): Promise<void> => {
-    if (pendingFirstInputCommitted || pendingFirstInput === null) return
-    const result = await session.enqueueSessionUserMessage({
-      text: pendingFirstInput.text,
-      localId: pendingFirstInput.localId,
-      meta: { ...pendingFirstInput.meta, source: 'ui', sentFrom: 'cli' },
-    })
-    if (result?.recoveryBlocked) {
-      throw new Error(`Pending first input was blocked: ${result.recoveryBlocked.status}`)
-    }
-    pendingFirstInputCommitted = true
-    clearPendingFirstInputFromEnv()
+    await pendingFirstInputCustody.commit(session)
   }
 
   try {

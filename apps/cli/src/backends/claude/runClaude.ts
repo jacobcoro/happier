@@ -94,6 +94,7 @@ import { ensureManagedJavaScriptRuntimeCommand } from '@/runtime/js/managedJavaS
 import { createClaudeRawMessageTurnDiffBridge } from './utils/createClaudeRawMessageTurnDiffBridge';
 import { createSessionMetadataShutdownDeadline } from '@/session/services/sessionMetadataShutdownDeadline';
 import { resolveRequestedSessionDirectory } from '@/agent/runtime/resolveRequestedSessionDirectory';
+import { createPendingFirstInputCustody } from '@/daemon/spawn/pendingFirstInput';
 import { publishClaudeSessionModelsMetadataBestEffort } from '@/backends/claude/sessionControls/publishClaudeSessionModelsMetadataBestEffort';
 import {
     probeClaudeInstalledRuntimeCapabilities,
@@ -324,6 +325,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         return;
     }
 
+    // Read the daemon handoff before any session exists so a malformed handoff fails
+    // startup loudly rather than silently losing the caller's first prompt.
+    const pendingFirstInputCustody = createPendingFirstInputCustody();
+
     const { api, machineId } = await initializeBackendApiContext({
         credentials,
         machineMetadata: initialMachineMetadata,
@@ -495,6 +500,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     }
     const session = api.sessionSyncClient(baseSession, runtimeActivity.lifecycle.clientConfig());
     await runtimeActivity.lifecycle.attachSession(session);
+    // This path creates the session itself instead of going through
+    // `initializeBackendRunSession`, so it owns the same daemon-carried first-input
+    // custody: without it a daemon-spawned Claude session silently drops the prompt
+    // the spawn request carried.
+    await pendingFirstInputCustody.commit(session);
     const defaultSystemPromptText = await resolveEffectiveCodingPromptText({
         credentials,
         settings: options.accountSettings ?? null,
