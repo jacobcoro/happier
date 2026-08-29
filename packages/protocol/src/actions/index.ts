@@ -103,6 +103,13 @@ export {
   type SessionForkActionExecutionInput,
   type SessionSpawnNewActionExecutionInput,
 } from './actionExecutor.js';
+export {
+  assertNonEscalatingPermissionMode,
+  resolveNearestPermissionModeAtOrBelow,
+  resolvePermissionPrivilegeOrdinal,
+  type PermissionEscalationDecision,
+  type PermissionPrivilegeOrdinal,
+} from './permissionPrivilege.js';
 
 export { resolveEffectiveActionInputFields, type EffectiveActionInputField } from './actionInputHintsRuntime.js';
 export { buildActionDraftSeedInput } from './actionDraftSeed.js';

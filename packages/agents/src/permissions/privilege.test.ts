@@ -74,6 +74,35 @@ describe('permission privilege policy', () => {
         });
     });
 
+    it('treats the authenticated CLI surface as a full-privilege operator', () => {
+        expect(assertNonEscalatingPermissionMode({
+            requestedMode: 'bypassPermissions',
+            callerMode: undefined,
+            callerSurface: 'cli',
+        })).toEqual({
+            ok: true,
+            requestedMode: 'yolo',
+            requestedOrdinal: 3,
+            callerMode: 'yolo',
+            callerOrdinal: 3,
+        });
+    });
+
+    it('keeps a nested CLI caller bounded by the caller mode it inherits', () => {
+        expect(assertNonEscalatingPermissionMode({
+            requestedMode: 'yolo',
+            callerMode: 'default',
+            callerSurface: 'cli',
+        })).toEqual({
+            ok: false,
+            reason: 'permission_escalation_denied',
+            requestedMode: 'yolo',
+            requestedOrdinal: 3,
+            callerMode: 'default',
+            callerOrdinal: 1,
+        });
+    });
+
     it('maps omitted requests to the nearest supported same-or-lower caller mode', () => {
         expect(resolveNearestPermissionModeAtOrBelow({
             requestedMode: undefined,

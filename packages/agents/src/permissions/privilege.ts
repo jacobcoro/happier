@@ -1,9 +1,14 @@
 import { resolvePermissionIntentFromSessionMetadata } from '../sessionControls/metadata.js';
 import type { PermissionIntent } from '../types.js';
+import {
+    resolveNearestPermissionModeAtOrBelow as resolveProtocolPermissionMode,
+    resolvePermissionPrivilegeOrdinal as resolveProtocolPermissionPrivilegeOrdinal,
+    type PermissionPrivilegeOrdinal,
+} from '@happier-dev/protocol';
 
 import { parsePermissionIntentAlias } from './index.js';
 
-export type PermissionPrivilegeOrdinal = 0 | 1 | 2 | 3;
+export type { PermissionPrivilegeOrdinal } from '@happier-dev/protocol';
 
 export type PermissionEscalationDecision =
     | {
@@ -35,9 +40,11 @@ function resolvePermissionPrivilege(rawMode: unknown): ResolvedPermissionPrivile
     if (!isProvidedMode(rawMode)) return null;
     const mode = parsePermissionIntentAlias(rawMode);
     if (!mode) return null;
+    const ordinal = resolveProtocolPermissionPrivilegeOrdinal(mode);
+    if (ordinal === null) return null;
     return {
         mode,
-        ordinal: permissionIntentToPrivilegeOrdinal(mode),
+        ordinal,
     };
 }
 
@@ -48,22 +55,8 @@ function resolveCallerPermissionPrivilege(rawMode: unknown): ResolvedPermissionP
     };
 }
 
-function permissionIntentToPrivilegeOrdinal(mode: PermissionIntent): PermissionPrivilegeOrdinal {
-    switch (mode) {
-        case 'plan':
-        case 'read-only':
-            return 0;
-        case 'default':
-            return 1;
-        case 'safe-yolo':
-            return 2;
-        case 'yolo':
-            return 3;
-    }
-}
-
 export function resolvePermissionPrivilegeOrdinal(rawMode: unknown): PermissionPrivilegeOrdinal | null {
-    return resolvePermissionPrivilege(rawMode)?.ordinal ?? null;
+    return resolveProtocolPermissionPrivilegeOrdinal(rawMode);
 }
 
 export function resolvePermissionPrivilegeFromSessionMetadata(metadata: unknown): ResolvedPermissionPrivilege {
@@ -71,75 +64,53 @@ export function resolvePermissionPrivilegeFromSessionMetadata(metadata: unknown)
     return resolveCallerPermissionPrivilege(resolved?.intent);
 }
 
-function buildDecision(params: Readonly<{
-    requested: ResolvedPermissionPrivilege;
-    caller: ResolvedPermissionPrivilege;
-}>): PermissionEscalationDecision {
-    if (params.requested.ordinal > params.caller.ordinal) {
-        return {
-            ok: false,
-            reason: 'permission_escalation_denied',
-            requestedMode: params.requested.mode,
-            requestedOrdinal: params.requested.ordinal,
-            callerMode: params.caller.mode,
-            callerOrdinal: params.caller.ordinal,
-        };
-    }
-
-    return {
-        ok: true,
-        requestedMode: params.requested.mode,
-        requestedOrdinal: params.requested.ordinal,
-        callerMode: params.caller.mode,
-        callerOrdinal: params.caller.ordinal,
-    };
-}
-
-function resolveSupportedModeAtOrBelow(params: Readonly<{
-    caller: ResolvedPermissionPrivilege;
-    supportedModes?: readonly string[];
-}>): ResolvedPermissionPrivilege | null {
-    if (!params.supportedModes || params.supportedModes.length === 0) {
-        return params.caller;
-    }
-
-    let best: ResolvedPermissionPrivilege | null = null;
-    for (const supportedMode of params.supportedModes) {
-        const resolved = resolvePermissionPrivilege(supportedMode);
-        if (!resolved || resolved.ordinal > params.caller.ordinal) continue;
-        if (!best || resolved.ordinal > best.ordinal) {
-            best = resolved;
-        }
-    }
-    return best;
+function toPermissionIntent(rawMode: string): PermissionIntent {
+    return parsePermissionIntentAlias(rawMode) ?? 'default';
 }
 
 export function resolveNearestPermissionModeAtOrBelow(params: Readonly<{
     requestedMode: unknown;
     callerMode: unknown;
+    callerSurface?: unknown;
     supportedModes?: readonly string[];
 }>): PermissionEscalationDecision {
-    const caller = resolveCallerPermissionPrivilege(params.callerMode);
     const explicitRequested = resolvePermissionPrivilege(params.requestedMode);
-
-    if (explicitRequested) {
-        return buildDecision({ requested: explicitRequested, caller });
-    }
-
-    const requested = resolveSupportedModeAtOrBelow({
-        caller,
+    const decision = resolveProtocolPermissionMode({
+        requestedMode: explicitRequested?.mode,
+        callerMode: params.callerMode,
+        callerSurface: params.callerSurface,
         supportedModes: params.supportedModes,
-    }) ?? {
-        mode: 'default',
-        ordinal: 1,
-    };
-
-    return buildDecision({ requested, caller });
+    });
+    if (!decision.ok && decision.reason === 'invalid_parameters') {
+        return resolveNearestPermissionModeAtOrBelow({
+            ...params,
+            requestedMode: undefined,
+        });
+    }
+    const callerMode = toPermissionIntent(decision.callerMode);
+    const requestedMode = toPermissionIntent(decision.normalizedMode);
+    return decision.ok
+        ? {
+            ok: true,
+            requestedMode,
+            requestedOrdinal: decision.requestedOrdinal,
+            callerMode,
+            callerOrdinal: decision.callerOrdinal,
+        }
+        : {
+            ok: false,
+            reason: 'permission_escalation_denied',
+            requestedMode,
+            requestedOrdinal: decision.requestedOrdinal,
+            callerMode,
+            callerOrdinal: decision.callerOrdinal,
+        };
 }
 
 export function assertNonEscalatingPermissionMode(params: Readonly<{
     requestedMode: unknown;
     callerMode: unknown;
+    callerSurface?: unknown;
     supportedModes?: readonly string[];
 }>): PermissionEscalationDecision {
     return resolveNearestPermissionModeAtOrBelow(params);

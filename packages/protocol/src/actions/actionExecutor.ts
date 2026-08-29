@@ -192,7 +192,11 @@ type SessionStopActionDependencyResult = Readonly<{
 
 export type ActionExecutorDeps = Readonly<{
   // Execution runs (session-scoped RPC)
-  executionRunStart: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
+  executionRunStart: (sessionId: string, request: any, opts?: Readonly<{
+    serverId?: string | null;
+    callerSurface?: keyof ActionSurfaces | null;
+    callerPermissionMode?: string | null;
+  }>) => Promise<unknown>;
   executionRunList: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
   executionRunGet: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
   executionRunSend: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
@@ -206,6 +210,8 @@ export type ActionExecutorDeps = Readonly<{
     instructions: string;
     input: ReviewStartInput;
     serverId?: string | null;
+    callerSurface?: keyof ActionSurfaces | null;
+    callerPermissionMode?: string | null;
   }>) => Promise<unknown>;
 
   // Session navigation/spawn (client-side)
@@ -596,6 +602,20 @@ function parseActionSurfaceKey(value: unknown): keyof ActionSurfaces | null {
 
 function isSessionAgentCaller(ctx: ActionExecutorContext): boolean {
   return ctx.surface === 'session_agent';
+}
+
+function resolvePermissionCallerContext(ctx: ActionExecutorContext): Readonly<{
+  callerSurface: 'cli' | 'session_agent';
+  callerPermissionMode?: string | null;
+}> | null {
+  if (ctx.surface === 'cli') return { callerSurface: 'cli' };
+  if (isSessionAgentCaller(ctx)) {
+    return {
+      callerSurface: 'session_agent',
+      callerPermissionMode: ctx.callerPermissionMode ?? null,
+    };
+  }
+  return null;
 }
 
 function createPermissionPolicyResult(
@@ -1516,7 +1536,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
         if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
         const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-        const opts = serverId ? { serverId } : undefined;
+        const callerContext = resolvePermissionCallerContext(ctx);
+        const opts = serverId || callerContext ? {
+          ...(serverId ? { serverId } : {}),
+          ...(callerContext ?? {}),
+        } : undefined;
 
         const reviewInput = parsed.data as ReviewStartInput;
         const engineIds = reviewInput.engineIds;
@@ -1559,6 +1583,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             instructions,
             input: intentInputBase,
             ...(serverId ? { serverId } : {}),
+            ...(callerContext ?? {}),
           });
           const failure = readActionExecuteFailure(result);
           if (failure) return { ok: false, ...failure };
@@ -1592,7 +1617,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
         if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
         const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-        const opts = serverId ? { serverId } : undefined;
+        const callerContext = resolvePermissionCallerContext(ctx);
+        const opts = serverId || callerContext ? {
+          ...(serverId ? { serverId } : {}),
+          ...(callerContext ?? {}),
+        } : undefined;
 
         const backendTargetKeys: readonly string[] = Array.isArray((parsed.data as any).backendTargetKeys)
           ? (parsed.data as any).backendTargetKeys
@@ -1776,7 +1805,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
           if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const opts = serverId ? { serverId } : undefined;
+          const callerContext = resolvePermissionCallerContext(ctx);
+          const opts = serverId || callerContext ? {
+            ...(serverId ? { serverId } : {}),
+            ...(callerContext ?? {}),
+          } : undefined;
 
           const { sessionId: _ignored, ...request } = parsed.data as any;
           // Model + config-option (reasoning effort) selection: merge the `configOptions` shorthand
@@ -2124,9 +2157,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(typeof (parsed.data as any).wait === 'boolean' ? { wait: (parsed.data as any).wait } : {}),
             ...(typeof (parsed.data as any).timeoutSeconds === 'number' ? { timeoutSeconds: (parsed.data as any).timeoutSeconds } : {}),
             ...(serverId ? { serverId } : {}),
-            ...(isSessionAgentCaller(ctx)
-              ? { callerSurface: 'session_agent' as const, callerPermissionMode: ctx.callerPermissionMode ?? null }
-              : {}),
+            ...(resolvePermissionCallerContext(ctx) ?? {}),
           });
           const failure = readActionExecuteFailure(res);
           if (failure) return { ok: false, ...failure };
@@ -2189,9 +2220,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             sessionId,
             permissionMode: permissionDecision?.ok === true ? permissionDecision.normalizedMode : permissionMode,
             ...(serverId ? { serverId } : {}),
-            ...(isSessionAgentCaller(ctx)
-              ? { callerSurface: 'session_agent' as const, callerPermissionMode: ctx.callerPermissionMode ?? null }
-              : {}),
+            ...(resolvePermissionCallerContext(ctx) ?? {}),
           });
           return { ok: true, result: res };
         }

@@ -266,6 +266,7 @@ describe('createActionExecutor (session control)', () => {
       sessionId: 's1',
       permissionMode: 'read_only',
       serverId: 'server-a',
+      callerSurface: 'cli',
     });
   });
 

@@ -739,7 +739,7 @@ describe('createCliActionExecutor', () => {
         },
       },
     });
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    bootstrapAccountSettingsContext.mockResolvedValue({
       source: 'network',
       settings: accountSettingsParse({
         connectedServicesDefaultAuthByAgentIdV1: {
@@ -1494,6 +1494,147 @@ describe('createCliActionExecutor', () => {
     }));
   });
 
+  it('denies a CLI spawn escalation when the CLI is nested inside a session', async () => {
+    vi.stubEnv('HAPPIER_SESSION_ID', 'sess-parent');
+    try {
+      const executor = createPlainExecutor({
+        sessionId: 'sess-parent',
+        rawSession: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+          metadata: {
+            machineId: 'machine-1',
+            path: '/repo/current',
+            host: 'leeroy-mbp',
+            permissionMode: 'default',
+            permissionModeUpdatedAt: 5,
+          },
+        },
+      });
+
+      const result = await executor.execute(
+        'session.spawn_new',
+        {
+          backendTargetKey: 'agent:claude',
+          permissionMode: 'yolo',
+        },
+        { surface: 'cli', defaultSessionId: null },
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        result: {
+          type: 'error',
+          errorCode: 'permission_escalation_denied',
+        },
+      });
+      expect(spawnDaemonSession).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('allows the trusted CLI surface to spawn at full permission without a caller session', async () => {
+    const executor = createPlainExecutor({
+      rawSession: {
+        machineId: 'machine-1',
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+        metadata: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+        },
+      },
+    });
+    spawnDaemonSession.mockResolvedValue({ success: true, sessionId: 'sess-cli-yolo' });
+    fetchSessionById.mockResolvedValue({
+      id: 'sess-cli-yolo',
+      createdAt: 1,
+      updatedAt: 2,
+      active: true,
+      activeAt: 2,
+      pendingCount: 0,
+      metadataVersion: 1,
+      metadata: {
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+      },
+    });
+
+    const result = await executor.execute(
+      'session.spawn_new',
+      {
+        backendTargetKey: 'agent:claude',
+        permissionMode: 'yolo',
+      },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        type: 'success',
+        sessionId: 'sess-cli-yolo',
+      },
+    });
+    expect(spawnDaemonSession).toHaveBeenCalledWith(expect.objectContaining({
+      permissionMode: 'yolo',
+    }));
+  });
+
+  it('applies the configured spawn permission ceiling to the trusted CLI surface', async () => {
+    bootstrapAccountSettingsContext.mockResolvedValue({
+      source: 'server',
+      settings: accountSettingsParse({
+        sessionAgentSpawnPolicyV1: {
+          v: 1,
+          permissionCeiling: 'default',
+        },
+      }),
+      settingsVersion: 2,
+      loadedAtMs: 2,
+      settingsSecretsReadKeys: [],
+      whenRefreshed: null,
+    });
+    const executor = createPlainExecutor({
+      rawSession: {
+        machineId: 'machine-1',
+        path: '/repo/current',
+        host: 'leeroy-mbp',
+        metadata: {
+          machineId: 'machine-1',
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+        },
+      },
+    });
+
+    const result = await executor.execute(
+      'session.spawn_new',
+      {
+        backendTargetKey: 'agent:claude',
+        permissionMode: 'yolo',
+      },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        type: 'error',
+        errorCode: 'permission_escalation_denied',
+        details: {
+          requestedMode: 'yolo',
+          callerMode: 'default',
+          permissionCeiling: 'default',
+        },
+      },
+    });
+    expect(spawnDaemonSession).not.toHaveBeenCalled();
+  });
+
   it('fails closed for session.spawn_new when nonce recovery is unsupported instead of using row-scan heuristics', async () => {
     const executor = createPlainExecutor({
       rawSession: {
@@ -2043,6 +2184,75 @@ describe('createCliActionExecutor', () => {
       },
     });
     expect(setSessionPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it('allows the trusted CLI surface to set full permission without a caller session', async () => {
+    const executor = createPlainExecutor();
+    setSessionPermissionMode.mockResolvedValueOnce({ ok: true, sessionId: 'sess-2' });
+
+    const result = await executor.execute(
+      'session.permission_mode.set',
+      {
+        sessionId: 'sess-2',
+        permissionMode: 'bypassPermissions',
+      },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        ok: true,
+        sessionId: 'sess-2',
+        permissionMode: 'yolo',
+      },
+    });
+    expect(setSessionPermissionMode).toHaveBeenCalledWith(expect.objectContaining({
+      idOrPrefix: 'sess-2',
+      permissionMode: 'yolo',
+    }));
+  });
+
+  it('keeps a CLI nested inside a session bounded by that session', async () => {
+    vi.stubEnv('HAPPIER_SESSION_ID', 'sess-parent');
+    try {
+      const executor = createPlainExecutor({ sessionId: 'sess-parent' });
+      fetchSessionById.mockResolvedValue({
+        id: 'sess-parent',
+        createdAt: 1,
+        updatedAt: 2,
+        active: true,
+        activeAt: 2,
+        pendingCount: 0,
+        metadataVersion: 1,
+        metadata: {
+          path: '/repo/current',
+          host: 'leeroy-mbp',
+          permissionMode: 'default',
+          permissionModeUpdatedAt: 5,
+        },
+      });
+
+      const result = await executor.execute(
+        'session.permission_mode.set',
+        {
+          sessionId: 'sess-2',
+          permissionMode: 'bypassPermissions',
+        },
+        { surface: 'cli', defaultSessionId: null },
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        result: {
+          ok: false,
+          errorCode: 'permission_escalation_denied',
+        },
+      });
+      expect(setSessionPermissionMode).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('fails closed for session-agent non-escalation when live caller permission is not supplied', async () => {

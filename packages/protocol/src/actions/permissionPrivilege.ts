@@ -83,12 +83,17 @@ function normalizeSupportedModes(
   return out;
 }
 
-function parseCallerPermission(rawMode: unknown): Readonly<{
+function parseCallerPermission(rawMode: unknown, callerSurface?: unknown): Readonly<{
   mode: string;
   normalizedMode: SessionPermissionMode;
   ordinal: PermissionPrivilegeOrdinal;
 }> {
-  const normalizedMode = parsePermissionModeForPrivilege(rawMode) ?? 'default';
+  // An authenticated CLI invocation with no caller session to inherit from is the
+  // operator: they hold the credentials and a shell, so capping them below their own
+  // authority protects nothing. A CLI invocation that DOES carry a caller mode (a CLI
+  // nested inside a session) stays bounded by it like any other child.
+  const parsedMode = parsePermissionModeForPrivilege(rawMode);
+  const normalizedMode = parsedMode ?? (callerSurface === 'cli' ? 'yolo' : 'default');
   return {
     mode: normalizedMode,
     normalizedMode,
@@ -104,9 +109,10 @@ export function resolvePermissionPrivilegeOrdinal(rawMode: unknown): PermissionP
 export function assertNonEscalatingPermissionMode(params: Readonly<{
   requestedMode: unknown;
   callerMode: unknown;
+  callerSurface?: unknown;
   supportedModes?: readonly string[];
 }>): PermissionEscalationDecision {
-  const caller = parseCallerPermission(params.callerMode);
+  const caller = parseCallerPermission(params.callerMode, params.callerSurface);
   const requestedRaw = typeof params.requestedMode === 'string' ? params.requestedMode.trim() : '';
   const requestedMode = parsePermissionModeForPrivilege(params.requestedMode);
   if (!requestedRaw || !requestedMode) {
@@ -151,13 +157,14 @@ export function assertNonEscalatingPermissionMode(params: Readonly<{
 export function resolveNearestPermissionModeAtOrBelow(params: Readonly<{
   requestedMode: unknown;
   callerMode: unknown;
+  callerSurface?: unknown;
   supportedModes?: readonly string[];
 }>): PermissionEscalationDecision {
   if (typeof params.requestedMode === 'string' && params.requestedMode.trim().length > 0) {
     return assertNonEscalatingPermissionMode(params);
   }
 
-  const caller = parseCallerPermission(params.callerMode);
+  const caller = parseCallerPermission(params.callerMode, params.callerSurface);
   const selected = normalizeSupportedModes(params.supportedModes)
     .filter((mode) => mode.ordinal <= caller.ordinal)
     .sort((a, b) => b.ordinal - a.ordinal)[0];
