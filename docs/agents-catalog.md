@@ -339,6 +339,43 @@ Patterns we use:
 
 ---
 
+## Keeping the Claude catalog current
+
+When Anthropic releases a new Claude model, Happier needs to be updated before users can select or route to it. A model that exists in the Claude Code CLI but is missing from Happier’s catalog silently falls back or fails to launch.
+
+### Files to update for a new Claude model
+
+| File | What to add |
+|------|-------------|
+| `packages/agents/src/providers/claude/effort.ts` — `CLAUDE_EFFORT_LEVELS_BY_MODEL_ID` | Map entry with supported effort tiers (`[‘low’,’medium’,’high’]` or `[‘low’,’medium’,’high’,’xhigh’,’max’]`) |
+| `packages/agents/src/providers/claude/contextWindow.ts` — `CLAUDE_1M_CONTEXT_MODEL_IDS` | Add if the model supports 1M context |
+| `packages/agents/src/providers/claude/contextWindow.ts` — `CLAUDE_1M_ALWAYS_ON_MODEL_IDS` | Add if 1M is always-on (no opt-in toggle needed) |
+| `packages/agents/src/models.ts` — `CLAUDE_STATIC_MODELS` | Descriptor object: `id`, `name`, `description`, `contextWindowTokens` |
+| `apps/cli/src/backends/claude/utils/claudeEffort.ts` — `resolveClaudeEffortLevelsForKnownAliasOrModel` + `resolveClaudeDefaultEffortForKnownAliasOrModel` | Substring fallback rule (`modelId.includes(‘sonnet-5’)`) so dated IDs like `claude-sonnet-5-20260117` resolve correctly |
+
+### Verifying effort levels
+
+1. Check the [Anthropic model docs](https://docs.anthropic.com/en/docs/about-claude/models) for the new model’s capabilities.
+2. Run `strings <claude-binary> | grep -E ‘^claude-(opus|sonnet|haiku|fable)-[0-9]’` to confirm the model ID the CLI uses.
+3. Models co-listed with `xhigh` in the binary’s string table support extended thinking and ultracode.
+4. The CI guard in `packages/agents/src/models.test.ts` — `"keeps every effort-capable advertised Claude model fully registered"` — will go RED if you add the descriptor but forget the effort entry, or vice versa.
+
+### Staleness check script
+
+Run this anytime to compare Happier’s catalog against the installed Claude Code CLI binary:
+
+```bash
+node scripts/checkClaudeCatalogStaleness.mjs
+```
+
+Options:
+- `--claude-bin <path>` — specify the binary path explicitly (auto-discovered from PATH, NVM, and the Happier-managed runtime otherwise).
+- `--warn-only` — print a warning but exit 0 (useful in CI where you want notification without a hard failure).
+
+The script uses `strings` to extract canonical model IDs (`claude-<family>-<version>`) from the compiled binary and reports any that are missing from the Happier static catalog. It makes no network calls.
+
+---
+
 ## Anti-patterns (please don’t)
 
 - Don’t “auto-discover” backends by scanning the filesystem. We want deterministic bundling and explicit reviewable changes.
