@@ -93,6 +93,9 @@ function resolveClaudeEffortLevelsForKnownAliasOrModel(modelIdRaw: unknown): rea
     if (modelId.includes('opus-4-6')) {
         return agentProviders.claude.resolveClaudeEffortLevelsForModelId('claude-opus-4-6') as readonly ClaudeEffortLevel[];
     }
+    if (modelId.includes('sonnet-5')) {
+        return agentProviders.claude.resolveClaudeEffortLevelsForModelId('claude-sonnet-5') as readonly ClaudeEffortLevel[];
+    }
     if (modelId === 'sonnet' || modelId.includes('sonnet-4-6')) {
         return agentProviders.claude.resolveClaudeEffortLevelsForModelId('claude-sonnet-4-6') as readonly ClaudeEffortLevel[];
     }
@@ -126,6 +129,9 @@ function resolveClaudeDefaultEffortForKnownAliasOrModel(modelIdRaw: unknown): Cl
     }
     if (modelId.includes('opus-4-6')) {
         return agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId('claude-opus-4-6') as ClaudeEffortLevel | null;
+    }
+    if (modelId.includes('sonnet-5')) {
+        return agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId('claude-sonnet-5') as ClaudeEffortLevel | null;
     }
     if (modelId === 'sonnet' || modelId.includes('sonnet-4-6')) {
         return agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId('claude-sonnet-4-6') as ClaudeEffortLevel | null;
