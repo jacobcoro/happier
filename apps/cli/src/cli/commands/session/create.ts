@@ -82,6 +82,28 @@ async function resolveSessionCreateConnectedServices(params: Readonly<{
     : params.parsedOptions.actionInput;
 }
 
+/**
+ * At create time the runner has not started, so the session's pending counts describe a
+ * session that has not begun working yet. Reporting `pendingCount: 0` alongside a supplied
+ * `--message` reads as "the prompt was already consumed" when in fact nothing has happened.
+ * Drop the pre-runner counts and state the initial prompt's actual custody instead.
+ */
+function summarizeCreatedSessionForOutput(session: unknown): unknown {
+  if (!session || typeof session !== 'object') return session;
+  const { pendingCount: _pendingCount, pendingBlockedCount: _pendingBlockedCount, ...rest } =
+    session as Record<string, unknown>;
+  return rest;
+}
+
+function readInitialMessageStatus(
+  parsedOptions: ReturnType<typeof parseSessionCreateSpawnOptions>,
+): Readonly<{ status: 'queued_for_session_start' }> | null {
+  const initialMessage = parsedOptions.actionInput.initialMessage;
+  return typeof initialMessage === 'string' && initialMessage.trim().length > 0
+    ? { status: 'queued_for_session_start' }
+    : null;
+}
+
 export async function cmdSessionCreate(
   argv: string[],
   deps: Readonly<{ readCredentialsFn: () => Promise<Credentials | null> }>,
@@ -248,14 +270,18 @@ export async function cmdSessionCreate(
     throw Object.assign(new Error(`${code}${checkoutFailureSuffix(checkout, settledCheckout.cleanupError)}`), { code });
   }
 
+  const initialMessage = readInitialMessageStatus(parsedOptions);
+  const sessionForOutput = summarizeCreatedSessionForOutput(created.session);
+
   if (json) {
     await printJsonEnvelope({
       ok: true,
       kind: 'session_create',
       data: {
-        session: created.session,
+        session: sessionForOutput,
         created: created.created,
         ...(checkout ? { checkout } : {}),
+        ...(initialMessage ? { initialMessage } : {}),
       },
     });
     return;
@@ -265,5 +291,11 @@ export async function cmdSessionCreate(
   if (checkout) {
     console.log(chalk.green('✓'), `worktree ${checkout.branchName}: ${checkout.sessionPath}`);
   }
-  await writeJsonStdout({ created: true, session: created.session, ...(checkout ? { checkout } : {}) }, { pretty: true });
+  if (initialMessage) {
+    console.log(chalk.dim('  initial message queued; it is delivered when the agent starts'));
+  }
+  await writeJsonStdout(
+    { created: true, session: sessionForOutput, ...(checkout ? { checkout } : {}) },
+    { pretty: true },
+  );
 }

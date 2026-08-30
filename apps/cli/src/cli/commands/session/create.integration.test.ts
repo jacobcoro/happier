@@ -804,6 +804,61 @@ describe('happier session create (integration)', () => {
     }
   });
 
+  it('reports the initial prompt as queued instead of a pre-runner pending count', async () => {
+    const { handleSessionCommand } = await import('./index');
+
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand(['create', '--message', 'Plan the refactor', '--json'], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const parsed = output.json();
+      expect(parsed.ok).toBe(true);
+      // The runner has not started yet, so a pending count here can only mislead:
+      // it reads as "the prompt was already consumed".
+      expect(parsed.data?.session).not.toHaveProperty('pendingCount');
+      expect(parsed.data?.session).not.toHaveProperty('pendingBlockedCount');
+      expect(parsed.data?.initialMessage).toEqual({ status: 'queued_for_session_start' });
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('omits the initial-message status when no prompt was supplied', async () => {
+    const { handleSessionCommand } = await import('./index');
+
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand(['create', '--json'], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      const parsed = output.json();
+      expect(parsed.ok).toBe(true);
+      expect(parsed.data).not.toHaveProperty('initialMessage');
+      expect(parsed.data?.session).not.toHaveProperty('pendingCount');
+    } finally {
+      output.restore();
+    }
+  });
+
   it('accepts --message as an alias for the initial prompt', async () => {
     const { handleSessionCommand } = await import('./index');
 
