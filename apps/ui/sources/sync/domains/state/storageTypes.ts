@@ -534,13 +534,14 @@ export interface PendingMessage {
      * Local send-acknowledgment state for optimistic (`local_outbound`) rows whose write to the
      * server has NOT yet been confirmed. `undefined` = confirmed/normal; `unconfirmed` = the write
      * is being retried after a stall/transient failure (spinner); `failed` = automatic retries gave
-     * up and the user must re-send (retry affordance). Confirmed rows clear this back to
+     * up before provider custody (retry affordance); `uncertain` = the daemon may have accepted the
+     * message but this client cannot safely replay it. Confirmed rows clear this back to
      * `undefined`; if stale local state survives hydration, a retained durable Pending projection
      * still outranks it in the canonical visual-state resolver. This is the visible side of the
      * durable outbox — a submitted message is always in exactly one visible state and is never
      * silently absent.
      */
-    sendState?: 'unconfirmed' | 'failed';
+    sendState?: 'unconfirmed' | 'failed' | 'uncertain';
     pendingDeliveryStatus?: PendingDeliveryStatus;
     /** Descriptive detail for a delivering row; never an outcome or settlement authority. */
     pendingDeliveryDetail?: import('@happier-dev/protocol').PendingDeliveryDetailV1;

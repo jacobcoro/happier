@@ -8,6 +8,7 @@ import {
 export type PendingMessageVisualStateKind =
     | 'saving'
     | 'send_unconfirmed'
+    | 'send_uncertain'
     | 'send_failed'
     | 'cancelling'
     | 'cancel_failed'
@@ -206,6 +207,19 @@ export function getPendingMessageVisualState(
             kind: 'send_failed',
             showSpinner: false,
             iconName: 'warning-circle',
+        };
+    }
+    if (!isRetainedByDurablePendingOwner && message.sendState === 'uncertain') {
+        const deliveryBlockedReason = 'delivery_outcome_uncertain' as const;
+        return {
+            kind: 'send_uncertain',
+            showSpinner: false,
+            iconName: 'warning-circle',
+            deliveryBlockedReason,
+            deliveryBlockedPresentation: getPendingDeliveryBlockedReasonPresentation({
+                ...message,
+                pendingDeliveryBlockedReason: deliveryBlockedReason,
+            }),
         };
     }
     if (!isRetainedByDurablePendingOwner && message.sendState === 'unconfirmed') {

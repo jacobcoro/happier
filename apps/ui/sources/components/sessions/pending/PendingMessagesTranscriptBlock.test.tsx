@@ -2539,6 +2539,41 @@ describe('PendingMessagesTranscriptBlock', () => {
             .toContain('Delivery state uncertain');
     });
 
+    it('renders a legacy send timeout as uncertain without an automatic retry action', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: false,
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
+        };
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{
+                id: 'p1',
+                text: 'redacted in logs',
+                createdAt: 0,
+                updatedAt: 0,
+                localId: 'p1',
+                source: 'local_outbound',
+                deliveryStatus: 'queued',
+                sendState: 'uncertain',
+                rawRecord: {},
+            }],
+            discardedMessages: [],
+        }));
+
+        expect(screen.getTextContent()).toContain('Delivery state uncertain');
+        expect(screen.getTextContent()).toContain('Delivery state is ambiguous');
+        expect(screen.findByTestId('pendingMessages.blockedDeliveryNotice:p1')).toBeTruthy();
+
+        await hoverPendingMessageRow(screen, 'p1');
+        expect(screen.findByTestId('pendingMessages.retrySend:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.sendNow:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeNull();
+    });
+
     it('does not expose legacy send or steer actions for server-accepted pending rows', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         sessionValue = {

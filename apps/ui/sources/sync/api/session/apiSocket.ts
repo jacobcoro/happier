@@ -210,6 +210,7 @@ class ApiSocket {
     private reachabilityServerUrl: string | null = null;
     private socketTransport: ManagedConnectionTransport | null = null;
     private detachSocketTransportListeners: Array<() => void> = [];
+    private ackTimeoutReconnectInFlight: Promise<void> | null = null;
 
     //
     // Initialization
@@ -401,6 +402,66 @@ class ApiSocket {
             error: typeof result.error === 'string' ? result.error : 'RPC call failed',
             errorCode: typeof result.errorCode === 'string' ? result.errorCode : undefined,
         });
+    }
+
+    async reconnectAfterAckTimeout(options: Readonly<{ timeoutMs: number }>): Promise<void> {
+        if (this.ackTimeoutReconnectInFlight) {
+            await this.ackTimeoutReconnectInFlight;
+            return;
+        }
+        const config = this.config;
+        if (!config) {
+            throw new Error('SyncSocket not initialized');
+        }
+
+        const timeoutMs = Math.max(1, options.timeoutMs);
+        const reconnect = new Promise<void>((resolve, reject) => {
+            let settled = false;
+            let timeout: ReturnType<typeof setTimeout> | null = null;
+
+            const cleanup = (): void => {
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = null;
+                }
+                this.reconnectedListeners.delete(onReconnected);
+                this.connectionStateListeners.delete(onConnectionStateChanged);
+            };
+            const finish = (error?: unknown): void => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                if (error !== undefined) {
+                    reject(error);
+                } else {
+                    resolve();
+                }
+            };
+            const onReconnected = (): void => finish();
+            const onConnectionStateChanged = (state: ManagedConnectionState): void => {
+                if (state.phase === 'auth_failed') {
+                    finish(createNotAuthenticatedError());
+                }
+            };
+
+            this.reconnectedListeners.add(onReconnected);
+            this.connectionStateListeners.add(onConnectionStateChanged);
+            timeout = setTimeout(() => finish(new Error('Socket reconnect timed out')), timeoutMs);
+
+            void invalidateServerReachabilitySupervisor({
+                serverUrl: config.endpoint,
+                token: config.token,
+                force: true,
+            }).catch((error) => finish(error));
+        });
+        this.ackTimeoutReconnectInFlight = reconnect;
+        try {
+            await reconnect;
+        } finally {
+            if (this.ackTimeoutReconnectInFlight === reconnect) {
+                this.ackTimeoutReconnectInFlight = null;
+            }
+        }
     }
 
     /**

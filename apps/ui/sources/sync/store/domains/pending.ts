@@ -100,7 +100,8 @@ function filterUncommittedPendingMessages<S extends PendingDomainDependencies>(
  *     or a `pending-changed` count of 0, says nothing about it.
  *   - `deliveryStatus` is deliberately NOT consulted. It records how far THIS device's send has
  *     got (absent before the ack, `accepted` after the runtime RPC, `queued` + `sendState:
- *     'unconfirmed'` after an ack timeout) — it says nothing about who owns the row, and the send
+ *     'unconfirmed'` during replay recovery, or `queued` + `sendState: 'uncertain'` after safe
+ *     replay is no longer possible) — it says nothing about who owns the row, and the send
  *     spends real time in every one of those states on a cold session open. Requiring `accepted`
  *     made this rule disagree with the owner it is aligned to,
  *     `sync/engine/pending/pendingQueueV2.ts#reconcileServerPendingSnapshotWithLocalOutbound`

@@ -269,6 +269,74 @@ describe('apiSocket reconnect semantics', () => {
         expect(onReconnected).toHaveBeenCalledTimes(1);
     });
 
+    it('invalidates current reachability and waits for a fresh socket handshake after an ack timeout', async () => {
+        const controller = createTransportController();
+        transportFactory.lastController = controller;
+        transportFactory.createSyncSocketTransportSpy.mockImplementation((params: any) => ({
+            socket: { onAny: vi.fn() },
+            transport: controller.transport,
+            ...params,
+        }));
+
+        const { apiSocket } = await import('./apiSocket');
+        const endpoint = 'https://server.example.test';
+        apiSocket.initialize({ endpoint, token: 'token-1' }, createSessionEncryptionStub());
+        emitReachability(endpoint, {
+            phase: 'online',
+            reason: null,
+            attempt: 1,
+            nextRetryAt: null,
+            lastConnectedAt: Date.now(),
+            lastDisconnectedAt: null,
+            lastErrorMessage: null,
+        });
+        await settleAsyncWork();
+
+        let releaseProbe!: () => void;
+        const probeReleased = new Promise<void>((resolve) => { releaseProbe = resolve; });
+        reachability.invalidateSpy.mockImplementation(async () => {
+            emitReachability(endpoint, {
+                phase: 'connecting',
+                reason: 'manual_refresh',
+                attempt: 2,
+                nextRetryAt: null,
+                lastConnectedAt: Date.now(),
+                lastDisconnectedAt: Date.now(),
+                lastErrorMessage: null,
+            });
+            await probeReleased;
+            emitReachability(endpoint, {
+                phase: 'online',
+                reason: null,
+                attempt: 2,
+                nextRetryAt: null,
+                lastConnectedAt: Date.now(),
+                lastDisconnectedAt: Date.now(),
+                lastErrorMessage: null,
+            });
+        });
+
+        let settled = false;
+        const recovery = apiSocket.reconnectAfterAckTimeout({ timeoutMs: 1_000 })
+            .then(() => { settled = true; });
+        const concurrentRecovery = apiSocket.reconnectAfterAckTimeout({ timeoutMs: 1_000 });
+        await settleAsyncWork();
+
+        expect(reachability.invalidateSpy).toHaveBeenCalledExactlyOnceWith({
+            serverUrl: endpoint,
+            token: 'token-1',
+            force: true,
+        });
+        expect(controller.transport.isConnected()).toBe(false);
+        expect(settled).toBe(false);
+
+        releaseProbe();
+        await Promise.all([recovery, concurrentRecovery]);
+
+        expect(controller.transport.isConnected()).toBe(true);
+        expect(settled).toBe(true);
+    });
+
     it('invalidates reachability instead of reporting generic unreachable when the socket transport drops', async () => {
         const controller = createTransportController();
         transportFactory.lastController = controller;

@@ -713,7 +713,7 @@ describe('sync.sendMessage optimistic thinking', () => {
 
         expect(sessionRpcSpy).toHaveBeenCalledWith(
             sessionId,
-            SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND,
+            SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1,
             expect.objectContaining({
                 text: 'steer this',
                 localId: expect.any(String),
@@ -1097,7 +1097,7 @@ describe('sync.sendMessage optimistic thinking', () => {
         expect(loadPendingOutboxForSession(sessionId, outboxScope)).toHaveLength(1);
     });
 
-    it('keeps an active runtime RPC ACK timeout as unconfirmed without fallback or retry', async () => {
+    it('reconnects after a runtime RPC ack timeout and replays the exact request once', async () => {
         const sessionId = 's_active_runtime_rpc_ack_timeout';
         const localId = 'runtime-rpc-timeout-local-id';
         storage.getState().applySessions([createSession({ sessionId })]);
@@ -1108,7 +1108,9 @@ describe('sync.sendMessage optimistic thinking', () => {
         const { sync } = await import('./sync');
         sync.encryption = encryption;
         const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC')
-            .mockRejectedValue(createSocketIoAckTimeoutError());
+            .mockRejectedValueOnce(createSocketIoAckTimeoutError())
+            .mockResolvedValueOnce({ ok: true } as never);
+        const reconnectSpy = vi.spyOn(apiSocket, 'reconnectAfterAckTimeout').mockResolvedValue();
         const emitWithAck = vi.fn(async () => ({
             ok: true,
             id: 'must-not-fallback',
@@ -1125,6 +1127,56 @@ describe('sync.sendMessage optimistic thinking', () => {
             undefined,
             undefined,
             { localId },
+        )).resolves.toEqual({ localId, persistence: 'provider_direct' });
+
+        expect(sessionRpcSpy).toHaveBeenCalledTimes(2);
+        expect(sessionRpcSpy.mock.calls[0]).toEqual(sessionRpcSpy.mock.calls[1]);
+        expect(sessionRpcSpy).toHaveBeenCalledWith(
+            sessionId,
+            SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1,
+            expect.objectContaining({
+                text: 'runtime rpc provider custody timeout',
+                localId,
+            }),
+            { timeoutMs: 7_500 },
+        );
+        expect(reconnectSpy).toHaveBeenCalledWith({ timeoutMs: 7_500 });
+        expect(emitWithAck).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+        expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
+            expect.objectContaining({
+                id: localId,
+                localId,
+                deliveryStatus: 'accepted',
+                text: 'runtime rpc provider custody timeout',
+            }),
+        ]);
+        expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).not.toBeNull();
+    });
+
+    it('shows an explicit uncertain state when replay-safe reconnect recovery fails', async () => {
+        const sessionId = 's_active_runtime_rpc_recovery_failed';
+        const localId = 'runtime-rpc-recovery-failed-local-id';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC')
+            .mockRejectedValue(createSocketIoAckTimeoutError());
+        vi.spyOn(apiSocket, 'reconnectAfterAckTimeout').mockRejectedValue(new Error('Socket reconnect timed out'));
+        const emitWithAck = vi.fn() as any;
+        const send = vi.fn();
+        sync.setMessageTransport({ emitWithAck, send });
+
+        await expect(sync.sendMessage(
+            sessionId,
+            'recovery failure must remain visible',
+            undefined,
+            undefined,
+            { localId },
         )).resolves.toEqual({ localId, persistence: 'pending' });
 
         expect(sessionRpcSpy).toHaveBeenCalledTimes(1);
@@ -1135,12 +1187,89 @@ describe('sync.sendMessage optimistic thinking', () => {
                 id: localId,
                 localId,
                 deliveryStatus: 'queued',
-                sendState: 'unconfirmed',
-                text: 'runtime rpc provider custody timeout',
+                sendState: 'uncertain',
             }),
         ]);
-        expect((sync as any).pendingMessageCommitRetryTimers.has(`${sessionId}:${localId}`)).toBe(false);
-        expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).not.toBeNull();
+        expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+    });
+
+    it('falls back to the legacy method when an older daemon does not expose replay-safe send', async () => {
+        const sessionId = 's_active_runtime_rpc_legacy_fallback';
+        const localId = 'runtime-rpc-legacy-fallback-local-id';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC')
+            .mockRejectedValueOnce(createRpcMethodNotAvailableError())
+            .mockResolvedValueOnce({ ok: true } as never);
+        const reconnectSpy = vi.spyOn(apiSocket, 'reconnectAfterAckTimeout');
+        sync.setMessageTransport({ emitWithAck: vi.fn() as any, send: vi.fn() });
+
+        await expect(sync.sendMessage(
+            sessionId,
+            'legacy fallback delivery',
+            undefined,
+            undefined,
+            { localId },
+        )).resolves.toEqual({ localId, persistence: 'provider_direct' });
+
+        expect(sessionRpcSpy.mock.calls.map((call) => call[1])).toEqual([
+            SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1,
+            SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND,
+        ]);
+        expect(reconnectSpy).not.toHaveBeenCalled();
+        expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
+            expect.objectContaining({
+                id: localId,
+                localId,
+                deliveryStatus: 'accepted',
+            }),
+        ]);
+    });
+
+    it('does not replay a legacy daemon send whose acknowledgement timed out', async () => {
+        const sessionId = 's_active_runtime_rpc_legacy_ack_timeout';
+        const localId = 'runtime-rpc-legacy-timeout-local-id';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC')
+            .mockRejectedValueOnce(createRpcMethodNotAvailableError())
+            .mockRejectedValueOnce(createSocketIoAckTimeoutError());
+        const reconnectSpy = vi.spyOn(apiSocket, 'reconnectAfterAckTimeout').mockResolvedValue();
+        sync.setMessageTransport({ emitWithAck: vi.fn() as any, send: vi.fn() });
+
+        await expect(sync.sendMessage(
+            sessionId,
+            'legacy ambiguous delivery',
+            undefined,
+            undefined,
+            { localId },
+        )).resolves.toEqual({ localId, persistence: 'pending' });
+
+        expect(sessionRpcSpy).toHaveBeenCalledTimes(2);
+        expect(sessionRpcSpy.mock.calls.map((call) => call[1])).toEqual([
+            SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1,
+            SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND,
+        ]);
+        expect(reconnectSpy).toHaveBeenCalledWith({ timeoutMs: 7_500 });
+        expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
+            expect.objectContaining({
+                id: localId,
+                localId,
+                deliveryStatus: 'queued',
+                sendState: 'uncertain',
+            }),
+        ]);
+        expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
     });
 
     it.each(createFallbackSafeSessionRpcErrors())(
@@ -1185,7 +1314,7 @@ describe('sync.sendMessage optimistic thinking', () => {
                 persistence: 'pending',
             });
 
-            expect(sessionRpcSpy).toHaveBeenCalledTimes(1);
+            expect(sessionRpcSpy).toHaveBeenCalledTimes(sessionRpcError instanceof RpcError ? 2 : 1);
             expect(emitWithAck).not.toHaveBeenCalled();
             expect(requestSpy).toHaveBeenCalledWith(
                 `/v2/sessions/${sessionId}/pending`,

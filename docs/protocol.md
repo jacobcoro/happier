@@ -48,6 +48,16 @@ Rules enforced server-side:
 - `session-scoped`: receives updates for a specific session only.
 - `machine-scoped`: used by daemons; receives machine updates and emits machine state.
 
+### Connection churn and message sends
+
+Clients remain polling-first for Socket.IO connections. This preserves the current proxy and self-hosted server compatibility path. The client does not force WebSocket transport or shorten the global Socket.IO heartbeat. A send acknowledgment timeout now provides a narrower failure signal. It forces a new authenticated reachability probe and a fresh Socket.IO handshake without adding heartbeat load to every connection.
+
+Current development clients send active-session messages through `session.userMessage.sendReplaySafe.v1`. The request includes the message `text`, its exact `localId`, and sanitized `meta`. Current development daemons register this method beside the legacy `session.userMessage.send` method. Both names use the same exact-outcome registry.
+
+The daemon retains up to 1,000 exact outcomes and never evicts an in-flight outcome. While an outcome is retained, the same `localId` and payload settle to that outcome. A different payload with the same `localId` is rejected. After an acknowledgment timeout, the client reconnects and replays the replay-safe method once with the same request. The immediate churn retry therefore settles against the retained delivery instead of starting a second provider delivery.
+
+A new client falls back to `session.userMessage.send` only when the daemon reports that the replay-safe method is unavailable. If a legacy send acknowledgment times out, the client reconnects but does not replay that send. It keeps the local message visible with an uncertain delivery state. Message contents are not included in recovery logs.
+
 ### Server -> client events
 The server emits two event types:
 

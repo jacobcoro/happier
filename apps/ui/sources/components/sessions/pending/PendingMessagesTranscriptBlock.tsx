@@ -105,7 +105,9 @@ function hasPendingDeliveryResolutionState(visualState: PendingMessageVisualStat
 }
 
 function canUseDirectPendingDeliveryActions(message: PendingMessage, hasDecryptFailure: boolean): boolean {
-    return !isAcceptedLocalPendingProjection(message) && !hasDecryptFailure;
+    return message.sendState !== 'uncertain'
+        && !isAcceptedLocalPendingProjection(message)
+        && !hasDecryptFailure;
 }
 
 function supportsInFlightSteerForPendingActions(session: ReturnType<typeof useSession>): boolean {
@@ -148,6 +150,9 @@ function getPendingDeliveryStateLabel(
         return t('session.pendingMessages.deliveryStatus.blocked');
     }
     if (visualState.kind === 'delivery_uncertain') {
+        return t('session.pendingMessages.deliveryStatus.deliveryUncertain');
+    }
+    if (visualState.kind === 'send_uncertain') {
         return t('session.pendingMessages.deliveryStatus.deliveryUncertain');
     }
     if (visualState.kind === 'send_unconfirmed') {
@@ -733,6 +738,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             || deliveryVisualState.kind === 'delivering';
         const canRemoveDelivery = usesDeliveryResolutionActions && !providerEffectPossible;
         const isSendFailed = deliveryVisualState.kind === 'send_failed';
+        const isSendUncertain = deliveryVisualState.kind === 'send_uncertain';
         // F-P2: the ONE in-flow notice this row paints. Selected from the visual-state owner's own
         // descriptor rather than from three inline kind checks, because
         // `transcriptRowShellSignature` keys the row's Legend size version on exactly this answer —
@@ -788,6 +794,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                 items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
             } else if (isSendFailed) {
                 items.push({ id: 'retrySend', title: t('session.pendingMessages.actions.retrySend'), icon: <Icon name="arrow-clockwise" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
+                items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
+            } else if (isSendUncertain) {
                 items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });
             } else if (hasDurableOutboxOperation) {
                 items.push({ id: 'remove', title: t('common.remove'), icon: <Icon name="trash" size={16} color={theme.colors.text.secondary} />, disabled: deliveryActionBusy });

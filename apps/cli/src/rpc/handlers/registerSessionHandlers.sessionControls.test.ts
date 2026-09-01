@@ -970,18 +970,19 @@ describe('registerSessionHandlers session controls', () => {
       revalidateExplicitUserRequest,
       sessionRuntimeControls: { handleUserMessage },
     });
-    const handler = handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)!;
+    const legacyHandler = handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)!;
+    const replaySafeHandler = handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1)!;
     const request = { text: '/codex.review exact', localId: 'opaque-id', meta: { source: 'test' } };
 
-    const [first, replay] = await Promise.all([handler(request), handler(request)]);
+    const [first, replay] = await Promise.all([replaySafeHandler(request), legacyHandler(request)]);
     expect(first).toEqual({ ok: true, delivery: 'provider:opaque-id' });
     expect(replay).toEqual(first);
-    await expect(handler({ ...request, text: '/codex.review different' })).resolves.toEqual({
+    await expect(replaySafeHandler({ ...request, text: '/codex.review different' })).resolves.toEqual({
       ok: false,
       error: 'session_user_message_id_payload_conflict',
       errorCode: 'session_user_message_id_payload_conflict',
     });
-    await expect(handler({ ...request, localId: ' opaque-id' })).resolves.toEqual({
+    await expect(legacyHandler({ ...request, localId: ' opaque-id' })).resolves.toEqual({
       ok: true,
       delivery: 'provider: opaque-id',
     });
@@ -1130,6 +1131,7 @@ describe('registerSessionHandlers session controls', () => {
     });
 
     expect(handlers.has(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)).toBe(true);
+    expect(handlers.has(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1)).toBe(true);
   });
 
   it('does not register user-message send when no message owner exists', async () => {

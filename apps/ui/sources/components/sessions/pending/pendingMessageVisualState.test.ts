@@ -99,6 +99,23 @@ describe('getPendingMessageVisualState', () => {
         });
     });
 
+    it('surfaces an uncertain send with no spinner or unsafe retry affordance', () => {
+        expect(getPendingMessageVisualState(pendingMessage({
+            source: 'local_outbound',
+            deliveryStatus: 'queued',
+            sendState: 'uncertain',
+        }))).toEqual({
+            kind: 'send_uncertain',
+            showSpinner: false,
+            iconName: 'warning-circle',
+            deliveryBlockedReason: 'delivery_outcome_uncertain',
+            deliveryBlockedPresentation: {
+                labelKey: 'session.pendingMessages.deliveryBlockedReasons.ambiguousTerminalDelivery',
+                isUnknown: false,
+            },
+        });
+    });
+
     it('keeps cancellation distinct from send retry state', () => {
         expect(getPendingMessageVisualState(pendingMessage({
             source: 'local_outbound',
@@ -435,6 +452,7 @@ describe('resolvePendingMessageHeightBearingChrome', () => {
     const EXPECTED_BY_KIND = {
         saving: 'none',
         send_unconfirmed: 'none',
+        send_uncertain: 'blocked-notice',
         send_failed: 'retry-notice',
         cancelling: 'none',
         cancel_failed: 'none',
@@ -449,6 +467,7 @@ describe('resolvePendingMessageHeightBearingChrome', () => {
     const REACHED_BY: Readonly<Record<PendingMessageVisualStateKind, () => PendingMessage>> = {
         saving: () => pendingMessage({ source: 'local_outbound' }),
         send_unconfirmed: () => pendingMessage({ source: 'local_outbound', sendState: 'unconfirmed' }),
+        send_uncertain: () => pendingMessage({ source: 'local_outbound', sendState: 'uncertain' }),
         send_failed: () => pendingMessage({ source: 'local_outbound', sendState: 'failed' }),
         cancelling: () => pendingMessage({ pendingOutboxOperation: 'cancel' }),
         cancel_failed: () => pendingMessage({ pendingOutboxOperation: 'cancel', sendState: 'failed' }),

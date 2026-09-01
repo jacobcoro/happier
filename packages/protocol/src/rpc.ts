@@ -280,6 +280,7 @@ export const SESSION_RPC_METHODS = {
   SESSION_PERMISSION_RESPOND_LEGACY: 'permission',
   SESSION_STRUCTURED_QUESTION_RESPOND_V1: 'session.structuredQuestion.respond.v1',
   SESSION_USER_MESSAGE_SEND: 'session.userMessage.send',
+  SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1: 'session.userMessage.sendReplaySafe.v1',
   SESSION_PENDING_QUEUE_MATERIALIZE_NEXT: 'session.pendingQueue.materializeNext',
   SESSION_PENDING_QUEUE_WAKE_CAPABILITY_GET_V1: 'session.pendingQueue.wakeCapability.v1.get',
   SESSION_PENDING_QUEUE_WAKE_V1: 'session.pendingQueue.wake.v1',

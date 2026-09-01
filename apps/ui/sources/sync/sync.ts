@@ -613,6 +613,14 @@ function isFallbackSafeSessionUserMessageRpcError(error: unknown): boolean {
     );
 }
 
+function isReplaySafeSessionUserMessageMethodUnavailable(error: unknown): boolean {
+    if (isRpcMethodNotAvailableError(error) || readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_FOUND) {
+        return true;
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error ?? '');
+    return errorMessage === 'Method not found';
+}
+
 function createSessionMessageSubmitFailureError(
     errorCode: string | undefined,
     errorMessage: string | undefined,
@@ -2553,24 +2561,21 @@ class Sync {
 
             let runtimeRpcFallbackRequiresWake = false;
             if (session.active === true && canUseSessionUserMessageRuntimeRpc(session)) {
-                try {
-                    const rpcAck = await apiSocket.sessionRPC<SessionUserMessageSendResponse, {
-                        text: string;
-                        localId: string;
-                        meta: Record<string, unknown>;
-                    }>(
-                        sessionId,
-                        SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND,
-                        {
-                            text,
-                            localId,
-                            meta:
-                                content.meta && typeof content.meta === 'object' && !Array.isArray(content.meta)
-                                    ? (content.meta as Record<string, unknown>)
-                                    : {},
-                        },
-                        { timeoutMs: this.syncTuning.sessionRpcTimeoutMs },
-                    );
+                const runtimeRpcRequest = {
+                    text,
+                    localId,
+                    meta:
+                        content.meta && typeof content.meta === 'object' && !Array.isArray(content.meta)
+                            ? (content.meta as Record<string, unknown>)
+                            : {},
+                };
+                const invokeRuntimeRpc = (method: string) => apiSocket.sessionRPC<SessionUserMessageSendResponse, typeof runtimeRpcRequest>(
+                    sessionId,
+                    method,
+                    runtimeRpcRequest,
+                    { timeoutMs: this.syncTuning.sessionRpcTimeoutMs },
+                );
+                const acceptRuntimeRpc = async (rpcAck: SessionUserMessageSendResponse) => {
                     storage.getState().upsertPendingMessage(sessionId, {
                         id: localId,
                         localId,
@@ -2590,20 +2595,70 @@ class Sync {
                             ? { providerAcceptancePending: true }
                             : {}),
                     };
+                };
+                const markRuntimeRpcUncertain = () => {
+                    storage.getState().upsertPendingMessage(sessionId, {
+                        id: localId,
+                        localId,
+                        createdAt,
+                        updatedAt: nowServerMs(),
+                        source: 'local_outbound',
+                        deliveryStatus: 'queued',
+                        sendState: 'uncertain',
+                        text,
+                        displayText,
+                        rawRecord: content,
+                    });
+                    storage.getState().clearSessionOptimisticThinking(sessionId);
+                };
+                let runtimeRpcMethod: string = SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1;
+                try {
+                    let rpcAck: SessionUserMessageSendResponse;
+                    try {
+                        rpcAck = await invokeRuntimeRpc(runtimeRpcMethod);
+                    } catch (error) {
+                        if (!isReplaySafeSessionUserMessageMethodUnavailable(error)) {
+                            throw error;
+                        }
+                        runtimeRpcMethod = SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND;
+                        rpcAck = await invokeRuntimeRpc(runtimeRpcMethod);
+                    }
+                    return await acceptRuntimeRpc(rpcAck);
                 } catch (error) {
                     if (isSocketIoAckTimeoutError(error)) {
-                        storage.getState().upsertPendingMessage(sessionId, {
-                            id: localId,
-                            localId,
-                            createdAt,
-                            updatedAt: nowServerMs(),
-                            source: 'local_outbound',
-                            deliveryStatus: 'queued',
-                            sendState: 'unconfirmed',
-                            text,
-                            displayText,
-                            rawRecord: content,
-                        });
+                        if (runtimeRpcMethod === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1) {
+                            storage.getState().upsertPendingMessage(sessionId, {
+                                id: localId,
+                                localId,
+                                createdAt,
+                                updatedAt: nowServerMs(),
+                                source: 'local_outbound',
+                                deliveryStatus: 'queued',
+                                sendState: 'unconfirmed',
+                                text,
+                                displayText,
+                                rawRecord: content,
+                            });
+                            try {
+                                await apiSocket.reconnectAfterAckTimeout({
+                                    timeoutMs: this.syncTuning.sessionRpcTimeoutMs,
+                                });
+                                const replayAck = await invokeRuntimeRpc(runtimeRpcMethod);
+                                return await acceptRuntimeRpc(replayAck);
+                            } catch {
+                                markRuntimeRpcUncertain();
+                                return { localId, persistence: 'pending' as const };
+                            }
+                        }
+
+                        try {
+                            await apiSocket.reconnectAfterAckTimeout({
+                                timeoutMs: this.syncTuning.sessionRpcTimeoutMs,
+                            });
+                        } catch {
+                            // The legacy daemon cannot safely settle an ambiguous send either way.
+                        }
+                        markRuntimeRpcUncertain();
                         return { localId, persistence: 'pending' as const };
                     }
                     if (!isFallbackSafeSessionUserMessageRpcError(error)) {

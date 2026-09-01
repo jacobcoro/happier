@@ -53,7 +53,7 @@ export function registerSessionUserMessageSendHandler(
   }>();
   const maxExactOutcomes = 1_000;
 
-  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, async (raw: unknown) => {
+  const handleSessionUserMessageSend = async (raw: unknown) => {
     const rawMeta = raw && typeof raw === 'object' && !Array.isArray(raw)
       ? (raw as { meta?: unknown }).meta
       : undefined;
@@ -173,5 +173,10 @@ export function registerSessionUserMessageSendHandler(
     });
     exactOutcomesByLocalId.set(request.localId, entry);
     return await entry.outcome;
-  });
+  };
+
+  // Both protocol names share one exact-outcome registry. A replay can arrive through either name
+  // during mixed-version recovery and must settle to the same result without a second delivery.
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, handleSessionUserMessageSend);
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND_REPLAY_SAFE_V1, handleSessionUserMessageSend);
 }

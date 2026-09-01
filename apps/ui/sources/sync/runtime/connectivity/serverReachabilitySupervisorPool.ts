@@ -423,6 +423,7 @@ export async function waitForServerReachable(params: Readonly<{
 export async function invalidateServerReachabilitySupervisor(params: Readonly<{
     serverUrl: string;
     token: string | null;
+    force?: boolean;
 }>): Promise<void> {
     const entry = getOrCreateEntry(params.serverUrl);
     const tokenChanged = entry.token !== params.token;
@@ -439,7 +440,7 @@ export async function invalidateServerReachabilitySupervisor(params: Readonly<{
 
     const now = Date.now();
     // Avoid repeated stop/start loops when multiple callers attempt to "force reconnect" at once.
-    if (now - entry.lastInvalidateAt < 250) {
+    if (params.force !== true && now - entry.lastInvalidateAt < 250) {
         return;
     }
     entry.lastInvalidateAt = now;

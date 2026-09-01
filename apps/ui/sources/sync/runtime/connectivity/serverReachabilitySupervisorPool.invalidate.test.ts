@@ -102,4 +102,23 @@ describe('serverReachabilitySupervisorPool (invalidate)', () => {
 
         unsubscribe();
     });
+
+    it('lets send-timeout recovery bypass the short duplicate invalidation guard', async () => {
+        const runtimeFetchSpy = vi.fn(async () => new Response(null, { status: 200, headers: new Headers() }));
+        setRuntimeFetch(runtimeFetchSpy);
+
+        await startServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: null });
+        await invalidateServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: null });
+        const callsAfterFirstInvalidation = runtimeFetchSpy.mock.calls.length;
+
+        await invalidateServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: null });
+        expect(runtimeFetchSpy).toHaveBeenCalledTimes(callsAfterFirstInvalidation);
+
+        await invalidateServerReachabilitySupervisor({
+            serverUrl: 'https://example.test',
+            token: null,
+            force: true,
+        });
+        expect(runtimeFetchSpy.mock.calls.length).toBeGreaterThan(callsAfterFirstInvalidation);
+    });
 });
