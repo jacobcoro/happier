@@ -123,6 +123,12 @@ test(
 
     const sandboxDir = await mkdtemp(join(tmpdir(), 'happier-self-host-systemd-'));
     t.after(async () => {
+      if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+        runAsRoot('chown', ['-R', `${process.getuid()}:${process.getgid()}`, sandboxDir], {
+          cwd: '/tmp',
+          timeoutMs: 30_000,
+        });
+      }
       await rm(sandboxDir, { recursive: true, force: true });
     });
 
@@ -275,7 +281,7 @@ test(
     );
     const statusPayload = JSON.parse(String(status.stdout ?? '').trim());
     assert.equal(statusPayload?.ok, true);
-    assert.equal(statusPayload?.service?.name, `${serviceName}.service`);
+    assert.equal(statusPayload?.service?.name, serviceName);
     assert.equal(statusPayload?.service?.active, true);
     assert.equal(statusPayload?.healthy, true);
 

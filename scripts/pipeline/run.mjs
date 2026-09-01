@@ -2105,7 +2105,13 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         const scriptArgs =
           subcommand === 'release-compute-deploy-plan' ? ['--deploy-environment', deployEnvironment, ...passthrough] : passthrough;
 
-        if (subcommand === 'release-analyze' || (subcommand === 'release-local-candidates' && dryRun)) {
+        const isHermeticInstallerProjectionCheck =
+          subcommand === 'release-sync-installers' && passthrough.includes('--check');
+        if (
+          subcommand === 'release-analyze' ||
+          (subcommand === 'release-local-candidates' && dryRun) ||
+          isHermeticInstallerProjectionCheck
+        ) {
           runReleaseWrappedScript({
             repoRoot,
             env: process.env,
@@ -3489,12 +3495,14 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
 
       const keychainService = String(values['keychain-service'] ?? '').trim() || 'happier/pipeline';
       const keychainAccount = String(values['keychain-account'] ?? '').trim() || undefined;
-        const { env: mergedEnv, usedKeychain } = loadSecrets({
-          baseEnv: env,
-          secretsSource,
-          keychainService,
-          keychainAccount,
-        });
+      const { env: mergedEnv, usedKeychain } = dryRun
+        ? { env, usedKeychain: false }
+        : loadSecrets({
+            baseEnv: env,
+            secretsSource,
+            keychainService,
+            keychainAccount,
+          });
       if (sources.length > 0) {
         console.log(`[pipeline] using env sources: ${sources.join(', ')}`);
         console.log('[pipeline] warning: env-file mode is for fast local iteration; prefer Keychain bundle for long-term use.');
@@ -3552,7 +3560,9 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
 
       const keychainService = String(values['keychain-service'] ?? '').trim() || 'happier/pipeline';
       const keychainAccount = String(values['keychain-account'] ?? '').trim() || undefined;
-          const { env: mergedEnv, usedKeychain } = loadSecrets({
+      const { env: mergedEnv, usedKeychain } = dryRun
+        ? { env, usedKeychain: false }
+        : loadSecrets({
             baseEnv: env,
             secretsSource,
             keychainService,
