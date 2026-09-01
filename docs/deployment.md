@@ -109,6 +109,14 @@ The server package includes scripts for local infrastructure:
 
 Use `.env`/`.env.dev` to load local settings when running `yarn workspace @happier-dev/server dev`.
 
+## Reverse SSH relay tunnels
+
+When a relay is reached through a persistent reverse SSH tunnel, configure keepalives at both ends. The client service should use `ServerAliveInterval` and `ServerAliveCountMax`; the relay's `sshd` should set `ClientAliveInterval 30` and `ClientAliveCountMax 3` in a dedicated `sshd_config.d` drop-in. That makes `sshd` release an unresponsive tunnel client after about 90 seconds, so its reverse-forward listener cannot indefinitely block a reconnect.
+
+Before applying the server-side change, validate the effective configuration with `sshd -t`. Use `systemctl reload ssh`, rather than restarting SSH, so healthy tunnels remain connected. Confirm the effective values with `sshd -T` and check the client unit remains active after the reload.
+
+If the remote forwarding port is already listening, inspect its owning SSH daemon process before taking action. Do not use a generic port-kill guard: a healthy tunnel and a stale one use the same listener shape. Prefer waiting for the configured keepalive timeout and recording the unit error if the listener remains held.
+
 ## Implementation references
 - Entrypoint: `apps/server/sources/main.ts`
 - Dockerfile: `Dockerfile`
