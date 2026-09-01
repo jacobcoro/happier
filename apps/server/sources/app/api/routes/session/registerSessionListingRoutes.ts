@@ -2,6 +2,9 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 
 import {
+  decodeV2SessionListCursorV2,
+  encodeV2SessionListCursorV2,
+  V2ResumableSessionHealthListResponseSchema,
   V2SessionByIdNotFoundSchema,
   V2SessionByIdResponseSchema,
   V2SessionListResponseSchema,
@@ -59,6 +62,20 @@ const V2_PAGED_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
      */
     includeActive: OPTIONAL_BOOLEAN_QUERY_PARAM_SCHEMA,
 }).optional();
+
+const V2_RESUMABLE_SESSION_HEALTH_QUERYSTRING_SCHEMA = z.object({
+    cursor: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(100),
+}).optional();
+
+const V2_RESUMABLE_SESSION_HEALTH_SELECT = {
+    id: true,
+    active: true,
+    meaningfulActivityAt: true,
+    createdAt: true,
+    pendingPermissionRequestCount: true,
+    pendingUserActionRequestCount: true,
+} as const satisfies Prisma.SessionSelect;
 
 function parseInitialIncludeFlag(value: unknown): boolean {
     return value === true || value === "true" || value === "1";
@@ -345,6 +362,60 @@ export function registerSessionListingRoutes(app: Fastify) {
         }
         timing.apply(reply);
         return reply.send(payload);
+    });
+
+    app.get('/v2/sessions/resumable-health', {
+        preHandler: app.authenticate,
+        schema: {
+            response: {
+                200: V2ResumableSessionHealthListResponseSchema,
+                400: z.object({ error: z.literal('Invalid cursor format') }),
+            },
+            querystring: V2_RESUMABLE_SESSION_HEALTH_QUERYSTRING_SCHEMA,
+        },
+        config: {
+            rateLimit: resolveApiHotEndpointRateLimit(process.env, "sessions.list"),
+        },
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { cursor, limit = 100 } = request.query || {};
+        const decodedCursor = cursor ? decodeV2SessionListCursorV2(cursor) : undefined;
+        if (cursor && !decodedCursor) {
+            return reply.code(400).send({ error: 'Invalid cursor format' });
+        }
+
+        const rows = await db.session.findMany({
+            where: {
+                accountId: userId,
+                archivedAt: null,
+                active: false,
+                ...createV2SessionListCursorWhere(decodedCursor),
+            },
+            orderBy: V2_SESSION_LIST_ORDER_BY,
+            take: limit + 1,
+            select: V2_RESUMABLE_SESSION_HEALTH_SELECT,
+        });
+        const hasNext = rows.length > limit;
+        const pageRows = hasNext ? rows.slice(0, limit) : rows;
+        const lastRow = pageRows[pageRows.length - 1] ?? null;
+
+        return reply.send({
+            sessions: pageRows.map((row) => ({
+                id: row.id,
+                active: row.active,
+                needsUserAction:
+                    row.pendingPermissionRequestCount > 0
+                    || row.pendingUserActionRequestCount > 0,
+                meaningfulActivityAt: (row.meaningfulActivityAt ?? row.createdAt).getTime(),
+            })),
+            nextCursor: hasNext && lastRow
+                ? encodeV2SessionListCursorV2({
+                    sessionId: lastRow.id,
+                    meaningfulActivityAt: (lastRow.meaningfulActivityAt ?? lastRow.createdAt).getTime(),
+                })
+                : null,
+            hasNext,
+        });
     });
 
     app.get('/v2/sessions/archived', {

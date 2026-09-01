@@ -347,6 +347,8 @@ happier session list --json
 - `--plain` restores the older one-line output
 - `--json` is for scripting
 
+Development builds also provide `happier session list --resumable-health --json` for bounded maintenance scans. It returns only stopped, unarchived session ids, active state, the server-readable `needsUserAction` state, meaningful activity time, and page cursors. It deliberately does not load encrypted metadata, Agent state, resume eligibility, shares, or transcript previews.
+
 ## Session control (non-interactive)
 
 The `happier session ...` command group is the non-interactive surface for creating and controlling sessions.

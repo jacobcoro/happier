@@ -305,6 +305,60 @@ describe("sessionRoutes v2 sessions snapshot", () => {
         ).toEqual([]);
     });
 
+    it("lists stopped resumable-session health from a bounded scalar-only projection", async () => {
+        const first = {
+            id: "stopped-needs-user",
+            active: false,
+            meaningfulActivityAt: new Date(9_000),
+            createdAt: new Date(1_000),
+            pendingPermissionRequestCount: 1,
+            pendingUserActionRequestCount: 0,
+        };
+        const second = {
+            id: "stopped-ready",
+            active: false,
+            meaningfulActivityAt: new Date(8_000),
+            createdAt: new Date(2_000),
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+        };
+        sessionFindMany.mockResolvedValue([first, second]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v2/sessions/resumable-health");
+        const { response } = await route.invoke({ query: { limit: 1 } });
+
+        expect(response).toEqual({
+            sessions: [{
+                id: "stopped-needs-user",
+                active: false,
+                needsUserAction: true,
+                meaningfulActivityAt: 9_000,
+            }],
+            nextCursor: expect.stringMatching(/^cursor_v2_/),
+            hasNext: true,
+        });
+        expect(sessionFindMany).toHaveBeenCalledWith({
+            where: {
+                accountId: "u1",
+                archivedAt: null,
+                active: false,
+            },
+            orderBy: [
+                { meaningfulActivityAt: "desc" },
+                { id: "desc" },
+            ],
+            take: 2,
+            select: {
+                id: true,
+                active: true,
+                meaningfulActivityAt: true,
+                createdAt: true,
+                pendingPermissionRequestCount: true,
+                pendingUserActionRequestCount: true,
+            },
+        });
+    });
+
     it("exposes diagnostic route timing headers only when explicitly requested", async () => {
         sessionFindMany.mockResolvedValue([]);
 

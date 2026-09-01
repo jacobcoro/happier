@@ -80,7 +80,7 @@ function inferSessionKind(argv: readonly string[]): string {
 }
 
 const SESSION_HELP_BY_COMMAND = {
-  list: 'happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--plain] [--json]',
+  list: 'happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--resumable-health] [--plain] [--json]',
   status: 'happier session status <session-id-or-prefix-or-tag> [--live] [--json]',
   create: SESSION_CREATE_USAGE,
   send: 'happier session send <session-id-or-prefix-or-tag> <message> [--permission-mode <mode>] [--model <model-id>] [--wait] [--timeout <seconds>] [--json]',

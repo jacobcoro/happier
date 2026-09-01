@@ -334,6 +334,21 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
                 if (daemon.httpPort) {
                     console.log(`  HTTP Port: ${daemon.httpPort}`);
                 }
+                const daemonHealth = snapshotDaemonStatus.health;
+                if (daemonHealth) {
+                    const renderHealthStatus = daemonHealth.status === 'healthy'
+                        ? chalk.green(daemonHealth.status)
+                        : daemonHealth.status === 'warning'
+                            ? chalk.yellow(daemonHealth.status)
+                            : chalk.red(daemonHealth.status);
+                    console.log(`  Health: ${renderHealthStatus}`);
+                    console.log(`  Workers: ${daemonHealth.workers.count} (warn ${daemonHealth.workers.warningLimit}, hard ${daemonHealth.workers.hardLimit})`);
+                    console.log(`  Session-list queue: ${daemonHealth.sessionListQueries.queued} current, ${daemonHealth.sessionListQueries.peakQueued} peak`);
+                    daemonHealth.alerts.forEach((alert) => {
+                        const color = alert.severity === 'error' ? chalk.red : alert.severity === 'warning' ? chalk.yellow : chalk.gray;
+                        console.log(color(`  ${alert.severity.toUpperCase()} ${alert.code}: ${alert.message}`));
+                    });
+                }
                 if (hasDaemonOwnerMismatchForCurrentInvocation({
                     currentCliVersion: packageJson.version,
                     currentPublicReleaseChannel: getReleaseRingCatalogEntry(configuration.publicReleaseRing).publicLabel,

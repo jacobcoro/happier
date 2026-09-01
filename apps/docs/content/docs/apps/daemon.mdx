@@ -120,7 +120,7 @@ hprev daemon service paths
 hdev daemon service paths
 ```
 
-Recommendation: keep only one lane’s daemon service enabled for a given server profile unless you have a specific reason to run multiple daemons concurrently.
+Only one daemon/controller can own a server profile at a time. A second controller reports the exact conflicting process instead of starting another worker owner. Different server profiles remain independent.
 
 ## Always-on: install as a user service
 
@@ -177,3 +177,5 @@ This is especially useful for provisioning headless servers because you can appr
 - **Check status**: `happier daemon status`
 - **Find logs**: `happier daemon logs`
 - **Service paths**: `happier daemon service paths`
+
+On development builds, daemon status also reports local health alerts for worker count, daemon and worker RSS, swap use, queued session-list requests, startup worker reconciliation, and open quota-persistence circuits. These alerts stay local; Happier does not send an external notification from this health path.

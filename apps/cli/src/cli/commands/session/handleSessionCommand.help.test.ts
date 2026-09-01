@@ -11,7 +11,7 @@ describe('handleSessionCommand help output', () => {
     try {
       await handleSessionCommand(['--help']);
 
-      expect(output.text()).toContain('happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--plain] [--json]');
+      expect(output.text()).toContain('happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--resumable-health] [--plain] [--json]');
       expect(output.text()).toContain('happier resume [<session-id-or-prefix>]');
       expect(output.text()).toContain('happier session status <session-id-or-prefix-or-tag> [--live] [--json]');
       expect(output.text()).toContain(SESSION_CREATE_USAGE);

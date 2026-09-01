@@ -55,7 +55,7 @@ describe('createConnectedServiceQuotaPersistenceScheduler', () => {
     });
   }
 
-  it('pauses same-fingerprint retries after five retryable failures until material changes', async () => {
+  it('opens after five retryable failures, retaining same-fingerprint intake until material changes', async () => {
     vi.useFakeTimers();
     let nowMs = 0;
     const attempts: string[] = [];
@@ -76,8 +76,7 @@ describe('createConnectedServiceQuotaPersistenceScheduler', () => {
 
     expect(attempts).toEqual(['fp-old', 'fp-old', 'fp-old', 'fp-old', 'fp-old']);
     expect(scheduler.enqueue('profile', { materialFingerprint: 'fp-old', value: 'same-material' })).toEqual({
-      type: 'suppressed',
-      reason: 'paused_after_failures',
+      type: 'coalesced',
     });
     expect(scheduler.enqueue('profile', { materialFingerprint: 'fp-new', value: 'changed-material' }).type).toBe('accepted');
     nowMs += 1;
@@ -108,8 +107,7 @@ describe('createConnectedServiceQuotaPersistenceScheduler', () => {
     expect(attempts).toEqual(['initial', 'initial', 'initial', 'initial', 'initial']);
 
     expect(scheduler.enqueue('profile', { materialFingerprint: 'fp', value: 'latest-same-material' })).toEqual({
-      type: 'suppressed',
-      reason: 'paused_after_failures',
+      type: 'coalesced',
     });
     shouldFail = false;
     const flushedPromise = scheduler.flushKey('profile', 1_000);
@@ -118,6 +116,73 @@ describe('createConnectedServiceQuotaPersistenceScheduler', () => {
 
     expect(flushed).toBe(true);
     expect(attempts).toEqual(['initial', 'initial', 'initial', 'initial', 'initial', 'latest-same-material']);
+  });
+
+  it('acknowledges retained intake while open, preserves the real error, and closes after one bounded probe', async () => {
+    vi.useFakeTimers();
+    let nowMs = 0;
+    let shouldFail = true;
+    const attempts: string[] = [];
+    const scheduler = createConnectedServiceQuotaPersistenceScheduler<string, TestPayload>({
+      run: async (_key, payload) => {
+        attempts.push(payload.value);
+        if (shouldFail) {
+          const error = new Error('503 upstream provider quota write unavailable');
+          Object.assign(error, { status: 503, code: 'provider_account_usage_persistence_paused_after_failures' });
+          throw error;
+        }
+      },
+      maxConcurrent: 1,
+      minKeyIntervalMs: 0,
+      maxKeys: 10,
+      maxKeyAgeMs: 60_000,
+      maxPendingPayloadAgeMs: 60_000,
+      maxConsecutiveFailures: 2,
+      now: () => nowMs,
+      backoff: createKeyedBackoffTracker({
+        baseDelayMs: 10,
+        maxDelayMs: 20,
+        jitterRatio: 0,
+        now: () => nowMs,
+      }),
+      shouldRetry: () => true,
+    });
+
+    expect(scheduler.enqueue('profile', { materialFingerprint: 'fp', value: 'initial' })).toEqual({
+      type: 'accepted',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    nowMs = 10;
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(attempts).toEqual(['initial', 'initial']);
+    expect(scheduler.getCircuitSnapshot()).toEqual([
+      expect.objectContaining({
+        key: 'profile',
+        state: 'open',
+        consecutiveFailures: 2,
+        nextProbeAtMs: 30,
+        lastError: {
+          name: 'Error',
+          message: '503 upstream provider quota write unavailable',
+          status: 503,
+          code: 'provider_account_usage_persistence_paused_after_failures',
+        },
+      }),
+    ]);
+    expect(scheduler.enqueue('profile', { materialFingerprint: 'fp', value: 'latest-retained' })).toEqual({
+      type: 'coalesced',
+    });
+
+    nowMs = 29;
+    await vi.advanceTimersByTimeAsync(19);
+    expect(attempts).toHaveLength(2);
+
+    shouldFail = false;
+    nowMs = 30;
+    await vi.advanceTimersByTimeAsync(1);
+    expect(attempts).toEqual(['initial', 'initial', 'latest-retained']);
+    expect(scheduler.getCircuitSnapshot()).toEqual([]);
   });
 
   it('suppresses same-fingerprint work after a non-retryable failure without blocking flush', async () => {
@@ -211,7 +276,7 @@ describe('createConnectedServiceQuotaPersistenceScheduler', () => {
 
     for (let index = 0; index < 10; index += 1) {
       scheduler.enqueue(`profile-${index}`, { materialFingerprint: `fp-${index}`, value: `value-${index}` });
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       nowMs += 1;
     }
 

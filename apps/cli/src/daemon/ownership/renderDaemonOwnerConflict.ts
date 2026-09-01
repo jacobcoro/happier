@@ -20,12 +20,16 @@ function describeOwner(owner: CurrentDaemonOwner): string {
 
 function buildOwnerDetails(owner: CurrentDaemonOwner): string[] {
   const details = [
+    `Published controller PID: ${owner.state.pid}`,
     `Started by: ${describeOwner(owner)}`,
     `Current release channel: ${owner.state.startedWithPublicReleaseChannel ?? 'unknown'}`,
     `Current CLI version: ${owner.state.startedWithCliVersion}`,
   ];
   if (owner.state.serviceLabel) {
     details.push(`Background service label: ${owner.state.serviceLabel}`);
+  }
+  if (owner.otherControllerPids?.length) {
+    details.push(`Additional controllers claiming this server profile: ${owner.otherControllerPids.join(', ')}`);
   }
   return details;
 }

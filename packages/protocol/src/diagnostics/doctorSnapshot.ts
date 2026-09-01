@@ -43,6 +43,88 @@ export const DoctorSnapshotServerProfileSchema = z.object({
 
 export type DoctorSnapshotServerProfile = z.infer<typeof DoctorSnapshotServerProfileSchema>;
 
+export const DaemonHealthSnapshotSchema = z.object({
+  status: z.enum(['healthy', 'warning', 'error']),
+  observedAtMs: z.number().nonnegative(),
+  workers: z.object({
+    count: z.number().int().nonnegative(),
+    warningLimit: z.number().int().positive(),
+    hardLimit: z.number().int().positive(),
+  }),
+  resources: z.object({
+    controllerRssBytes: z.number().nonnegative().nullable(),
+    workerRssBytes: z.number().nonnegative().nullable(),
+    swapUsedBytes: z.number().nonnegative().nullable(),
+    swapTotalBytes: z.number().nonnegative().nullable(),
+    swapSource: NonEmptyString,
+    rssWarningBytes: z.number().positive(),
+    rssHardBytes: z.number().positive(),
+    swapWarningRatio: z.number().min(0).max(1),
+    swapHardRatio: z.number().min(0).max(1),
+  }),
+  sessionListQueries: z.object({
+    active: z.number().int().nonnegative(),
+    queued: z.number().int().nonnegative(),
+    peakQueued: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+    maxConcurrent: z.number().int().positive(),
+    maxQueued: z.number().int().positive(),
+  }),
+  quotaPersistenceCircuits: z.array(z.object({
+    key: NonEmptyString,
+    state: z.literal('open'),
+    reason: z.enum(['retryable_failures', 'nonretryable_failure']),
+    consecutiveFailures: z.number().int().positive(),
+    openedAtMs: z.number().nonnegative(),
+    lastFailureAtMs: z.number().nonnegative(),
+    nextProbeAtMs: z.number().nonnegative().nullable(),
+    lastError: z.object({
+      name: NonEmptyString,
+      message: z.string(),
+      status: z.number().int().optional(),
+      code: NonEmptyString.optional(),
+    }),
+  })),
+  startupReconciliation: z.object({
+    authenticatedActivePids: z.array(z.number().int().positive()),
+    activeWakeDiagnostics: z.array(z.object({
+      sessionId: NonEmptyString,
+      diagnostic: z.union([
+        z.object({ type: z.literal('wake_published') }),
+        z.object({
+          type: z.literal('unavailable'),
+          reason: z.enum([
+            'no_token',
+            'shutdown',
+            'transport_unavailable',
+            'session_mismatch',
+            'rpc_method_unavailable',
+            'runtime_upgrade_required',
+            'runtime_terminating',
+            'malformed_response',
+            'rpc_failed',
+          ]),
+        }),
+      ]),
+    })),
+    staleStopRequestedPids: z.array(z.number().int().positive()),
+    staleStopFailedPids: z.array(z.number().int().positive()),
+    unresolved: z.array(z.object({
+      sessionId: NonEmptyString,
+      pids: z.array(z.number().int().positive()),
+      reason: NonEmptyString,
+    })),
+    peakQueuedQueries: z.number().int().nonnegative(),
+  }).nullable(),
+  alerts: z.array(z.object({
+    code: NonEmptyString,
+    severity: z.enum(['info', 'warning', 'error']),
+    message: NonEmptyString,
+  })),
+});
+
+export type DaemonHealthSnapshot = z.infer<typeof DaemonHealthSnapshotSchema>;
+
 export const DoctorSnapshotDaemonStatusSchema = z.object({
   server: z.object({
     activeServerId: NonEmptyString,
@@ -74,6 +156,7 @@ export const DoctorSnapshotDaemonStatusSchema = z.object({
     needsAuth: z.boolean(),
     accountId: NonEmptyString.nullable(),
   }),
+  health: DaemonHealthSnapshotSchema.optional(),
 });
 
 export type DoctorSnapshotDaemonStatus = z.infer<typeof DoctorSnapshotDaemonStatusSchema>;

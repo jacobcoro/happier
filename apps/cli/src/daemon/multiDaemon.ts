@@ -36,6 +36,7 @@ export type SameHomeDaemonOrphanReapResult = Readonly<{
   stoppedPids: readonly number[];
   preservedPids: readonly number[];
   failedPids: readonly number[];
+  otherProfilePids: readonly number[];
 }>;
 
 function parseDaemonStateFromJson(value: unknown): NormalizedDaemonState | null {
@@ -367,6 +368,10 @@ export async function stopAllDaemonsBestEffort(opts: StopDaemonOptions = {}): Pr
   }
 }
 
+/**
+ * Reconcile duplicate controller publications for the active server profile only.
+ * Other profiles are independent lifecycle scopes and must never be stopped as startup cleanup.
+ */
 export async function reapSameHomeDaemonOrphansBeforeStart(
   opts: Readonly<{
     preservePids?: readonly number[];
@@ -379,10 +384,16 @@ export async function reapSameHomeDaemonOrphansBeforeStart(
   const stoppedPids = new Set<number>();
   const preservedPids = new Set<number>();
   const failedPids = new Set<number>();
+  const otherProfilePids = new Set<number>();
   const stoppedOrAttemptedPids = new Set<number>();
+  const activeServerId = String(configuration.activeServerId ?? '').trim();
 
   for (const record of await listSameHomeDaemonStateRecords()) {
     const { state } = record;
+    if (record.serverId !== activeServerId) {
+      if (isPidAlive(state.pid)) otherProfilePids.add(state.pid);
+      continue;
+    }
     if (preservePids.has(state.pid)) {
       preservedPids.add(state.pid);
       continue;
@@ -419,5 +430,6 @@ export async function reapSameHomeDaemonOrphansBeforeStart(
     stoppedPids: [...stoppedPids],
     preservedPids: [...preservedPids],
     failedPids: [...failedPids],
+    otherProfilePids: [...otherProfilePids],
   };
 }

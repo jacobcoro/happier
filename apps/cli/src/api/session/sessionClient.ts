@@ -1666,6 +1666,37 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
+    private reofferAcceptedCanonicalPendingDeliveryAfterExactTranscript(localId: string): void {
+        const producerGeneration = this.providerInputOutcomeProducerGeneration;
+        const sessionConnectionEpoch = this.sessionConnectionEpoch;
+        const precedingResolutions = [...this.acceptedCanonicalPendingDeliveryResolutionWrites];
+        const reoffer = async () => {
+            await Promise.all(precedingResolutions);
+            if (
+                this.closed
+                || this.runtimeTerminationStarted
+                || producerGeneration !== this.providerInputOutcomeProducerGeneration
+                || sessionConnectionEpoch !== this.sessionConnectionEpoch
+                || !this.canonicalPendingDeliveryByLocalId.has(localId)
+                || this.providerInputTerminalOutcomeByLocalId.get(localId) !== 'accepted'
+            ) {
+                return;
+            }
+            const authority = this.captureAcceptedCanonicalPendingDeliveryOperationAuthority(producerGeneration);
+            if (!authority) return;
+            this.trackAcceptedCanonicalPendingDeliveryResolution(
+                this.resolveAcceptedCanonicalPendingDelivery(localId, authority),
+            );
+        };
+        void reoffer().catch((error) => {
+            logger.debug('[pendingQueue] accepted provider delivery reoffer after exact transcript crashed', {
+                sessionId: this.sessionId,
+                localId,
+                error: serializeAxiosErrorForLog(error),
+            });
+        });
+    }
+
     private async drainAcceptedCanonicalPendingDeliveryResolutionsBeforeClose(): Promise<void> {
         while (this.acceptedCanonicalPendingDeliveryResolutionWrites.size > 0) {
             await Promise.all([...this.acceptedCanonicalPendingDeliveryResolutionWrites]);
@@ -2731,15 +2762,16 @@ export class ApiSessionClient extends EventEmitter {
         }
 
         // The server-authored user transcript row is exact committed proof for this localId.
-        // It may arrive even when the accepted-settlement ACK was lost. Retire only local
-        // custody bookkeeping; transcript observation never invokes provider input or writes
-        // Pending state.
-        logger.debug('[pendingQueue] exact committed transcript retired accepted local custody', {
+        // It may arrive after the provider accepted input while the Pending settlement write or
+        // its acknowledgement was lost. Keep local custody until the exact, idempotent settlement
+        // owner confirms that durable Pending state also converged; otherwise the transcript can
+        // appear while pendingCount remains stranded forever.
+        logger.debug('[pendingQueue] exact committed transcript reoffered accepted settlement', {
             sessionId: this.sessionId,
             localId,
             seq: committedSeq,
         });
-        this.clearCanonicalPendingDeliveryLocalState(localId);
+        this.reofferAcceptedCanonicalPendingDeliveryAfterExactTranscript(localId);
     }
 
     private async getAccountId(): Promise<string | null> {

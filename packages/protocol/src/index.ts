@@ -1694,6 +1694,10 @@ export {
   type V2SessionByIdResponse,
   type V2SessionListResponse,
   type V2SessionListCursorV2,
+  V2ResumableSessionHealthSchema,
+  V2ResumableSessionHealthListResponseSchema,
+  type V2ResumableSessionHealth,
+  type V2ResumableSessionHealthListResponse,
   type V2SessionMessageResponse,
   type V2SessionRecord,
   type SessionSummary,
@@ -3415,10 +3419,12 @@ export {
 } from './bugReports.js';
 
 export {
+  DaemonHealthSnapshotSchema,
   DoctorSnapshotSchema,
   DoctorSnapshotServerProfileSchema,
   parseDoctorSnapshotSafe,
   sanitizeDoctorSnapshotUrls,
+  type DaemonHealthSnapshot,
   type DoctorSnapshot,
   type DoctorSnapshotServerProfile,
 } from './diagnostics/doctorSnapshot.js';

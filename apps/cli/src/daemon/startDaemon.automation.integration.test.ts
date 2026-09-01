@@ -1397,6 +1397,47 @@ describe('startDaemon automation wiring (integration)', () => {
     }
   });
 
+  it('defers a timed-out synchronous machine preflight to the reconnect retry loop', async () => {
+    vi.useRealTimers();
+    harness.setAutoShutdownAfterAutomationStart(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    try {
+      const { isDaemonRunningCurrentlyInstalledHappyVersion } = await import('./controlClient');
+      vi.mocked(isDaemonRunningCurrentlyInstalledHappyVersion).mockResolvedValueOnce(true);
+      const { ensureMachineRegistered } = await import('@/api/machine/ensureMachineRegistered');
+      vi.mocked(ensureMachineRegistered)
+        .mockRejectedValueOnce(Object.assign(new Error('Machine registration timed out after 10000ms'), { code: 'ETIMEDOUT' }))
+        .mockResolvedValueOnce({
+          machineId: 'machine-automation',
+          didRotateMachineId: false,
+          machine: createRegisteredMachine('machine-automation'),
+        });
+
+      const { startDaemon } = await import('./startDaemon');
+      const run = startDaemon();
+      await waitForCondition(
+        () => vi.mocked(ensureMachineRegistered).mock.calls.length >= 2,
+        'Expected timed-out preflight registration to retry from the daemon reconnect loop',
+      );
+      expect(vi.mocked(ensureMachineRegistered).mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+        caller: 'startDaemon preflight',
+        timeoutMs: 10_000,
+      }));
+      expect(vi.mocked(ensureMachineRegistered).mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+        caller: 'startDaemon',
+        daemonState: expect.objectContaining({ startedWithCliVersion: '0.2.11' }),
+        timeoutMs: 10_000,
+      }));
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      harness.requestShutdown('happier-cli');
+      exitSpy.mockRestore();
+    }
+  });
+
   it('does not publish delayed machine registration after shutdown begins', async () => {
     vi.useRealTimers();
     harness.setAutoShutdownAfterAutomationStart(false);

@@ -3894,7 +3894,7 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     expect(client.getCommittedUserMessageSeq('replay-proof-local')).toBeNull();
   });
 
-  it('retires accepted canonical custody when the exact committed transcript arrives after settlement response loss', async () => {
+  it('uses an exact committed transcript to redrive only its accepted settlement after response loss', async () => {
     const localId = 'accepted-response-loss-transcript-proof';
     const client = await createClient({
       latestTurnStatus: 'completed',
@@ -3906,7 +3906,18 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     materializeNextMock
       .mockResolvedValueOnce(createProviderDeliveryMaterializeResult(localId))
       .mockResolvedValueOnce(createProviderDeliveryMaterializeResult('next-after-transcript-proof'));
-    resolveAcceptedPendingDeliveryMock.mockRejectedValueOnce(new Error('operation has timed out'));
+    resolveAcceptedPendingDeliveryMock
+      .mockRejectedValueOnce(new Error('operation has timed out'))
+      .mockResolvedValueOnce({
+        didResolve: false,
+        pendingQueueState: { known: true, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 4 },
+        message: {
+          ...createProviderDeliveryMaterializeResult(localId).message,
+          id: 'committed-response-loss-transcript-proof',
+          seq: 74,
+          deliveryState: null,
+        },
+      });
 
     await expect(client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).resolves.toMatchObject({
       type: 'materialized',
@@ -3917,11 +3928,19 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
 
     triggerCommittedUserMessage({ seq: 73, localId: 'neighbor-transcript-row' });
     expect((client as any).canonicalPendingDeliveryByLocalId.has(localId)).toBe(true);
+    expect(resolveAcceptedPendingDeliveryMock).toHaveBeenCalledTimes(1);
 
     triggerCommittedUserMessage({ seq: 74, localId });
 
+    await waitUntil(() => resolveAcceptedPendingDeliveryMock.mock.calls.length === 2);
     expect((client as any).canonicalPendingDeliveryByLocalId.has(localId)).toBe(false);
     expect(client.getCommittedUserMessageSeq(localId)).toBe(74);
+    expect((client as any).pendingQueueState).toMatchObject({
+      known: true,
+      pendingCount: 1,
+      pendingBlockedCount: 0,
+      pendingVersion: 4,
+    });
     await expect(client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).resolves.toMatchObject({
       type: 'materialized',
       localId: 'next-after-transcript-proof',

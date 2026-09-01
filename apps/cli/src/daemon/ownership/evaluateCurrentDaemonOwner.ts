@@ -27,6 +27,8 @@ export type CurrentDaemonOwner = Readonly<{
   releaseChannelMatches: boolean;
   serviceManaged: boolean | null;
   startupSource: DaemonStartupSource | 'unknown';
+  /** Additional long-lived controllers that claim this exact server-profile lifecycle scope. */
+  otherControllerPids?: readonly number[];
 }>;
 
 export type DaemonOwnerEvaluation =
@@ -121,9 +123,9 @@ export function isDaemonProcessForCurrentRuntimeRoot(processInfo: HappyProcessIn
   return command.includes('daemon start-sync');
 }
 
-async function findStateLessDaemonProcessForCurrentRuntimeRoot(): Promise<HappyProcessInfo | null> {
+async function findDaemonProcessesForCurrentRuntimeRoot(): Promise<HappyProcessInfo[]> {
   if (process.env.NODE_ENV === 'test' && process.env.HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK !== '1') {
-    return null;
+    return [];
   }
 
   const currentRuntimeRoot = normalizePathFragment(projectPath());
@@ -131,7 +133,7 @@ async function findStateLessDaemonProcessForCurrentRuntimeRoot(): Promise<HappyP
     .filter((processInfo) => isDaemonProcessForCurrentRuntimeRoot(processInfo, currentRuntimeRoot))
     .filter((processInfo) => daemonProcessMatchesCurrentScope(processInfo))
     .sort((a, b) => a.pid - b.pid);
-  return matching[0] ?? null;
+  return matching;
 }
 
 export async function evaluateCurrentDaemonOwner(): Promise<DaemonOwnerEvaluation> {
@@ -140,7 +142,8 @@ export async function evaluateCurrentDaemonOwner(): Promise<DaemonOwnerEvaluatio
   const currentPublicReleaseChannel = getReleaseRingCatalogEntry(configuration.publicReleaseRing).publicLabel;
 
   if (inspection.status === 'not-running') {
-    const processOnlyOwner = await findStateLessDaemonProcessForCurrentRuntimeRoot();
+    const processOnlyOwners = await findDaemonProcessesForCurrentRuntimeRoot();
+    const processOnlyOwner = processOnlyOwners[0] ?? null;
     if (processOnlyOwner) {
       const owner: CurrentDaemonOwner = {
         status: 'running',
@@ -157,6 +160,9 @@ export async function evaluateCurrentDaemonOwner(): Promise<DaemonOwnerEvaluatio
         releaseChannelMatches: false,
         serviceManaged: null,
         startupSource: 'unknown',
+        ...(processOnlyOwners.length > 1
+          ? { otherControllerPids: processOnlyOwners.slice(1).map((processInfo) => processInfo.pid) }
+          : {}),
       };
       return { kind: 'conflict', owner };
     }
@@ -191,6 +197,9 @@ export async function evaluateCurrentDaemonOwner(): Promise<DaemonOwnerEvaluatio
   );
   const hasLegacyMissingReleaseChannel = !state.startedWithPublicReleaseChannel;
   const startupSource = state.startupSource ?? 'unknown';
+  const otherControllerPids = (await findDaemonProcessesForCurrentRuntimeRoot())
+    .map((processInfo) => processInfo.pid)
+    .filter((pid) => pid !== state.pid);
   const owner: CurrentDaemonOwner = {
     status: inspection.status,
     source: 'state',
@@ -201,8 +210,10 @@ export async function evaluateCurrentDaemonOwner(): Promise<DaemonOwnerEvaluatio
     releaseChannelMatches,
     serviceManaged: resolveDaemonStartupSourceServiceManagedState(state.startupSource, state.serviceLabel),
     startupSource,
+    ...(otherControllerPids.length > 0 ? { otherControllerPids } : {}),
   };
 
+  if (otherControllerPids.length > 0) return { kind: 'conflict', owner };
   return versionMatches && (releaseChannelMatches || hasLegacyMissingReleaseChannel)
     ? { kind: 'compatible', owner }
     : { kind: 'conflict', owner };
