@@ -102,6 +102,8 @@ import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 
 import { forceStopKnownDaemonPid, isDaemonRunningCurrentlyInstalledHappyVersion, resolveDaemonSpawnSessionByNonce, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
+import { createDaemonHealthMonitor, type DaemonResourceSample } from './health/daemonHealthMonitor';
+import { sampleDaemonResources } from './health/sampleDaemonResources';
 import { resolveTrackedSessionCatalogAgentId } from './sessions/resolveTrackedSessionCatalogAgentId';
 import { activatePendingInactiveSession } from './sessions/activatePendingInactiveSession';
 import { resolveExistingRunnerAcceptance } from './spawn/resolveRunnerAcceptance';
@@ -114,6 +116,10 @@ import { resolveMachineTransferRuntimeConfig } from '@/machines/transfer/transfe
 import {
   reattachTrackedSessionsFromMarkers,
 } from './sessions/reattachFromMarkers';
+import {
+  reconcileRetainedWorkersAtStartup,
+  type RetainedWorkerReconciliationResult,
+} from './sessions/reconcileRetainedWorkersAtStartup';
 import {
   ClaudeEndpointRecoveryFenceError,
   resolveClaudeEndpointRecoverySpawnOptions,
@@ -1787,6 +1793,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
     const preferredHost = await getPreferredHostName();
     const metadataForRegistration: MachineMetadata = { ...initialMachineMetadata, host: preferredHost };
     let preflightMachineRegistration: Awaited<ReturnType<typeof ensureMachineRegistered>> | null = null;
+    const machineRegistrationTimeoutMs = resolvePositiveIntEnv(
+      process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_TIMEOUT_MS,
+      10_000,
+      { min: 250, max: 120_000 },
+    );
 
     const runningDaemonVersionMatches = await isDaemonRunningCurrentlyInstalledHappyVersion({
       expectedMachineId: machineId,
@@ -1801,20 +1812,33 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
     } else if (machinePreflightDecision === 'skip_sync_preflight_for_self_restart') {
       logger.debug('[DAEMON RUN] Self-restart replacement detected matching daemon; skipping synchronous machine preflight and continuing takeover');
     } else {
-      preflightMachineRegistration = await ensureMachineRegistered({
-        api,
-        machineId,
-        metadata: metadataForRegistration,
-        caller: 'startDaemon preflight',
-      });
-      machineId = preflightMachineRegistration.machineId;
-      if (preflightMachineRegistration.didRotateMachineId) {
-        logger.debug('[DAEMON RUN] Same-version daemon matched a stale machine id, restarting daemon with recovered machine identity');
-        await stopDaemon();
-      } else {
-        logger.debug('[DAEMON RUN] Daemon version and machine identity match, keeping existing daemon');
-        console.log('Daemon already running with matching version');
-        process.exit(0);
+      try {
+        preflightMachineRegistration = await ensureMachineRegistered({
+          api,
+          machineId,
+          metadata: metadataForRegistration,
+          timeoutMs: machineRegistrationTimeoutMs,
+          caller: 'startDaemon preflight',
+        });
+      } catch (error) {
+        if (!shouldRetryMachineRegistrationError(error)) throw error;
+        // A transient relay failure must not abort startup before the daemon lock can decide
+        // ownership. If the old daemon still owns the profile, the lock keeps it authoritative;
+        // otherwise this process publishes state and the normal reconnect loop retries registration.
+        logger.warn('[DAEMON RUN] Machine registration preflight unavailable; deferring to reconnect retry', {
+          error: serializeAxiosErrorForLog(error),
+        });
+      }
+      if (preflightMachineRegistration) {
+        machineId = preflightMachineRegistration.machineId;
+        if (preflightMachineRegistration.didRotateMachineId) {
+          logger.debug('[DAEMON RUN] Same-version daemon matched a stale machine id, restarting daemon with recovered machine identity');
+          await stopDaemon();
+        } else {
+          logger.debug('[DAEMON RUN] Daemon version and machine identity match, keeping existing daemon');
+          console.log('Daemon already running with matching version');
+          process.exit(0);
+        }
       }
     }
 
@@ -2581,6 +2605,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 
         logger.debug('[DAEMON RUN] Running startup session reattach scan');
         const startupReattachResult = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession, credentials });
+        let retainedWorkerReconciliationResult: RetainedWorkerReconciliationResult | null = null;
         const pendingSessionMachineAccessBindingIds = new Set(startupReattachResult.recoveredLiveSessionIds ?? []);
         let sessionMachineAccessBindingReconcileInFlight: Promise<void> | null = null;
         const reconcileSessionMachineAccessBindings = async (): Promise<void> => {
@@ -5516,6 +5541,37 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           });
         };
 
+        retainedWorkerReconciliationResult = await reconcileRetainedWorkersAtStartup({
+          pidToTrackedSession,
+          fetchSession: async (sessionId) => await fetchSessionByIdCompat({
+            token: credentials.token,
+            sessionId,
+            reason: 'legacy-compat-proof',
+          }),
+          stopSession: stopSessionCore,
+          wakeSession: async (sessionId) => await requestPendingQueueWake({
+            sessionId,
+            credentials,
+            isShutdownRequested: () => shutdownInitiated,
+          }),
+          maxConcurrentQueries: 4,
+        });
+        if (
+          retainedWorkerReconciliationResult.staleStopRequestedPids.length > 0
+          || retainedWorkerReconciliationResult.staleStopFailedPids.length > 0
+          || retainedWorkerReconciliationResult.unresolved.length > 0
+          || retainedWorkerReconciliationResult.activeWakeDiagnostics.some(({ diagnostic }) => diagnostic.type === 'unavailable')
+        ) {
+          logger.warn('[DAEMON RUN] Retained worker startup reconciliation completed with dispositions', {
+            authenticatedActivePids: retainedWorkerReconciliationResult.authenticatedActivePids,
+            staleStopRequestedPids: retainedWorkerReconciliationResult.staleStopRequestedPids,
+            staleStopFailedPids: retainedWorkerReconciliationResult.staleStopFailedPids,
+            unresolved: retainedWorkerReconciliationResult.unresolved,
+            activeWakeDiagnostics: retainedWorkerReconciliationResult.activeWakeDiagnostics,
+            peakQueuedQueries: retainedWorkerReconciliationResult.peakQueuedQueries,
+          });
+        }
+
         observeConnectedServiceRestartProcessMissing = async (tracked) => {
           const exit = { reason: 'process-missing', code: null, signal: null };
           try {
@@ -6480,6 +6536,22 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       return agentId as CatalogAgentId;
     };
 
+    let resourceSampleCache: Readonly<{ observedAtMs: number; sample: DaemonResourceSample }> | null = null;
+    const daemonHealthMonitor = createDaemonHealthMonitor({
+      getWorkerPids: () => getCurrentChildren().map((child) => child.pid),
+      sampleResources: async (workerPids) => {
+        const nowMs = Date.now();
+        if (resourceSampleCache && nowMs - resourceSampleCache.observedAtMs < 5_000) {
+          return resourceSampleCache.sample;
+        }
+        const sample = await sampleDaemonResources(workerPids);
+        resourceSampleCache = { observedAtMs: nowMs, sample };
+        return sample;
+      },
+      getQuotaPersistenceCircuits: () => providerAccountUsagePersistence.getCircuitSnapshot(),
+      getStartupReconciliation: () => retainedWorkerReconciliationResult,
+    });
+
     // Start control server
     const { port: controlPort, stop: stopControlServer } = await startDaemonControlServer({
       getChildren: getCurrentChildren,
@@ -6493,6 +6565,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       beforeShutdown,
       onHappySessionWebhook,
       controlToken,
+      healthMonitor: daemonHealthMonitor,
       handleExecutionRunConnectedServiceMaterialize: async (input) => {
         return await executionRunConnectedServicesBridge.materialize({
           runId: input.runId,
@@ -8061,11 +8134,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           );
         },
       });
-      const machineRegistrationTimeoutMs = resolvePositiveIntEnv(
-        process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_TIMEOUT_MS,
-        10_000,
-        { min: 250, max: 120_000 },
-      );
       const machineRegistrationRetryBaseDelayMs = resolvePositiveIntEnv(
         process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_BASE_DELAY_MS
           ?? process.env.HAPPIER_DAEMON_MACHINE_REGISTRATION_RETRY_DELAY_MS,

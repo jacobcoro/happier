@@ -75,6 +75,7 @@ import { continueSessionWithReplay } from '@/session/replay/continueWithReplay';
 import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 import {
   ConnectedServiceIdSchema,
+  DaemonHealthSnapshotSchema,
   ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
   RestartAllSessionRunnersRequestV1Schema,
@@ -107,6 +108,7 @@ import {
   type RuntimeAuthRecoveryProofKind,
 } from './connectedServices/runtimeAuth/resolveRuntimeAuthRecoveryOutcome';
 import { buildConnectedServiceRuntimeAuthSwitchAttemptLogContext } from './connectedServices/runtimeAuth/buildConnectedServiceRuntimeAuthSwitchAttemptLogContext';
+import type { DaemonHealthMonitor } from './health/daemonHealthMonitor';
 import { registerDaemonControlRequestTiming } from './diagnostics/registerDaemonControlRequestTiming';
 import {
   ConnectedServiceTurnLifecycleRequestBodySchema,
@@ -376,6 +378,7 @@ export function createDaemonControlApp({
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
   requestSelfRestart,
+  healthMonitor,
 }: {
   getChildren: () => TrackedSession[];
   machineId: string;
@@ -475,6 +478,7 @@ export function createDaemonControlApp({
     failingAccessTokenFingerprint?: string | null;
   }>) => Promise<ClaudeSubscriptionAuthTokensRefreshResponse>;
   requestSelfRestart?: (request?: DaemonSelfRestartRequest) => Promise<unknown>;
+  healthMonitor?: DaemonHealthMonitor;
 }): FastifyInstance {
   void machineId;
   const normalizedRuntimeId = runtimeId.trim();
@@ -644,6 +648,28 @@ export function createDaemonControlApp({
       ...(normalizedRuntimeId ? { runtimeId: normalizedRuntimeId } : {}),
       ...(DAEMON_DIST_CLOSURE_FINGERPRINT_PATTERN.test(distClosureFingerprint) ? { distClosureFingerprint } : {}),
     };
+  });
+
+  typed.post('/health', {
+    schema: {
+      response: {
+        200: z.object({
+          health: DaemonHealthSnapshotSchema,
+        }),
+        401: authSchema401,
+        501: z.object({
+          success: z.literal(false),
+          error: z.literal('Daemon health reporting unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (_request, reply) => {
+    if (!healthMonitor) {
+      reply.code(501);
+      return { success: false as const, error: 'Daemon health reporting unavailable' as const };
+    }
+    return { health: DaemonHealthSnapshotSchema.parse(await healthMonitor.getSnapshot()) };
   });
 
   typed.post('/connected-service-auth/session/switch', {
@@ -1713,27 +1739,42 @@ export function createDaemonControlApp({
             }).optional(),
           }))
         }),
+        503: z.object({
+          success: z.literal(false),
+          error: z.literal('Daemon session-list queue limit reached'),
+        }),
         401: authSchema401,
       }
     },
     preHandler: requireAuth,
-  }, async () => {
-    const children = getChildren();
-    logger.debug(`[CONTROL SERVER] Listing ${children.length} sessions`);
-    return { 
-      children: children
-        .filter(child => child.happySessionId !== undefined)
-        .map(child => ({
-          startedBy: child.startedBy,
-          happySessionId: child.happySessionId!,
-          pid: child.pid,
-          status: child.terminalHostHealth?.status === 'host_dead'
-            ? 'runner_alive_host_dead' as const
-            : 'runner_alive' as const,
-          ...(child.terminalHostHealth?.status === 'host_dead'
-            ? { terminalHostHealth: child.terminalHostHealth }
-            : {}),
-        }))
+  }, async (_request, reply) => {
+    const list = async () => {
+      const children = getChildren();
+      logger.debug(`[CONTROL SERVER] Listing ${children.length} sessions`);
+      return {
+        children: children
+          .filter(child => child.happySessionId !== undefined)
+          .map(child => ({
+            startedBy: child.startedBy,
+            happySessionId: child.happySessionId!,
+            pid: child.pid,
+            status: child.terminalHostHealth?.status === 'host_dead'
+              ? 'runner_alive_host_dead' as const
+              : 'runner_alive' as const,
+            ...(child.terminalHostHealth?.status === 'host_dead'
+              ? { terminalHostHealth: child.terminalHostHealth }
+              : {}),
+          })),
+      };
+    };
+    try {
+      return healthMonitor ? await healthMonitor.runSessionListQuery(list) : await list();
+    } catch (error) {
+      if (error instanceof Error && error.message === 'daemon_session_list_queue_limit_reached') {
+        reply.code(503);
+        return { success: false as const, error: 'Daemon session-list queue limit reached' as const };
+      }
+      throw error;
     }
   });
 
@@ -1781,6 +1822,11 @@ export function createDaemonControlApp({
           actionRequired: z.string().optional(),
           directory: z.string().optional(),
         }),
+        503: z.object({
+          success: z.literal(false),
+          error: z.string(),
+          errorCode: z.string(),
+        }),
         500: z.object({
           success: z.boolean(),
           error: z.string().optional(),
@@ -1796,6 +1842,17 @@ export function createDaemonControlApp({
     const normalizedDirectory = normalizeSpawnSessionDirectory(directory, process.env);
 
     logger.debug(`[CONTROL SERVER] Spawn session request: dir=${normalizedDirectory}, sessionId=${sessionId || 'new'}`);
+    if (healthMonitor) {
+      const admission = await healthMonitor.checkWorkerAdmission();
+      if (!admission.allowed) {
+        reply.code(503);
+        return {
+          success: false as const,
+          error: admission.message,
+          errorCode: admission.code,
+        };
+      }
+    }
     let result: SpawnSessionResult;
     try {
       const normalizedExistingSessionId = typeof existingSessionId === 'string' && existingSessionId.trim().length > 0
@@ -2241,6 +2298,7 @@ export function startDaemonControlServer({
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
   requestSelfRestart,
+  healthMonitor,
 }: {
   getChildren: () => TrackedSession[];
   machineId: string;
@@ -2332,6 +2390,7 @@ export function startDaemonControlServer({
     failingAccessTokenFingerprint?: string | null;
   }>) => Promise<ClaudeSubscriptionAuthTokensRefreshResponse>;
   requestSelfRestart?: (request?: DaemonSelfRestartRequest) => Promise<unknown>;
+  healthMonitor?: DaemonHealthMonitor;
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   return new Promise((resolve) => {
     const app = createDaemonControlApp({
@@ -2364,6 +2423,7 @@ export function startDaemonControlServer({
       runtimeAuthRecoveryScheduler,
       isShuttingDown,
       requestSelfRestart,
+      healthMonitor,
     });
 
     app.listen({ port: 0, host: '127.0.0.1' }, (err, address) => {

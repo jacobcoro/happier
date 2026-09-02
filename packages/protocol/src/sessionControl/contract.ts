@@ -373,6 +373,21 @@ export const V2SessionListResponseSchema = z
   .passthrough();
 export type V2SessionListResponse = z.infer<typeof V2SessionListResponseSchema>;
 
+export const V2ResumableSessionHealthSchema = z.object({
+  id: z.string().min(1),
+  active: z.boolean(),
+  needsUserAction: z.boolean(),
+  meaningfulActivityAt: z.number().int().nonnegative(),
+});
+export type V2ResumableSessionHealth = z.infer<typeof V2ResumableSessionHealthSchema>;
+
+export const V2ResumableSessionHealthListResponseSchema = z.object({
+  sessions: z.array(V2ResumableSessionHealthSchema),
+  nextCursor: z.string().nullable(),
+  hasNext: z.boolean(),
+});
+export type V2ResumableSessionHealthListResponse = z.infer<typeof V2ResumableSessionHealthListResponseSchema>;
+
 export const V2_SESSION_LIST_CURSOR_V1_PREFIX = 'cursor_v1_' as const;
 export const V2_SESSION_LIST_CURSOR_V2_PREFIX = 'cursor_v2_' as const;
 

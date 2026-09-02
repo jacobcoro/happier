@@ -87,6 +87,14 @@ happier session list --archived
 happier session list --resumable
 ```
 
+For bounded maintenance scans on development builds, use:
+
+```bash
+happier session list --resumable-health --json
+```
+
+This compact path returns stopped, unarchived session ids, active state, whether a materialized pending permission or user-action request needs the user, meaningful activity time, and a cursor. It does not decrypt or return rich session rows. `needsUserAction` is narrower than the session list's general **Needs attention** state: unread messages and failed turns do not set it.
+
 ## Status
 
 ```bash

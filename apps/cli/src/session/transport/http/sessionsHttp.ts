@@ -5,8 +5,10 @@ import {
   type SessionMessageAttentionImpact,
   type V2SessionByIdResponse,
   type V2SessionListResponse,
+  type V2ResumableSessionHealthListResponse,
   V2SessionByIdResponseSchema,
   V2SessionListResponseSchema,
+  V2ResumableSessionHealthListResponseSchema,
   V2SessionMessageResponseSchema,
 } from '@happier-dev/protocol';
 
@@ -287,6 +289,43 @@ export async function fetchSessionsPage(params: Readonly<{
     nextCursor: typeof parsed.nextCursor === 'string' ? parsed.nextCursor : null,
     hasNext: Boolean(parsed.hasNext),
   };
+}
+
+export async function fetchResumableSessionHealthPage(params: Readonly<{
+  token: string;
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+}>): Promise<V2ResumableSessionHealthListResponse> {
+  const serverUrl = resolveServerHttpBaseUrl();
+  const response = await axios.get(`${serverUrl}/v2/sessions/resumable-health`, {
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      'Content-Type': 'application/json',
+    },
+    params: {
+      ...(params.cursor ? { cursor: params.cursor } : {}),
+      ...(params.limit ? { limit: params.limit } : {}),
+    },
+    timeout: configuration.sessionControlHttpTimeoutMs,
+    validateStatus: () => true,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+
+  if (isAuthenticationStatus(response.status)) {
+    throwAuthenticationStatusError(response.status);
+  }
+  if (response.status !== 200) {
+    throwUnexpectedHttpStatusError(
+      response.status,
+      `Unexpected status from /v2/sessions/resumable-health: ${response.status}`,
+    );
+  }
+  return parseOrThrow<V2ResumableSessionHealthListResponse>(
+    V2ResumableSessionHealthListResponseSchema,
+    response.data,
+    'Unexpected /v2/sessions/resumable-health response shape',
+  );
 }
 
 export async function commitSessionEncryptedMessage(params: Readonly<{

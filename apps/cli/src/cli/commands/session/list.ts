@@ -7,9 +7,10 @@ import { renderSessionListTable } from '@/ui/renderSessionListTable';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { normalizeActionExecuteResult } from '@/cli/commands/session/shared/normalizeActionExecuteResult';
 import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/tryHandleApprovalRequestCreated';
+import { fetchResumableSessionHealthPage } from '@/session/transport/http/sessionsHttp';
 
-const SESSION_LIST_USAGE = 'Usage: happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--plain] [--json]';
-const SESSION_LIST_BOOLEAN_FLAGS = new Set(['--active', '--archived', '--include-system', '--resumable', '--plain', '--json']);
+const SESSION_LIST_USAGE = 'Usage: happier session list [--active] [--archived] [--limit N] [--cursor C] [--include-system] [--resumable] [--resumable-health] [--plain] [--json]';
+const SESSION_LIST_BOOLEAN_FLAGS = new Set(['--active', '--archived', '--include-system', '--resumable', '--resumable-health', '--plain', '--json']);
 const SESSION_LIST_VALUE_FLAGS = new Set(['--limit', '--cursor']);
 
 function assertValidSessionListArguments(argv: readonly string[]): void {
@@ -38,6 +39,7 @@ export async function cmdSessionList(
   const includeSystem = hasFlag(argv, '--include-system');
   const plain = hasFlag(argv, '--plain');
   const resumableOnly = hasFlag(argv, '--resumable');
+  const resumableHealth = hasFlag(argv, '--resumable-health');
   const limitRaw = readIntFlagValue(argv, '--limit', { min: 1 });
   const limit = limitRaw !== null ? Math.min(limitRaw, 200) : undefined;
   const cursor = (readFlagValue(argv, '--cursor') ?? '').trim();
@@ -49,6 +51,9 @@ export async function cmdSessionList(
   if (activeOnly && archivedOnly) {
     throw new Error(SESSION_LIST_USAGE);
   }
+  if (resumableHealth && (activeOnly || archivedOnly || includeSystem || resumableOnly || plain)) {
+    throw new Error(SESSION_LIST_USAGE);
+  }
 
   const credentials = await deps.readCredentialsFn();
   if (!credentials) {
@@ -58,6 +63,22 @@ export async function cmdSessionList(
     }
     console.error(chalk.red('Error:'), 'Not authenticated. Run "happier auth login" first.');
     process.exit(1);
+  }
+
+  if (resumableHealth) {
+    const page = await fetchResumableSessionHealthPage({
+      token: credentials.token,
+      ...(limit ? { limit } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
+    if (json) {
+      await printJsonEnvelope({ ok: true, kind: 'session_resumable_health_list', data: page });
+      return;
+    }
+    for (const session of page.sessions) {
+      console.log(`${session.id}\t${session.active}\t${session.needsUserAction}\t${session.meaningfulActivityAt}`);
+    }
+    return;
   }
 
   const executor = createCliActionExecutorFromCredentials({ credentials });

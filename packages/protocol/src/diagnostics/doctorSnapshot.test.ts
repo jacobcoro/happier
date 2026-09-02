@@ -136,6 +136,26 @@ describe('DoctorSnapshotSchema', () => {
           needsAuth: true,
           accountId: 'acct_123',
         },
+        health: {
+          status: 'warning',
+          observedAtMs: 1234,
+          workers: { count: 48, warningLimit: 40, hardLimit: 64 },
+          resources: {
+            controllerRssBytes: 100,
+            workerRssBytes: 200,
+            swapUsedBytes: 75,
+            swapTotalBytes: 100,
+            swapSource: 'test',
+            rssWarningBytes: 1,
+            rssHardBytes: 2,
+            swapWarningRatio: 0.25,
+            swapHardRatio: 0.75,
+          },
+          sessionListQueries: { active: 0, queued: 0, peakQueued: 3, rejected: 0, maxConcurrent: 2, maxQueued: 64 },
+          quotaPersistenceCircuits: [],
+          startupReconciliation: null,
+          alerts: [{ code: 'worker_count_warning', severity: 'warning', message: 'Worker count is high' }],
+        },
       },
     });
 
@@ -154,6 +174,8 @@ describe('DoctorSnapshotSchema', () => {
     expect(parsed.snapshot.daemonStatus?.daemon.startupSource).toBe('background-service');
     expect(parsed.snapshot.daemonStatus?.daemon.serviceManaged).toBe(true);
     expect(parsed.snapshot.daemonStatus?.daemon.serviceLabel).toBe('com.happier.cli.daemon.default');
+    expect(parsed.snapshot.daemonStatus?.health?.workers.count).toBe(48);
+    expect(parsed.snapshot.daemonStatus?.health?.alerts[0]?.code).toBe('worker_count_warning');
     expect(parsed.snapshot.installations?.happier?.activeInvocation?.ring).toBe('dev');
     expect(parsed.snapshot.services?.happier?.services[0]?.publicServerUrl).toBe('https://relay.happier.dev/path');
     expect(parsed.snapshot.services?.happier?.services[0]?.configuredCliVersion).toBe('0.2.5-dev.7.1');

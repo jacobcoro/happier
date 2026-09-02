@@ -14,7 +14,11 @@ import {
   writeDaemonSettingsFixture,
   writeDaemonStateFixture,
 } from './testkit/fakeDaemonLifecycle.testkit';
-import { listDaemonStatusesForAllKnownServers, stopAllDaemonsBestEffort } from './multiDaemon';
+import {
+  listDaemonStatusesForAllKnownServers,
+  reapSameHomeDaemonOrphansBeforeStart,
+  stopAllDaemonsBestEffort,
+} from './multiDaemon';
 import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths } from './service/cli';
 
 function writeValidInstalledDaemonServiceForCurrentRuntime(homeDir: string, serverId: string): void {
@@ -383,4 +387,46 @@ describe('multi-daemon helpers', () => {
       },
     );
   }, 15_000);
+
+  it('reaps only the active server profile and never affects another profile', async () => {
+    await withConfiguredDaemonTestHome({
+      prefix: 'happier-multi-daemon-profile-reap-',
+      env: { HAPPIER_ACTIVE_SERVER_ID: 'cloud' },
+    }, async ({ homeDir }) => {
+      await writeDaemonSettingsFixture(homeDir);
+      const active = spawnSleepyDetachedProcess();
+      const other = spawnSleepyDetachedProcess();
+      await writeDaemonStateFixture(homeDir, 'cloud', {
+        pid: active.pid,
+        httpPort: 48101,
+        controlToken: 'active-token',
+      });
+      await writeDaemonStateFixture(homeDir, 'company', {
+        pid: other.pid,
+        httpPort: 48102,
+        controlToken: 'other-token',
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+        if (String(url).includes(':48101/stop')) process.kill(active.pid, 'SIGTERM');
+        if (String(url).includes(':48102/stop')) process.kill(other.pid, 'SIGTERM');
+        return { ok: true, status: 200 } as Response;
+      });
+
+      try {
+        const result = await reapSameHomeDaemonOrphansBeforeStart();
+
+        expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([
+          'http://127.0.0.1:48101/stop',
+        ]);
+        expect(result.stoppedPids).toEqual([active.pid]);
+        expect(result.otherProfilePids).toEqual([other.pid]);
+        expect(await waitForProcessExit(active.pid, { timeoutMs: 3_000 })).toBe(true);
+        expect(process.kill(other.pid, 0)).toBe(true);
+      } finally {
+        fetchSpy.mockRestore();
+        await active.kill();
+        await other.kill();
+      }
+    });
+  });
 });

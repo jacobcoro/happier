@@ -836,6 +836,29 @@ describe('sessionControl contract exports', () => {
     expect(byIdParsed.success).toBe(true);
   });
 
+  it('validates the compact resumable-session health response without rich session fields', () => {
+    const schema = (protocol as any).V2ResumableSessionHealthListResponseSchema;
+    const parsed = schema.safeParse({
+      sessions: [
+        {
+          id: 'sess_stopped_1',
+          active: false,
+          needsUserAction: true,
+          meaningfulActivityAt: 1234,
+        },
+      ],
+      nextCursor: 'cursor_v2_next',
+      hasNext: true,
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(schema.safeParse({
+      sessions: [{ id: 'sess_stopped_1', active: false, meaningfulActivityAt: 1234 }],
+      nextCursor: null,
+      hasNext: false,
+    }).success).toBe(false);
+  });
+
   it('validates v2 session message responses', () => {
     const schema = (protocol as any).V2SessionMessageResponseSchema;
     const parsed = schema.safeParse({

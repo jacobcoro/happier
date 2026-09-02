@@ -35,11 +35,15 @@ export function evaluateDaemonServiceLifecycleOwnership(params: Readonly<{
 
 function buildOwnerDetails(owner: CurrentDaemonOwner): string[] {
   const lines = [
+    `Published controller PID: ${owner.state.pid}`,
     `Current release channel: ${owner.state.startedWithPublicReleaseChannel ?? 'unknown'}`,
     `Current CLI version: ${owner.state.startedWithCliVersion}`,
   ];
   if (owner.state.serviceLabel) {
     lines.push(`Current background service label: ${owner.state.serviceLabel}`);
+  }
+  if (owner.otherControllerPids?.length) {
+    lines.push(`Additional controllers claiming this server profile: ${owner.otherControllerPids.join(', ')}`);
   }
   return lines;
 }

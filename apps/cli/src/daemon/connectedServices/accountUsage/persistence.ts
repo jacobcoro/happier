@@ -10,8 +10,12 @@ import {
 } from '@happier-dev/protocol';
 
 import type { Credentials } from '@/persistence';
+import { createKeyedBackoffTracker } from '@/api/connection/scheduling/createKeyedBackoffTracker';
 
-import { createConnectedServiceQuotaPersistenceScheduler } from '../quotas/createConnectedServiceQuotaPersistenceScheduler';
+import {
+  createConnectedServiceQuotaPersistenceScheduler,
+  type ConnectedServiceQuotaPersistenceCircuit,
+} from '../quotas/createConnectedServiceQuotaPersistenceScheduler';
 import {
   computeProviderAccountUsageSnapshotFingerprint,
   deriveProviderAccountUsageFingerprintKey,
@@ -70,6 +74,7 @@ export type ProviderAccountUsagePersistenceScheduler = Readonly<{
     | Readonly<{ status: 'already_persisted'; reason: string }>
   >;
   flush(timeoutMs: number): Promise<unknown>;
+  getCircuitSnapshot(): ReadonlyArray<ConnectedServiceQuotaPersistenceCircuit<string>>;
   dispose(): void;
 }>;
 
@@ -172,6 +177,12 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
     params.minFreshnessMs ?? DEFAULT_PROVIDER_ACCOUNT_USAGE_PERSISTENCE_MIN_FRESHNESS_MS,
   );
   const stateByPersistenceKey = new Map<string, ProviderAccountUsagePersistenceMaterialState>();
+  const backoff = createKeyedBackoffTracker({
+    baseDelayMs: 1_000,
+    maxDelayMs: 60_000,
+    jitterRatio: 0,
+    now: params.now,
+  });
 
   async function persistPayload(_key: string, payload: ProviderAccountUsagePersistencePayload): Promise<void> {
     const accountMode = await params.api.getAccountEncryptionMode();
@@ -226,6 +237,7 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
     maxKeyAgeMs: 60 * 60_000,
     maxPendingPayloadAgeMs: 10 * 60_000,
     now: params.now,
+    backoff,
   });
 
   return {
@@ -273,6 +285,7 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
       return { status: 'already_persisted', reason: lastSuppressionReason };
     },
     flush: async (timeoutMs) => await scheduler.flushAll(timeoutMs),
+    getCircuitSnapshot: () => scheduler.getCircuitSnapshot(),
     dispose: () => scheduler.dispose(),
   };
 }

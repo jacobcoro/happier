@@ -52,8 +52,10 @@ import {
   SessionRunnerRuntimeStateV1Schema,
   SessionRunnerStatusGetRequestV1Schema,
   SPAWN_SESSION_ERROR_CODES,
+  DaemonHealthSnapshotSchema,
   isSpawnSessionErrorDetail,
   type ConnectedServiceBindingsV1,
+  type DaemonHealthSnapshot,
   type ConnectedServiceId,
   type RestartAllSessionRunnersRequestV1,
   type RestartAllSessionRunnersResultV1,
@@ -809,6 +811,13 @@ export async function queryDaemonOpenCodeBrokerLoadHandshake(
 export async function listDaemonSessions(): Promise<any[]> {
   const result = await daemonPost('/list');
   return result.children || [];
+}
+
+export async function readDaemonHealthSnapshot(): Promise<DaemonHealthSnapshot | null> {
+  const result = await daemonPost('/health');
+  if (!result || typeof result !== 'object' || 'error' in result) return null;
+  const parsed = DaemonHealthSnapshotSchema.safeParse((result as { health?: unknown }).health);
+  return parsed.success ? parsed.data : null;
 }
 
 export async function stopDaemonSession(sessionId: string): Promise<StopSessionResult> {

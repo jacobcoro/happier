@@ -356,6 +356,65 @@ describe('evaluateCurrentDaemonOwner', () => {
         });
     });
 
+    it('fails closed and reports every extra controller for the same profile even when published state is compatible', async () => {
+        await withTempDir('happier-daemon-owner-duplicate-profile-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'dev',
+                HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK: '1',
+            });
+            vi.resetModules();
+            const [{ configuration }, { projectPath }] = await Promise.all([
+                import('@/configuration'),
+                import('@/projectPath'),
+            ]);
+            const publishedPid = process.pid + 900;
+            const extraPid = process.pid + 1000;
+            vi.doMock('@/daemon/controlClient', () => ({
+                inspectDaemonRunningStateAndCleanupStaleState: async () => ({
+                    status: 'running',
+                    state: {
+                        pid: publishedPid,
+                        httpPort: 43112,
+                        startedAt: Date.now(),
+                        startedWithCliVersion: configuration.currentCliVersion,
+                        startedWithPublicReleaseChannel: 'dev',
+                        runtimeId: 'runtime-compatible',
+                        startupSource: 'manual',
+                    },
+                }),
+            }));
+            vi.doMock('@/daemon/doctor', async (importOriginal) => ({
+                ...await importOriginal<typeof import('@/daemon/doctor')>(),
+                findAllHappyProcesses: async () => [{
+                    pid: extraPid,
+                    command: `${process.execPath} ${projectPath()}/apps/cli/src/index.ts daemon start-sync`,
+                    type: 'dev-daemon',
+                    daemonOwnershipEnvironmentVariables: {
+                        HAPPIER_HOME_DIR: homeDir,
+                        HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                    },
+                } satisfies HappyProcessInfo],
+            }));
+
+            try {
+                const { evaluateCurrentDaemonOwner } = await import('./evaluateCurrentDaemonOwner');
+                const evaluation = await evaluateCurrentDaemonOwner();
+
+                expect(evaluation.kind).toBe('conflict');
+                if (evaluation.kind === 'conflict') {
+                    expect(evaluation.owner.source).toBe('state');
+                    expect(evaluation.owner.state.pid).toBe(publishedPid);
+                    expect(evaluation.owner.otherControllerPids).toEqual([extraPid]);
+                }
+            } finally {
+                vi.doUnmock('@/daemon/controlClient');
+                vi.doUnmock('@/daemon/doctor');
+            }
+        });
+    });
+
     it('returns a conflict for a service-managed owner on a different version or release channel', async () => {
         await withTempDir('happier-daemon-owner-conflict-', async (homeDir) => {
             envScope.patch({

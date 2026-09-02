@@ -223,7 +223,7 @@ describe('multiDaemon release ring scoping', () => {
     }
   });
 
-  it('reaps live same-home orphan daemon states without stopping the active daemon pid', async () => {
+  it('preserves live daemon state from another profile while retaining the active daemon pid', async () => {
     homeDir = join(tmpdir(), `happier-multi-daemon-orphan-reap-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     envScope.patch({
       HAPPIER_HOME_DIR: homeDir,
@@ -314,10 +314,11 @@ describe('multiDaemon release ring scoping', () => {
 
       const result = await reapSameHomeDaemonOrphansBeforeStart({ preservePids: [process.pid] });
 
-      expect(result.stoppedPids).toContain(orphan.pid);
+      expect(result.stoppedPids).not.toContain(orphan.pid);
+      expect(result.otherProfilePids).toContain(orphan.pid);
       expect(result.preservedPids).toContain(process.pid);
       expect(() => process.kill(process.pid, 0)).not.toThrow();
-      expect(() => process.kill(orphan.pid, 0)).toThrow();
+      expect(() => process.kill(orphan.pid, 0)).not.toThrow();
       expect(existsSync(canonicalOrphanStatePath)).toBe(true);
       expect(existsSync(legacyOrphanStatePath)).toBe(true);
       expect(readFileSync(staleStatePath, 'utf-8')).toBe(staleStateRaw);
@@ -326,7 +327,7 @@ describe('multiDaemon release ring scoping', () => {
     }
   });
 
-  it('does not stop live same-home daemon states when authenticated control is unavailable', async () => {
+  it('does not classify another profile as a failed active-profile stop when control is unavailable', async () => {
     homeDir = join(tmpdir(), `happier-multi-daemon-tokenless-orphan-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     envScope.patch({
       HAPPIER_HOME_DIR: homeDir,
@@ -390,7 +391,8 @@ describe('multiDaemon release ring scoping', () => {
       const result = await reapSameHomeDaemonOrphansBeforeStart();
 
       expect(result.stoppedPids).not.toContain(orphan.pid);
-      expect(result.failedPids).toContain(orphan.pid);
+      expect(result.failedPids).not.toContain(orphan.pid);
+      expect(result.otherProfilePids).toContain(orphan.pid);
       expect(existsSync(orphanStatePath)).toBe(true);
       expect(() => process.kill(orphan.pid, 0)).not.toThrow();
     } finally {

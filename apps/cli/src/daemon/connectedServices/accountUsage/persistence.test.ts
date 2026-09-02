@@ -55,6 +55,13 @@ type PersistenceModule = Readonly<{
       | Readonly<{ status: 'already_persisted'; reason: string }>
     >;
     flush(timeoutMs: number): Promise<unknown>;
+    getCircuitSnapshot(): ReadonlyArray<Readonly<{
+      key: string;
+      state: 'open';
+      consecutiveFailures: number;
+      nextProbeAtMs: number | null;
+      lastError: Readonly<{ message: string; status?: number; code?: string }>;
+    }>>;
     dispose(): void;
   }>;
 }>;
@@ -194,6 +201,65 @@ describe('provider account usage persistence', () => {
 
     await expect(scheduler.recordInBandSnapshot(createSnapshot()))
       .rejects.toThrow('provider_account_usage_persistence_disposed');
+  });
+
+  it('retains intake behind exponential backoff, reports the real 503, and recovers on its bounded probe', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let recovered = false;
+    const persistenceError = new Error('503 upstream provider quota write unavailable');
+    Object.assign(persistenceError, { status: 503, code: 'upstream_quota_persistence_unavailable' });
+    const register = vi.fn(async () => {
+      if (!recovered) throw persistenceError;
+    });
+    const module = await loadPersistenceModule();
+    expect(module).not.toBeNull();
+    const scheduler = module!.createProviderAccountUsagePersistenceScheduler({
+      api: {
+        getAccountEncryptionMode: async () => 'plain',
+        registerProviderAccountUsageSnapshotPlain: register,
+      },
+      now: Date.now,
+      fingerprintKey: new Uint8Array(32).fill(9),
+      minFreshnessMs: 0,
+    });
+    try {
+      await expect(scheduler.recordInBandSnapshot(createSnapshot())).resolves.toEqual({
+        status: 'enqueued',
+        enqueue: 'accepted',
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(register).toHaveBeenCalledTimes(5);
+      expect(scheduler.getCircuitSnapshot()).toEqual([
+        expect.objectContaining({
+          state: 'open',
+          consecutiveFailures: 5,
+          nextProbeAtMs: 31_000,
+          lastError: {
+            name: 'Error',
+            message: '503 upstream provider quota write unavailable',
+            status: 503,
+            code: 'upstream_quota_persistence_unavailable',
+          },
+        }),
+      ]);
+      await expect(scheduler.recordInBandSnapshot(createSnapshot())).resolves.toEqual({
+        status: 'enqueued',
+        enqueue: 'coalesced',
+      });
+
+      await vi.advanceTimersByTimeAsync(15_999);
+      expect(register).toHaveBeenCalledTimes(5);
+      recovered = true;
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(register).toHaveBeenCalledTimes(6);
+      expect(scheduler.getCircuitSnapshot()).toEqual([]);
+    } finally {
+      scheduler.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('passes explicit connected-service source context through plaintext provider-account usage persistence', async () => {

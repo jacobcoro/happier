@@ -5,6 +5,7 @@ import { configuration } from '@/configuration';
 import { resolveDaemonStartupSourceServiceManagedState } from '@/daemon/ownership/daemonOwnershipMetadata';
 import { readCredentials, readDaemonState, readSettings } from '@/persistence';
 import { resolveDaemonServiceInstallationSnapshotFromEnv } from '@/daemon/service/cli';
+import { readDaemonHealthSnapshot } from '@/daemon/controlClient';
 
 export type DaemonStatusSnapshot = NonNullable<DoctorSnapshot['daemonStatus']>;
 
@@ -47,6 +48,9 @@ export async function readDaemonStatusSnapshot(): Promise<DaemonStatusSnapshot> 
 
   const pid = typeof daemonState?.pid === 'number' ? daemonState.pid : null;
   const daemonRunning = isPidAlive(pid);
+  const health = daemonRunning
+    ? await readDaemonHealthSnapshot().catch(() => null)
+    : null;
   const machineId = typeof settings.machineId === 'string' && settings.machineId.trim()
     ? settings.machineId.trim()
     : null;
@@ -101,5 +105,6 @@ export async function readDaemonStatusSnapshot(): Promise<DaemonStatusSnapshot> 
       needsAuth: credentials == null || machineId == null,
       accountId,
     },
+    ...(health ? { health } : {}),
   };
 }

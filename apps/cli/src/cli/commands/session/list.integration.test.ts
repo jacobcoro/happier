@@ -163,6 +163,22 @@ describe('happier session list (integration)', () => {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === `/v2/sessions/resumable-health`) {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          sessions: [{
+            id: 'sess_stopped_health_1',
+            active: false,
+            needsUserAction: true,
+            meaningfulActivityAt: 1_234,
+          }],
+          nextCursor: 'cursor_v2_health_next',
+          hasNext: true,
+        }));
+        return;
+      }
+
       res.statusCode = 404;
       res.end();
     });
@@ -391,6 +407,37 @@ describe('happier session list (integration)', () => {
       expect(rendered).toContain(normalSessionId.slice(0, 12));
       expect(rendered).not.toContain('system:voice_carrier');
       expect(rendered).not.toContain('ArchivedTag');
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('supports --resumable-health without loading rich session rows', async () => {
+    const { handleSessionCommand } = await import('./index');
+    const output = captureConsoleJsonOutput();
+
+    try {
+      await handleSessionCommand(['list', '--resumable-health', '--limit', '100', '--json'], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+        }),
+      });
+
+      expect(output.json()).toMatchObject({
+        ok: true,
+        kind: 'session_resumable_health_list',
+        data: {
+          sessions: [{
+            id: 'sess_stopped_health_1',
+            active: false,
+            needsUserAction: true,
+            meaningfulActivityAt: 1_234,
+          }],
+          nextCursor: 'cursor_v2_health_next',
+          hasNext: true,
+        },
+      });
     } finally {
       output.restore();
     }
