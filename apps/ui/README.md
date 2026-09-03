@@ -81,3 +81,5 @@ We're engineers scattered across Bay Area coffee shops and hacker houses, consta
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+<!-- ci: base-control marker. No code, no behaviour. Exists only to trip the ui_e2e paths filter so the base branch actually runs UI E2E. -->
