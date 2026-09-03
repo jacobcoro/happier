@@ -299,10 +299,13 @@ describe('SessionItem context menu press suppression', () => {
         const row = screen.findByTestId('session-list-item-sess_web_context_menu');
         const preventDefault = vi.fn();
         const stopPropagation = vi.fn();
-        expect(typeof row.props.onContextMenu).toBe('function');
+        // Assert presence before reading props: `findByTestId` is typed nullable, and every
+        // assertion below is vacuous if the row was never rendered.
+        expect(row).not.toBeNull();
+        expect(typeof row?.props.onContextMenu).toBe('function');
 
         await act(async () => {
-            row.props.onContextMenu({ preventDefault, stopPropagation });
+            row?.props.onContextMenu({ preventDefault, stopPropagation });
         });
 
         expect(preventDefault).toHaveBeenCalledTimes(1);

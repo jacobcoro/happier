@@ -6,7 +6,7 @@ describe('resolveSessionTagColorRole', () => {
     it('assigns each tag a stable muted color role', () => {
         expect(resolveSessionTagColorRole('focus')).toBe(resolveSessionTagColorRole('focus'));
         expect(resolveSessionTagColorRole('focus')).not.toBe('neutral');
-        expect(new Set(['focus', 'later', 'urgent', 'review'].map(resolveSessionTagColorRole)).size).toBeGreaterThan(1);
+        expect(new Set(['focus', 'later', 'urgent', 'review'].map((label) => resolveSessionTagColorRole(label))).size).toBeGreaterThan(1);
     });
 
     it('keeps overflow chips neutral', () => {

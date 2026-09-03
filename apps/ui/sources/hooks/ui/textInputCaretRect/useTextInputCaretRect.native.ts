@@ -47,6 +47,10 @@ export function computeNativeCaretRect(
  * `measureInWindow` offset to produce window-relative coordinates.
  *
  * Returns `null` while disabled, before the first event, or when no input is focused.
+ *
+ * `measure` is web-only and deliberately ignored here. Native measures from a keyboard-controller
+ * worklet that only fires on real selection changes, so there is no per-keystroke measurement to
+ * gate, and narrowing this subscription is what broke the menu's first paint before (D38).
  */
 export function useTextInputCaretRect(input: UseTextInputCaretRectInput): CaretRect | null {
     const { inputRef, enabled = true } = input;

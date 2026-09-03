@@ -12,6 +12,7 @@ export function resolveUiPostinstallTasks({ env }) {
         'verify-native-patch-compilation',
         'verify-vendored-reanimated-patch',
         'verify-vendored-legend-patch',
+        'verify-unistyles-web-remove-patch',
         'verify-expo-router-web-modal-patch',
         'verify-sentry-react-native-replay-post-init-patch',
         'install-react-native-enriched-markdown-web-wasm',

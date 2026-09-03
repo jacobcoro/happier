@@ -1957,6 +1957,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         // to the composer-view anchor — the "menu appears at the top of the composer,
         // then jumps on the next keystroke" report.
         enabled: isInputFocused && !props.disabled,
+        // Web-only measurement gate. `enabled` stays focus-scoped for the reason above; this
+        // narrows only the `textarea-caret` mirror pass and its forced layout, which the composer
+        // otherwise paid on every character typed for a rect nothing read until the menu opened.
+        // `activeWord` turns non-null on the keystroke that types the trigger character, one step
+        // before `commandMenuOpen`, so the rect is already measured when the menu first paints.
+        measure: commandMenuOpen || activeWord !== null,
     });
     const commandMenuAnchor: CommandMenuAnchor = React.useMemo(
         () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef),

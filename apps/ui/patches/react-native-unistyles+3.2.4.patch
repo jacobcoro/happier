@@ -779,7 +779,10 @@ diff --git a/node_modules/react-native-unistyles/cxx/shadowTree/ShadowTrafficCon
 index aafbece..2c952a5 100644
 --- a/node_modules/react-native-unistyles/cxx/shadowTree/ShadowTrafficController.h
 +++ b/node_modules/react-native-unistyles/cxx/shadowTree/ShadowTrafficController.h
-@@ -24,4 +24,8 @@ struct ShadowTrafficController {
+@@ -20,9 +20,13 @@ struct ShadowTrafficController {
+         this->_canCommit = true;
+     }
+ 
 -    inline shadow::ShadowLeafUpdates& getUpdates() {
 +    inline shadow::ShadowLeafUpdates takeUpdates() {
          // call it only within withLock!
@@ -790,6 +793,8 @@ index aafbece..2c952a5 100644
 +
 +        return updates;
      }
+ 
+     inline void setUpdates(shadow::ShadowLeafUpdates& newUpdates) {
 diff --git a/node_modules/react-native-unistyles/cxx/shadowTree/ShadowTreeManager.cpp b/node_modules/react-native-unistyles/cxx/shadowTree/ShadowTreeManager.cpp
 index 01026dc..0e001a7 100644
 --- a/node_modules/react-native-unistyles/cxx/shadowTree/ShadowTreeManager.cpp
@@ -834,7 +839,7 @@ index b522fd2..0b6827a 100644
  
  RCT_EXPORT_MODULE(Unistyles)
  
-@@ -15,6 +17,8 @@ + (BOOL)requiresMainQueueSetup {
+@@ -15,6 +17,8 @@ RCT_EXPORT_MODULE(Unistyles)
  }
  
  - (void)installJSIBindingsWithRuntime:(jsi::Runtime&)rt callInvoker:(const std::shared_ptr<facebook::react::CallInvoker> &)callInvoker {
@@ -843,7 +848,7 @@ index b522fd2..0b6827a 100644
      // function is called on: first init and every live reload
      // check if this is live reload, if so let's replace UnistylesRuntime with new runtime
      auto hasUnistylesRuntime = HybridObjectRegistry::hasHybridObject("UnistylesRuntime");
-@@ -34,7 +38,7 @@ - (void)createHybrids:(jsi::Runtime&)rt callInvoker:(const std::shared_ptr<faceb
+@@ -34,7 +38,7 @@ RCT_EXPORT_MODULE(Unistyles)
      };
  
      auto nativePlatform = Unistyles::NativePlatform::create().getCxxPart();
@@ -852,7 +857,7 @@ index b522fd2..0b6827a 100644
      auto styleSheet = std::make_shared<HybridStyleSheet>(unistylesRuntime);
  
      HybridObjectRegistry::registerHybridObjectConstructor("UnistylesRuntime", [unistylesRuntime]() -> std::shared_ptr<HybridObject>{
-@@ -53,7 +57,10 @@ - (void)createHybrids:(jsi::Runtime&)rt callInvoker:(const std::shared_ptr<faceb
+@@ -53,7 +57,10 @@ RCT_EXPORT_MODULE(Unistyles)
  }
  
  - (void)invalidate {
@@ -864,3 +869,328 @@ index b522fd2..0b6827a 100644
  
      [super invalidate];
  }
+diff --git a/node_modules/react-native-unistyles/lib/commonjs/web/registry.js b/node_modules/react-native-unistyles/lib/commonjs/web/registry.js
+index 120ff60..3a1de0c 100644
+--- a/node_modules/react-native-unistyles/lib/commonjs/web/registry.js
++++ b/node_modules/react-native-unistyles/lib/commonjs/web/registry.js
+@@ -54,22 +54,67 @@ class UnistylesRegistry {
+     stylesCounter.add(ref);
+     this.stylesCounter.set(hash, stylesCounter);
+   };
+-  remove = (ref, hash) => {
+-    const stylesCounter = this.stylesCounter.get(hash) ?? new Set();
+-    stylesCounter.delete(ref);
+-    if (stylesCounter.size === 0) {
+-      // Move this to the end of the event loop so the element is removed from the DOM
+-      return Promise.resolve().then(() => {
+-        // Check if element is still in the DOM
+-        if (document.querySelector(`.${hash}`)) {
+-          return false;
++  // UNISTYLES_WEB_BATCHED_REMOVE_PATCH
++  // Upstream scheduled one microtask per `remove()` call, and every one of them ran a
++  // whole-document `document.querySelector('.hash')` scan. `createUnistylesElement` builds a fresh
++  // inline ref callback on each render, so React detaches and re-attaches every Unistyles element's
++  // ref on every render -- one scan per element per render, on elements that never left the DOM.
++  // Batch instead: collect the hashes whose counter reached zero, flush once per frame, and skip any
++  // hash whose counter recovered before the flush.
++  pendingRemovals = new Map();
++  pendingFlush = null;
++  scheduleRemovalFlush = () => {
++    if (this.pendingFlush !== null) {
++      return;
++    }
++    const flush = () => {
++      const scheduled = this.pendingFlush;
++      this.pendingFlush = null;
++      if (scheduled) {
++        if (scheduled.frame !== undefined && typeof cancelAnimationFrame === 'function') {
++          cancelAnimationFrame(scheduled.frame);
+         }
++        clearTimeout(scheduled.timer);
++      }
++      this.flushRemovals();
++    };
++    this.pendingFlush = {
++      frame: typeof requestAnimationFrame === 'function' ? requestAnimationFrame(flush) : undefined,
++      // requestAnimationFrame never fires while the tab is hidden. Without this a backgrounded app
++      // would hold its resolvers, and the listeners they dispose, indefinitely.
++      timer: setTimeout(flush, 250)
++    };
++  };
++  flushRemovals = () => {
++    const pending = this.pendingRemovals;
++    this.pendingRemovals = new Map();
++    pending.forEach((resolvers, hash) => {
++      // The ref may have re-attached in the same frame, or another element may still carry the
++      // hash. Either way nothing is stale, so no DOM scan is needed.
++      const stillInUse = (this.stylesCounter.get(hash)?.size ?? 0) > 0;
++      const removed = !stillInUse && !document.querySelector(`.${hash}`);
++      if (removed) {
+         this.css.remove(hash);
+         this.stylesCache.delete(hash);
+-        return true;
+-      });
++      }
++      resolvers.forEach(resolve => resolve(removed));
++    });
++  };
++  remove = (ref, hash) => {
++    const stylesCounter = this.stylesCounter.get(hash) ?? new Set();
++    stylesCounter.delete(ref);
++    if (stylesCounter.size > 0) {
++      return Promise.resolve(false);
+     }
+-    return Promise.resolve(false);
++    return new Promise(resolve => {
++      const resolvers = this.pendingRemovals.get(hash);
++      if (resolvers) {
++        resolvers.push(resolve);
++        return;
++      }
++      this.pendingRemovals.set(hash, [resolve]);
++      this.scheduleRemovalFlush();
++    });
+   };
+   add = (value, forChild) => {
+     const generatedHash = (0, _utils.generateHash)(value);
+@@ -91,6 +136,15 @@ class UnistylesRegistry {
+     this.css.add(hash, value);
+   };
+   reset = () => {
++    if (this.pendingFlush) {
++      if (this.pendingFlush.frame !== undefined && typeof cancelAnimationFrame === 'function') {
++        cancelAnimationFrame(this.pendingFlush.frame);
++      }
++      clearTimeout(this.pendingFlush.timer);
++      this.pendingFlush = null;
++    }
++    this.pendingRemovals.forEach(resolvers => resolvers.forEach(resolve => resolve(false)));
++    this.pendingRemovals.clear();
+     this.css.reset();
+     this.stylesCache.clear();
+     this.dependenciesMap.clear();
+diff --git a/node_modules/react-native-unistyles/lib/module/web/registry.js b/node_modules/react-native-unistyles/lib/module/web/registry.js
+index 6362f43..97c7367 100644
+--- a/node_modules/react-native-unistyles/lib/module/web/registry.js
++++ b/node_modules/react-native-unistyles/lib/module/web/registry.js
+@@ -50,22 +50,67 @@ export class UnistylesRegistry {
+     stylesCounter.add(ref);
+     this.stylesCounter.set(hash, stylesCounter);
+   };
+-  remove = (ref, hash) => {
+-    const stylesCounter = this.stylesCounter.get(hash) ?? new Set();
+-    stylesCounter.delete(ref);
+-    if (stylesCounter.size === 0) {
+-      // Move this to the end of the event loop so the element is removed from the DOM
+-      return Promise.resolve().then(() => {
+-        // Check if element is still in the DOM
+-        if (document.querySelector(`.${hash}`)) {
+-          return false;
++  // UNISTYLES_WEB_BATCHED_REMOVE_PATCH
++  // Upstream scheduled one microtask per `remove()` call, and every one of them ran a
++  // whole-document `document.querySelector('.hash')` scan. `createUnistylesElement` builds a fresh
++  // inline ref callback on each render, so React detaches and re-attaches every Unistyles element's
++  // ref on every render -- one scan per element per render, on elements that never left the DOM.
++  // Batch instead: collect the hashes whose counter reached zero, flush once per frame, and skip any
++  // hash whose counter recovered before the flush.
++  pendingRemovals = new Map();
++  pendingFlush = null;
++  scheduleRemovalFlush = () => {
++    if (this.pendingFlush !== null) {
++      return;
++    }
++    const flush = () => {
++      const scheduled = this.pendingFlush;
++      this.pendingFlush = null;
++      if (scheduled) {
++        if (scheduled.frame !== undefined && typeof cancelAnimationFrame === 'function') {
++          cancelAnimationFrame(scheduled.frame);
+         }
++        clearTimeout(scheduled.timer);
++      }
++      this.flushRemovals();
++    };
++    this.pendingFlush = {
++      frame: typeof requestAnimationFrame === 'function' ? requestAnimationFrame(flush) : undefined,
++      // requestAnimationFrame never fires while the tab is hidden. Without this a backgrounded app
++      // would hold its resolvers, and the listeners they dispose, indefinitely.
++      timer: setTimeout(flush, 250)
++    };
++  };
++  flushRemovals = () => {
++    const pending = this.pendingRemovals;
++    this.pendingRemovals = new Map();
++    pending.forEach((resolvers, hash) => {
++      // The ref may have re-attached in the same frame, or another element may still carry the
++      // hash. Either way nothing is stale, so no DOM scan is needed.
++      const stillInUse = (this.stylesCounter.get(hash)?.size ?? 0) > 0;
++      const removed = !stillInUse && !document.querySelector(`.${hash}`);
++      if (removed) {
+         this.css.remove(hash);
+         this.stylesCache.delete(hash);
+-        return true;
+-      });
++      }
++      resolvers.forEach(resolve => resolve(removed));
++    });
++  };
++  remove = (ref, hash) => {
++    const stylesCounter = this.stylesCounter.get(hash) ?? new Set();
++    stylesCounter.delete(ref);
++    if (stylesCounter.size > 0) {
++      return Promise.resolve(false);
+     }
+-    return Promise.resolve(false);
++    return new Promise(resolve => {
++      const resolvers = this.pendingRemovals.get(hash);
++      if (resolvers) {
++        resolvers.push(resolve);
++        return;
++      }
++      this.pendingRemovals.set(hash, [resolve]);
++      this.scheduleRemovalFlush();
++    });
+   };
+   add = (value, forChild) => {
+     const generatedHash = generateHash(value);
+@@ -87,6 +132,15 @@ export class UnistylesRegistry {
+     this.css.add(hash, value);
+   };
+   reset = () => {
++    if (this.pendingFlush) {
++      if (this.pendingFlush.frame !== undefined && typeof cancelAnimationFrame === 'function') {
++        cancelAnimationFrame(this.pendingFlush.frame);
++      }
++      clearTimeout(this.pendingFlush.timer);
++      this.pendingFlush = null;
++    }
++    this.pendingRemovals.forEach(resolvers => resolvers.forEach(resolve => resolve(false)));
++    this.pendingRemovals.clear();
+     this.css.reset();
+     this.stylesCache.clear();
+     this.dependenciesMap.clear();
+diff --git a/node_modules/react-native-unistyles/src/web/registry.ts b/node_modules/react-native-unistyles/src/web/registry.ts
+index 39e0d9d..38ce51d 100644
+--- a/node_modules/react-native-unistyles/src/web/registry.ts
++++ b/node_modules/react-native-unistyles/src/web/registry.ts
+@@ -84,27 +84,90 @@ export class UnistylesRegistry {
+         this.stylesCounter.set(hash, stylesCounter)
+     }
+ 
+-    remove = (ref: HTMLElement, hash: string) => {
+-        const stylesCounter = this.stylesCounter.get(hash) ?? new Set()
++    // UNISTYLES_WEB_BATCHED_REMOVE_PATCH
++    // Upstream scheduled one microtask per `remove()` call, and every one of them ran a
++    // whole-document `document.querySelector('.hash')` scan. `createUnistylesElement` builds a
++    // fresh inline ref callback on each render, so React detaches and re-attaches every Unistyles
++    // element's ref on every render -- one scan per element per render, on elements that never
++    // left the DOM. Typing one character in a composer holding ~39 styled elements cost ~76
++    // whole-document scans, and any hash that genuinely reached zero rebuilt the entire stylesheet.
++    //
++    // Batch instead: collect the hashes whose counter reached zero, flush once per frame, and skip
++    // any hash whose counter recovered before the flush. A ref that detaches and re-attaches in the
++    // same commit now does no DOM work at all.
++    private pendingRemovals = new Map<string, Array<(removed: boolean) => void>>()
++    private pendingFlush: { frame?: number; timer: ReturnType<typeof setTimeout> } | null = null
++
++    private scheduleRemovalFlush = () => {
++        if (this.pendingFlush !== null) {
++            return
++        }
+ 
+-        stylesCounter.delete(ref)
++        const flush = () => {
++            const scheduled = this.pendingFlush
++
++            this.pendingFlush = null
+ 
+-        if (stylesCounter.size === 0) {
+-            // Move this to the end of the event loop so the element is removed from the DOM
+-            return Promise.resolve().then(() => {
+-                // Check if element is still in the DOM
+-                if (document.querySelector(`.${hash}`)) {
+-                    return false
++            if (scheduled) {
++                if (scheduled.frame !== undefined && typeof cancelAnimationFrame === 'function') {
++                    cancelAnimationFrame(scheduled.frame)
+                 }
+ 
++                clearTimeout(scheduled.timer)
++            }
++
++            this.flushRemovals()
++        }
++
++        this.pendingFlush = {
++            frame: typeof requestAnimationFrame === 'function' ? requestAnimationFrame(flush) : undefined,
++            // requestAnimationFrame never fires while the tab is hidden. Without this a backgrounded
++            // app would hold its resolvers, and the listeners they dispose, indefinitely.
++            timer: setTimeout(flush, 250),
++        }
++    }
++
++    private flushRemovals = () => {
++        const pending = this.pendingRemovals
++
++        this.pendingRemovals = new Map()
++
++        pending.forEach((resolvers, hash) => {
++            // The ref may have re-attached in the same frame, or another element may still carry
++            // the hash. Either way nothing is stale, so no DOM scan is needed.
++            const stillInUse = (this.stylesCounter.get(hash)?.size ?? 0) > 0
++            const removed = !stillInUse && !document.querySelector(`.${hash}`)
++
++            if (removed) {
+                 this.css.remove(hash)
+                 this.stylesCache.delete(hash)
++            }
+ 
+-                return true
+-            })
++            resolvers.forEach((resolve) => resolve(removed))
++        })
++    }
++
++    remove = (ref: HTMLElement, hash: string) => {
++        const stylesCounter = this.stylesCounter.get(hash) ?? new Set()
++
++        stylesCounter.delete(ref)
++
++        if (stylesCounter.size > 0) {
++            return Promise.resolve(false)
+         }
+ 
+-        return Promise.resolve(false)
++        return new Promise<boolean>((resolve) => {
++            const resolvers = this.pendingRemovals.get(hash)
++
++            if (resolvers) {
++                resolvers.push(resolve)
++
++                return
++            }
++
++            this.pendingRemovals.set(hash, [resolve])
++            this.scheduleRemovalFlush()
++        })
+     }
+ 
+     add = (value: UnistylesValues, forChild?: boolean) => {
+@@ -126,6 +189,17 @@ export class UnistylesRegistry {
+     }
+ 
+     reset = () => {
++        if (this.pendingFlush) {
++            if (this.pendingFlush.frame !== undefined && typeof cancelAnimationFrame === 'function') {
++                cancelAnimationFrame(this.pendingFlush.frame)
++            }
++
++            clearTimeout(this.pendingFlush.timer)
++            this.pendingFlush = null
++        }
++
++        this.pendingRemovals.forEach((resolvers) => resolvers.forEach((resolve) => resolve(false)))
++        this.pendingRemovals.clear()
+         this.css.reset()
+         this.stylesCache.clear()
+         this.dependenciesMap.clear()

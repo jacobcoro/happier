@@ -338,4 +338,131 @@ describe('useTextInputCaretRect (web)', () => {
         // Should compute a rect (enabled defaults to true)
         expect(hook.getCurrent()).not.toBeNull();
     });
+    it('defaults measure to true so an unset gate keeps the previous behaviour', async () => {
+        const textarea = createMockTextarea();
+        const inputRef = createInputRef(createMockHandle(textarea));
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+
+        await renderHook(() =>
+            useTextInputCaretRect({
+                inputRef,
+                selection: { start: 3, end: 3 },
+                enabled: true,
+            }),
+        );
+
+        expect(mockedGetCaretCoordinates).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not measure while measure is false, which is the per-keystroke cost being removed', async () => {
+        const textarea = createMockTextarea();
+        const inputRef = createInputRef(createMockHandle(textarea));
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+
+        const hook = await renderHook(
+            (props: { start: number }) =>
+                useTextInputCaretRect({
+                    inputRef,
+                    selection: { start: props.start, end: props.start },
+                    enabled: true,
+                    measure: false,
+                }),
+            { initialProps: { start: 5 } },
+        );
+
+        await hook.rerender({ start: 6 });
+        await hook.rerender({ start: 7 });
+
+        expect(mockedGetCaretCoordinates).not.toHaveBeenCalled();
+        expect(textarea.getBoundingClientRect).not.toHaveBeenCalled();
+        expect(hook.getCurrent()).toBeNull();
+    });
+
+    it('does not subscribe to scroll while measure is false', async () => {
+        const textarea = createMockTextarea();
+        const inputRef = createInputRef(createMockHandle(textarea));
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+
+        await renderHook(() =>
+            useTextInputCaretRect({
+                inputRef,
+                selection: { start: 5, end: 5 },
+                enabled: true,
+                measure: false,
+            }),
+        );
+
+        expect(textarea.addEventListener).not.toHaveBeenCalled();
+    });
+
+    it('measures on the commit that turns measure on, so the menu is anchored on its first paint', async () => {
+        const textarea = createMockTextarea();
+        const inputRef = createInputRef(createMockHandle(textarea));
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+
+        const hook = await renderHook(
+            (props: { measure: boolean }) =>
+                useTextInputCaretRect({
+                    inputRef,
+                    selection: { start: 5, end: 5 },
+                    enabled: true,
+                    measure: props.measure,
+                }),
+            { initialProps: { measure: false } },
+        );
+
+        expect(hook.getCurrent()).toBeNull();
+
+        await hook.rerender({ measure: true });
+
+        expect(hook.getCurrent()).toEqual({ left: 130, top: 220, height: 18 });
+    });
+
+    it('keeps the last rect when measure goes false, so the next open does not start from the fallback anchor', async () => {
+        const textarea = createMockTextarea();
+        const inputRef = createInputRef(createMockHandle(textarea));
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+
+        const hook = await renderHook(
+            (props: { measure: boolean }) =>
+                useTextInputCaretRect({
+                    inputRef,
+                    selection: { start: 5, end: 5 },
+                    enabled: true,
+                    measure: props.measure,
+                }),
+            { initialProps: { measure: true } },
+        );
+
+        expect(hook.getCurrent()).not.toBeNull();
+
+        await hook.rerender({ measure: false });
+
+        // Contrast with `enabled: false`, which DOES clear: a disabled hook has no caret to report,
+        // an idle one is merely between menu opens.
+        expect(hook.getCurrent()).toEqual({ left: 130, top: 220, height: 18 });
+    });
+
+    it('still clears the rect when enabled goes false while measure stays on', async () => {
+        const textarea = createMockTextarea();
+        const inputRef = createInputRef(createMockHandle(textarea));
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+
+        const hook = await renderHook(
+            (props: { enabled: boolean }) =>
+                useTextInputCaretRect({
+                    inputRef,
+                    selection: { start: 5, end: 5 },
+                    enabled: props.enabled,
+                    measure: true,
+                }),
+            { initialProps: { enabled: true } },
+        );
+
+        expect(hook.getCurrent()).not.toBeNull();
+
+        await hook.rerender({ enabled: false });
+
+        expect(hook.getCurrent()).toBeNull();
+    });
 });
