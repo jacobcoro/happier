@@ -5,10 +5,14 @@ import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
-function extractStageSection(dockerfile, stageMarker) {
-  const start = dockerfile.indexOf(stageMarker);
-  assert.ok(start >= 0, `missing stage marker: ${stageMarker}`);
-  const after = dockerfile.slice(start);
+// Locate a build stage by its declared name rather than by its full FROM line.
+// The contracts below are about what a stage contains, not which base image it
+// derives from, so a deliberate base-image change must not read as a missing stage.
+function extractStageSection(dockerfile, stageName) {
+  const declaration = new RegExp(`^FROM .* AS ${stageName}[ \\t]*$`, "m");
+  const match = declaration.exec(dockerfile);
+  assert.ok(match, `missing build stage: ${stageName}`);
+  const after = dockerfile.slice(match.index);
   const nextFromIndex = after.indexOf("\nFROM ");
   return nextFromIndex >= 0 ? after.slice(0, nextFromIndex) : after;
 }
@@ -16,8 +20,8 @@ function extractStageSection(dockerfile, stageMarker) {
 test("webapp-builder stage exports public PostHog and Sentry env without upload credentials", () => {
   const dockerfilePath = path.join(repoRoot, "Dockerfile");
   const raw = fs.readFileSync(dockerfilePath, "utf8");
-  const section = extractStageSection(raw, "FROM deps-alpine-build AS webapp-builder");
-  const webappSection = extractStageSection(raw, "FROM nginxinc/nginx-unprivileged:alpine AS webapp");
+  const section = extractStageSection(raw, "webapp-builder");
+  const webappSection = extractStageSection(raw, "webapp");
 
   assert.match(section, /\bARG POSTHOG_HOST\b/);
   assert.match(section, /\bARG SENTRY_DSN\b/);

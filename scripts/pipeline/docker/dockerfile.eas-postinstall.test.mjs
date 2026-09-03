@@ -5,10 +5,14 @@ import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
-function extractStageSection(dockerfile, stageMarker) {
-  const start = dockerfile.indexOf(stageMarker);
-  assert.ok(start >= 0, `missing stage marker: ${stageMarker}`);
-  const after = dockerfile.slice(start);
+// Locate a build stage by its declared name rather than by its full FROM line.
+// The contracts below are about what a stage contains, not which base image it
+// derives from, so a deliberate base-image change must not read as a missing stage.
+function extractStageSection(dockerfile, stageName) {
+  const declaration = new RegExp(`^FROM .* AS ${stageName}[ \\t]*$`, "m");
+  const match = declaration.exec(dockerfile);
+  assert.ok(match, `missing build stage: ${stageName}`);
+  const after = dockerfile.slice(match.index);
   const nextFromIndex = after.indexOf("\nFROM ");
   return nextFromIndex >= 0 ? after.slice(0, nextFromIndex) : after;
 }
@@ -18,9 +22,9 @@ test("Dockerfile deps stages include the root postinstall script (eas-postinstal
   const raw = fs.readFileSync(dockerfilePath, "utf8");
 
   for (const marker of [
-    "FROM node:${NODE_VERSION}-alpine AS deps-alpine",
-    "FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build",
-    "FROM node:${NODE_VERSION} AS deps-debian",
+    "deps-alpine",
+    "deps-alpine-build",
+    "deps-debian",
   ]) {
     const section = extractStageSection(raw, marker);
     assert.match(section, /COPY scripts\/pipeline\/expo\/eas-postinstall\.mjs scripts\/pipeline\/expo\//);
@@ -32,9 +36,9 @@ test("Dockerfile deps stages copy the shared yarn-install-with-retry helper from
   const raw = fs.readFileSync(dockerfilePath, "utf8");
 
   for (const marker of [
-    "FROM node:${NODE_VERSION}-alpine AS deps-alpine",
-    "FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build",
-    "FROM node:${NODE_VERSION} AS deps-debian",
+    "deps-alpine",
+    "deps-alpine-build",
+    "deps-debian",
   ]) {
     const section = extractStageSection(raw, marker);
     assert.match(section, /COPY scripts\/ci\/yarn-install-with-retry\.sh \/usr\/local\/bin\/yarn-install-with-retry/);
@@ -47,9 +51,9 @@ test("Dockerfile deps stages include the UI postinstall runner before yarn insta
   const raw = fs.readFileSync(dockerfilePath, "utf8");
 
   for (const marker of [
-    "FROM node:${NODE_VERSION}-alpine AS deps-alpine",
-    "FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build",
-    "FROM node:${NODE_VERSION} AS deps-debian",
+    "deps-alpine",
+    "deps-alpine-build",
+    "deps-debian",
   ]) {
     const section = extractStageSection(raw, marker);
     const installIndex = section.indexOf("yarn-install-with-retry --frozen-lockfile");
@@ -69,15 +73,15 @@ test("Dockerfile builds the source privacy-kit workspace required by the server"
   const raw = fs.readFileSync(dockerfilePath, "utf8");
 
   for (const marker of [
-    "FROM node:${NODE_VERSION}-alpine AS deps-alpine",
-    "FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build",
-    "FROM node:${NODE_VERSION} AS deps-debian",
+    "deps-alpine",
+    "deps-alpine-build",
+    "deps-debian",
   ]) {
     const section = extractStageSection(raw, marker);
     assert.match(section, /COPY packages\/privacy-kit\/package\.json packages\/privacy-kit\//);
   }
 
-  const serverBuilder = extractStageSection(raw, "FROM deps-debian AS server-builder");
+  const serverBuilder = extractStageSection(raw, "server-builder");
   const privacyBuildIndex = serverBuilder.indexOf("yarn workspace privacy-kit build");
   const serverBuildIndex = serverBuilder.indexOf("yarn workspace @happier-dev/server build");
   assert.match(serverBuilder, /COPY packages\/privacy-kit \.\/packages\/privacy-kit/);
@@ -85,7 +89,7 @@ test("Dockerfile builds the source privacy-kit workspace required by the server"
   assert.ok(serverBuildIndex >= 0, "server builder must build the server");
   assert.ok(privacyBuildIndex < serverBuildIndex, "privacy-kit must be built before the server");
 
-  const server = extractStageSection(raw, "FROM node:${NODE_VERSION} AS server");
+  const server = extractStageSection(raw, "server");
   assert.match(
     server,
     /COPY --from=server-builder --chown=node:node \/repo\/packages\/privacy-kit \/repo\/packages\/privacy-kit/,
@@ -97,9 +101,9 @@ test("Dockerfile deps stages copy shared workspace build tooling for derived wor
   const raw = fs.readFileSync(dockerfilePath, "utf8");
 
   for (const marker of [
-    "FROM node:${NODE_VERSION}-alpine AS deps-alpine",
-    "FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build",
-    "FROM node:${NODE_VERSION} AS deps-debian",
+    "deps-alpine",
+    "deps-alpine-build",
+    "deps-debian",
   ]) {
     const section = extractStageSection(raw, marker);
     const installIndex = section.indexOf("yarn-install-with-retry --frozen-lockfile");

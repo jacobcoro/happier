@@ -5,10 +5,14 @@ import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
-function extractStageSection(dockerfile, stageMarker) {
-  const start = dockerfile.indexOf(stageMarker);
-  assert.ok(start >= 0, `missing stage marker: ${stageMarker}`);
-  const after = dockerfile.slice(start);
+// Locate a build stage by its declared name rather than by its full FROM line.
+// The contracts below are about what a stage contains, not which base image it
+// derives from, so a deliberate base-image change must not read as a missing stage.
+function extractStageSection(dockerfile, stageName) {
+  const declaration = new RegExp(`^FROM .* AS ${stageName}[ \\t]*$`, "m");
+  const match = declaration.exec(dockerfile);
+  assert.ok(match, `missing build stage: ${stageName}`);
+  const after = dockerfile.slice(match.index);
   const nextFromIndex = after.indexOf("\nFROM ");
   return nextFromIndex >= 0 ? after.slice(0, nextFromIndex) : after;
 }
@@ -16,7 +20,7 @@ function extractStageSection(dockerfile, stageMarker) {
 test("relay-server stage bakes SENTRY_RELEASE into runtime env", () => {
   const dockerfilePath = path.join(repoRoot, "Dockerfile");
   const raw = fs.readFileSync(dockerfilePath, "utf8");
-  const section = extractStageSection(raw, "FROM debian:12-slim AS relay-server");
+  const section = extractStageSection(raw, "relay-server");
 
   assert.match(section, /\bARG SENTRY_RELEASE\b/);
   assert.match(section, /\bENV SENTRY_RELEASE=\$SENTRY_RELEASE\b/);
@@ -28,7 +32,7 @@ test("relay-server stage bakes SENTRY_RELEASE into runtime env", () => {
 
 test("hosted server stage exposes the exact build source revision", () => {
   const raw = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
-  const section = extractStageSection(raw, "FROM node:${NODE_VERSION} AS server");
+  const section = extractStageSection(raw, "server");
 
   assert.match(section, /\bARG SENTRY_RELEASE\b/);
   assert.match(section, /\bENV HAPPIER_RELEASE_SOURCE_SHA=\$SENTRY_RELEASE\b/);
@@ -37,8 +41,8 @@ test("hosted server stage exposes the exact build source revision", () => {
 test("relay-server target is artifact based and keeps the self-host runtime contract", () => {
   const dockerfilePath = path.join(repoRoot, "Dockerfile");
   const raw = fs.readFileSync(dockerfilePath, "utf8");
-  const artifactSection = extractStageSection(raw, "FROM debian:12-slim AS relay-artifacts");
-  const runtimeSection = extractStageSection(raw, "FROM debian:12-slim AS relay-server");
+  const artifactSection = extractStageSection(raw, "relay-artifacts");
+  const runtimeSection = extractStageSection(raw, "relay-server");
 
   assert.doesNotMatch(raw, /^FROM\s+server\s+AS\s+relay-server\s*$/m);
   assert.match(artifactSection, /fetch-verified-release-artifact/);
