@@ -187,13 +187,13 @@ env:
 jobs:
   ui-e2e:
     if: ${{ !inputs.select_jobs_explicitly || inputs.run_ui_e2e }}
-    name: UI E2E (Playwright) / shard ${{ matrix.shard }}/9
+    name: UI E2E (Playwright) / shard ${{ matrix.shard }}/18
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     runs-on: ubuntu-22.04
-    timeout-minutes: 75
+    timeout-minutes: 120
     env:
       # UI E2E boots Expo web; keep web assets available to avoid CI-only runtime surprises.
       HAPPIER_UI_VENDOR_WEB_ASSETS: "1"
@@ -268,13 +268,13 @@ jobs:
 
       - name: Run UI E2E
         if: github.event_name == 'workflow_call' || steps.changes.outputs.ui_e2e == 'true'
-        run: yarn -s test:e2e:ui -- --shard=${{ matrix.shard }}/9
+        run: yarn -s test:e2e:ui -- --shard=${{ matrix.shard }}/18
 
       - name: Upload UI E2E artifacts (Playwright)
         if: (github.event_name == 'workflow_call' || steps.changes.outputs.ui_e2e == 'true') && failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ui-e2e-playwright-artifacts-shard-${{ matrix.shard }}-of-9
+          name: ui-e2e-playwright-artifacts-shard-${{ matrix.shard }}-of-18
           path: |
             packages/tests/.project/logs/e2e/ui-playwright
             .project/logs/e2e/*ui-e2e*
