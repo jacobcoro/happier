@@ -15,6 +15,10 @@ import {
     formatVendoredReanimatedPatchFailure,
     verifyVendoredReanimatedPatchMarkers,
 } from './postinstall/verifyVendoredReanimatedPatchMarkers.mjs';
+import {
+    formatUnistylesWebRemovePatchFailure,
+    verifyUnistylesWebRemovePatch,
+} from './postinstall/verifyUnistylesWebRemovePatch.mjs';
 import { verifyReactNativeEnrichedMarkdownPatch } from './postinstall/verifyReactNativeEnrichedMarkdownPatch.mjs';
 import { repairReactNativeEnrichedMarkdownPatch } from './postinstall/repairReactNativeEnrichedMarkdownPatch.mjs';
 
@@ -188,6 +192,31 @@ if (wants('verify-vendored-legend-patch')) {
         // status is added.
         if (result.status !== 'ok' && result.status !== 'skipped') {
             failureReports.push(`${packageDir}\n${formatVendoredLegendPatchFailure(result)}`);
+        }
+    }
+
+    if (failureReports.length > 0) {
+        console.error(`\n${failureReports.join('\n\n')}\n`);
+        process.exit(1);
+    }
+}
+
+// Same failure mode as the two guards above. This one protects a PERFORMANCE fix, which is the
+// quietest way for a dropped hunk to survive: every test still passes and the UI still renders
+// correctly, and the only symptom is that typing degrades the longer the app stays open.
+if (wants('verify-unistyles-web-remove-patch')) {
+    const unistylesPackageDirs = [
+        path.resolve(repoRootNodeModulesDir, 'react-native-unistyles'),
+        path.resolve(expoAppNodeModulesDir, 'react-native-unistyles'),
+    ];
+
+    const failureReports = [];
+    for (const packageDir of unistylesPackageDirs) {
+        const result = verifyUnistylesWebRemovePatch({ packageDir });
+        // Every installed copy must carry the fix: Metro and the native build resolve independently,
+        // so a patched root copy does not vindicate an unpatched app-local one.
+        if (result.status !== 'ok' && result.status !== 'skipped') {
+            failureReports.push(`${packageDir}\n${formatUnistylesWebRemovePatchFailure(result)}`);
         }
     }
 

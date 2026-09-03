@@ -36,4 +36,15 @@ export type UseTextInputCaretRectInput = Readonly<{
     selection?: { start: number; end: number };
     /** When false, the hook returns null and releases native/web tracking. */
     enabled?: boolean;
+    /**
+     * Web-only: when false, keep the last measured rect instead of re-measuring. Native ignores it.
+     *
+     * `enabled` and `measure` are deliberately separate. `enabled` is focus-scoped because the
+     * NATIVE implementation hangs its `useFocusedInputHandler` subscription off it, and releasing
+     * that subscription until the trigger character is typed is what broke the menu's first paint
+     * before (D38). `measure` gates only the web measurement, which costs a `textarea-caret` mirror
+     * pass, a forced layout read and a state update on every keystroke -- paid on every character
+     * typed, while the rect is only ever read when the autocomplete menu is open.
+     */
+    measure?: boolean;
 }>;

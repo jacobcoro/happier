@@ -36,16 +36,30 @@ export function computeWebCaretRect(
  *
  * Returns `null` while disabled, before first measurement, or when the textarea
  * ref is unavailable.
+ *
+ * Measurement is gated on `measure` rather than on focus. `textarea-caret` clones the textarea into
+ * a mirror element and reads its computed style, and the follow-up `getBoundingClientRect` forces
+ * layout; running that on every keystroke costs a forced layout and an extra render per character
+ * while the rect is only read when the autocomplete menu is open.
  */
 export function useTextInputCaretRect(input: UseTextInputCaretRectInput): CaretRect | null {
-    const { inputRef, selection, enabled = true } = input;
+    const { inputRef, selection, enabled = true, measure: measureEnabled = true } = input;
 
     const [rect, setRect] = React.useState<CaretRect | null>(null);
 
-    // Recompute on selection, value, or enabled changes.
-    React.useEffect(() => {
-        if (!enabled) {
-            setRect(null);
+    const shouldMeasure = enabled && measureEnabled;
+
+    // A LAYOUT effect, not a passive one, and that is load-bearing. `measure` flips to true in the
+    // same commit that opens the menu, so a passive effect would let the menu paint once against
+    // the fallback anchor and jump on the next frame -- the exact report D38 describes. A layout
+    // effect's `setRect` re-renders before the browser paints, so the menu's first paint is anchored.
+    React.useLayoutEffect(() => {
+        if (!shouldMeasure) {
+            // Only a disabled hook clears the rect. When the hook is enabled but idle the last
+            // measurement is kept deliberately: `measure` goes false on every keystroke outside an
+            // autocomplete word, and clearing here would throw away the anchor between menu opens.
+            if (!enabled) setRect(null);
+
             return;
         }
 
@@ -76,7 +90,7 @@ export function useTextInputCaretRect(input: UseTextInputCaretRectInput): CaretR
         return () => {
             el.removeEventListener('scroll', measure);
         };
-    }, [inputRef, selection?.start, selection?.end, enabled]);
+    }, [inputRef, selection?.start, selection?.end, enabled, shouldMeasure]);
 
     if (!enabled) return null;
 
