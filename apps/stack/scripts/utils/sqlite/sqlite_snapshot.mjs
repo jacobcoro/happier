@@ -39,6 +39,17 @@ function hasIdentity(metadata, expected) {
   return metadata.dev === expected.dev && metadata.ino === expected.ino;
 }
 
+// A concurrent rename can invalidate any path this module probes between two syscalls.
+// That hazard is a replacement, not corrupt content or a missing input, so every probe
+// inside a publication window reports it through this one owner.
+async function attributeReplacement(label, path, probe) {
+  try {
+    return await probe();
+  } catch (error) {
+    throw new Error(`${label} was replaced or removed while in use: ${path}`, { cause: error });
+  }
+}
+
 async function requireRegularFile(label, path) {
   const metadata = await lstat(path);
   if (metadata.isSymbolicLink()) {
@@ -51,12 +62,7 @@ async function requireRegularFile(label, path) {
 }
 
 async function assertSameRegularFile(label, path, expectedIdentity) {
-  let metadata;
-  try {
-    metadata = await requireRegularFile(label, path);
-  } catch (error) {
-    throw new Error(`${label} was replaced or removed while in use: ${path}`, { cause: error });
-  }
+  const metadata = await attributeReplacement(label, path, () => requireRegularFile(label, path));
   if (!hasIdentity(metadata, expectedIdentity)) {
     throw new Error(`${label} identity changed or was replaced while in use: ${path}`);
   }
@@ -94,16 +100,11 @@ async function secureDirectory(label, path) {
 }
 
 async function assertSameDirectory(label, directory) {
-  let metadata;
-  try {
-    metadata = await lstat(directory.path);
-  } catch (error) {
-    throw new Error(`${label} was replaced or removed while in use: ${directory.path}`, { cause: error });
-  }
+  const metadata = await attributeReplacement(label, directory.path, () => lstat(directory.path));
   if (metadata.isSymbolicLink() || !metadata.isDirectory() || !hasIdentity(metadata, directory.identity)) {
     throw new Error(`${label} identity changed or was replaced while in use: ${directory.path}`);
   }
-  const resolvedPath = await realpath(directory.path);
+  const resolvedPath = await attributeReplacement(label, directory.path, () => realpath(directory.path));
   if (resolvedPath !== directory.resolvedPath) {
     throw new Error(`${label} resolved path changed while in use: ${directory.path}`);
   }
@@ -493,7 +494,9 @@ function assertNoDuplicateJsonKeys(text) {
 }
 
 async function readBoundedManifestText(path, expectedIdentity) {
-  const handle = await open(path, 'r');
+  // The manifest partial can be renamed or removed between the caller's stat and this
+  // open; readManifest re-throws `snapshot manifest` errors unwrapped.
+  const handle = await attributeReplacement('snapshot manifest', path, () => open(path, 'r'));
   try {
     const metadata = await handle.stat();
     if (!metadata.isFile() || !hasIdentity(metadata, expectedIdentity)) {
@@ -575,7 +578,7 @@ async function writePrivateManifest(path, manifest) {
 async function readManifest(path, expectedIdentity = null) {
   const metadata = expectedIdentity
     ? await assertSameRegularFile('snapshot manifest', path, expectedIdentity)
-    : await requireRegularFile('snapshot manifest', path);
+    : await attributeReplacement('snapshot manifest', path, () => requireRegularFile('snapshot manifest', path));
   const identity = expectedIdentity ?? identityOf(metadata);
   if (!hasIdentity(metadata, identity)) {
     throw new Error(`snapshot manifest identity changed or was replaced: ${path}`);
