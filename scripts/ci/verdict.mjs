@@ -19,7 +19,7 @@
 // load to 108 on a 36-core box and corrupted a sibling session's test run in another worktree.
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { createWriteStream, existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
@@ -38,6 +38,10 @@ const DEFAULT_LANES_AT_ONCE = 1;
 const FLEET_GATE = '/home/jacob/code/hermes-lite/bin/fleet-gate.py';
 const GATE_POLL_MS = 30_000;
 const GATE_MAX_WAIT_MS = 20 * 60_000;
+// A lane that emits nothing for this long is hung, not slow: the serial stack lane prints a TAP
+// line per test and vitest reports per file, so real work is never silent for a quarter hour.
+const STALL_MS = 15 * 60_000;
+const STALL_CHECK_MS = 15_000;
 
 const COLOR = stdout.isTTY && !env.NO_COLOR;
 const paint = (code, text) => (COLOR ? `[${code}m${text}[0m` : text);
@@ -93,12 +97,15 @@ function formatDuration(ms) {
 
 // Run one shell command, capturing combined output. Resolves with the exit code rather
 // than rejecting, so a failing check is data and not an exception.
-function runCommand(command, { onChunk, workers }) {
+function runCommand(command, { onChunk, workers, stallMs = 0 }) {
   return new Promise((resolve) => {
-    // nice 19 so anything Jacob does at the keyboard preempts the suite.
+    // nice 19 so anything Jacob does at the keyboard preempts the suite. detached gives the
+    // command its own process group, so a stall abort takes the whole worker pool with it
+    // rather than orphaning workers that keep holding the machine.
     const child = spawn(`nice -n 19 ${command}`, {
       shell: '/bin/bash',
       cwd: cwd(),
+      detached: true,
       env: {
         ...env,
         CI: '1',
@@ -109,19 +116,45 @@ function runCommand(command, { onChunk, workers }) {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    child.stdout.on('data', onChunk);
-    child.stderr.on('data', onChunk);
+
+    let lastOutputAt = Date.now();
+    let stalled = false;
+    const observe = (chunk) => {
+      lastOutputAt = Date.now();
+      onChunk(chunk);
+    };
+    child.stdout.on('data', observe);
+    child.stderr.on('data', observe);
+
+    const watchdog = stallMs
+      ? setInterval(() => {
+          if (Date.now() - lastOutputAt < stallMs) return;
+          stalled = true;
+          clearInterval(watchdog);
+          onChunk(Buffer.from(`\n[verdict] no output for ${Math.round(stallMs / 60_000)}m — aborting\n`));
+          try {
+            process.kill(-child.pid, 'SIGKILL');
+          } catch {
+            child.kill('SIGKILL');
+          }
+        }, STALL_CHECK_MS)
+      : null;
+
     child.on('error', (error) => {
+      if (watchdog) clearInterval(watchdog);
       onChunk(Buffer.from(`\n[verdict] failed to spawn: ${error.message}\n`));
-      resolve(1);
+      resolve({ code: 1, stalled: false });
     });
-    child.on('close', (code) => resolve(code ?? 1));
+    child.on('close', (code) => {
+      if (watchdog) clearInterval(watchdog);
+      resolve({ code: code ?? 1, stalled });
+    });
   });
 }
 
 async function probeLane(lane) {
   if (!lane.probe) return true;
-  const code = await runCommand(lane.probe, { onChunk: () => {} });
+  const { code } = await runCommand(lane.probe, { onChunk: () => {} });
   return code === 0;
 }
 
@@ -138,25 +171,32 @@ async function runLane(lane, workers) {
     };
   }
 
-  const chunks = [];
+  // Stream to the log as output arrives, rather than buffering to the end. A lane that is
+  // still writing is demonstrably alive, which is what makes watching this run cheap.
+  const logPath = join(LOG_DIR, `${lane.id}.log`);
+  const log = createWriteStream(logPath);
   let failedCommand = null;
   let code = 0;
+  let stalled = false;
   for (const command of lane.commands) {
-    chunks.push(Buffer.from(`\n$ ${command}\n`));
-    code = await runCommand(command, { onChunk: (chunk) => chunks.push(chunk), workers });
+    log.write(`\n$ ${command}\n`);
+    ({ code, stalled } = await runCommand(command, {
+      onChunk: (chunk) => log.write(chunk),
+      workers,
+      stallMs: STALL_MS,
+    }));
     if (code !== 0) {
       failedCommand = command;
       break; // Later commands in a lane assume the earlier ones succeeded.
     }
   }
+  await new Promise((resolve) => log.end(resolve));
 
-  const logPath = join(LOG_DIR, `${lane.id}.log`);
-  await writeFile(logPath, Buffer.concat(chunks));
   return {
     lane,
-    status: code === 0 ? 'passed' : 'failed',
+    status: stalled ? 'stalled' : code === 0 ? 'passed' : 'failed',
     durationMs: Date.now() - startedAt,
-    reason: null,
+    reason: stalled ? `no output for ${Math.round(STALL_MS / 60_000)}m` : null,
     logPath,
     failedCommand,
   };
@@ -220,9 +260,10 @@ function report(results, wallMs, options) {
   const order = new Map(LANES.map((lane, index) => [lane.id, index]));
   results.sort((a, b) => order.get(a.lane.id) - order.get(b.lane.id));
 
-  const failed = results.filter((r) => r.status === 'failed');
+  const failed = results.filter((r) => r.status === 'failed' || r.status === 'stalled');
   const skipped = results.filter((r) => r.status === 'skipped');
   const notRun = results.filter((r) => r.status === 'not-run');
+  const stalled = results.filter((r) => r.status === 'stalled');
   const passed = results.filter((r) => r.status === 'passed');
 
   stdout.write(`\n${bold('Lane results')}\n`);
@@ -230,12 +271,14 @@ function report(results, wallMs, options) {
   for (const result of results) {
     const mark = result.status === 'passed'
       ? green('pass')
-      : result.status === 'failed'
-        ? red('FAIL')
+      : result.status === 'failed' || result.status === 'stalled'
+        ? red(result.status === 'stalled' ? 'HUNG' : 'FAIL')
         : result.status === 'not-run' ? yellow('----') : yellow('skip');
     const note = result.status === 'skipped'
       ? dim(`  needs ${result.reason}`)
-      : result.status === 'not-run' ? dim('  not run — fleet gate refused') : '';
+      : result.status === 'not-run'
+        ? dim('  not run — fleet gate refused')
+        : result.status === 'stalled' ? dim(`  aborted — ${result.reason}`) : '';
     stdout.write(`  ${mark}  ${result.lane.id.padEnd(width)}  ${formatDuration(result.durationMs).padStart(6)}${note}\n`);
   }
 
@@ -293,14 +336,14 @@ async function main() {
   const startedAt = Date.now();
 
   for (const note of ENVIRONMENT_NOTES) {
-    if ((await runCommand(note.probe, { onChunk: () => {} })) !== 0) {
+    if ((await runCommand(note.probe, { onChunk: () => {} })).code !== 0) {
       stdout.write(`  ${yellow('!')} ${note.note}\n`);
     }
   }
 
   for (const step of PREPARE) {
     const chunks = [];
-    const code = await runCommand(step.command, { onChunk: (chunk) => chunks.push(chunk) });
+    const { code } = await runCommand(step.command, { onChunk: (chunk) => chunks.push(chunk) });
     if (code !== 0) {
       const logPath = join(LOG_DIR, 'prepare.log');
       await writeFile(logPath, Buffer.concat(chunks));
