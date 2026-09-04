@@ -27,10 +27,16 @@ a hosted runner.
   lanes for UI, server, CLI, stack, shared packages, and release contracts.
 - `yarn verdict:slow` — opt-in tier: UI e2e, core e2e, CLI daemon e2e, and the Postgres DB
   contract. Separate because these boot a web app, build artifacts, or need a service or device.
-- `yarn verdict:all`, `--lane=<id,...>`, `--list`, `--jobs=N` for narrower or wider runs.
+- `yarn verdict:all`, `--lane=<id,...>`, `--list` for narrower or wider runs.
 
-Lanes run in parallel, packed by a per-lane core `weight` so lanes that already parallelise
-internally do not oversubscribe the machine. Per-lane output lands in `.project/logs/verdict/`.
+The run is a guest on a shared machine. Lanes go one at a time, every child runs at `nice 19`,
+each lane's vitest pool is capped to 6 workers (`--workers=N`), and `bin/fleet-gate.py` is
+consulted before each lane and its refusal honoured. Fanning lanes out was tried and reverted:
+it bought almost nothing, because the wall clock is the deliberately serial `stack` lane either
+way, and it drove load to 108 on a 36-core box while corrupting another session's test run in a
+sibling worktree. Per-lane output lands in `.project/logs/verdict/`.
+
+Raise concurrency only on a machine you have to yourself: `--lanes-at-once=N --workers=N`.
 
 Two properties make the result trustworthy:
 
@@ -38,8 +44,9 @@ Two properties make the result trustworthy:
   `scripts/ci/verdictLanes.contract.test.mjs` fails if one stops appearing there. The local run
   and CI cannot drift apart silently.
 - A lane whose prerequisite is missing (Bun, Sapling, Playwright browsers, `DATABASE_URL`) is
-  reported as `skip` and the run is `INCOMPLETE`, never `PASS`. A check that did not run is never
-  counted as one that passed.
+  reported as `skip`, and a lane the fleet gate would not admit is reported as `not run`. Either
+  makes the run `INCOMPLETE`, never `PASS`. A check that did not run is never counted as one that
+  passed, and a lane is never dropped silently.
 
 `yarn ci:act` is a different tool: it replays a GitHub Actions job inside Docker, which is for
 debugging the workflow itself rather than for getting a verdict on your code.

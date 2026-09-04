@@ -9,9 +9,17 @@
 //   node scripts/ci/verdict.mjs --tier=slow     the expensive/environment-dependent tier
 //   node scripts/ci/verdict.mjs --lane=cli,ui   named lanes, any tier
 //   node scripts/ci/verdict.mjs --list          show lanes without running them
-//   node scripts/ci/verdict.mjs --jobs=N        override the core budget
+//   node scripts/ci/verdict.mjs --workers=N     per-lane vitest worker cap (default 6)
+//   node scripts/ci/verdict.mjs --lanes-at-once=N  concurrent lanes (default 1, serial)
+//
+// This machine is shared with other agent sessions and with Jacob's desktop, so the run is a
+// guest on it: lanes go one at a time, every child runs at nice 19, the vitest pool is capped
+// well below the core count, and the fleet gate is consulted before each lane. Fanning out
+// bought little (the wall clock is the serial `stack` lane either way) and cost a lot: it drove
+// load to 108 on a 36-core box and corrupted a sibling session's test run in another worktree.
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +30,15 @@ import { ENVIRONMENT_NOTES, LANES, PREPARE, lanesForTier } from './verdictLanes.
 const LOG_DIR = join(cwd(), '.project', 'logs', 'verdict');
 const CORES = availableParallelism();
 
+// Single digit on purpose. vitest otherwise sizes its pool from the core count, which is wrong
+// on a box where 17 other sessions are doing the same thing.
+const DEFAULT_WORKERS = 6;
+// Lanes are serial by default; the long pole is serial anyway, so fan-out is nearly free to give up.
+const DEFAULT_LANES_AT_ONCE = 1;
+const FLEET_GATE = '/home/jacob/code/hermes-lite/bin/fleet-gate.py';
+const GATE_POLL_MS = 30_000;
+const GATE_MAX_WAIT_MS = 20 * 60_000;
+
 const COLOR = stdout.isTTY && !env.NO_COLOR;
 const paint = (code, text) => (COLOR ? `[${code}m${text}[0m` : text);
 const green = (t) => paint('32', t);
@@ -31,19 +48,28 @@ const dim = (t) => paint('2', t);
 const bold = (t) => paint('1', t);
 
 function parseArgs(args) {
-  const options = { tier: 'fast', lanes: null, list: false, jobs: CORES };
+  const options = {
+    tier: 'fast',
+    lanes: null,
+    list: false,
+    workers: DEFAULT_WORKERS,
+    lanesAtOnce: DEFAULT_LANES_AT_ONCE,
+  };
   for (const arg of args) {
     if (arg === '--list') options.list = true;
     else if (arg.startsWith('--tier=')) options.tier = arg.slice('--tier='.length);
     else if (arg.startsWith('--lane=')) options.lanes = arg.slice('--lane='.length).split(',').filter(Boolean);
-    else if (arg.startsWith('--jobs=')) options.jobs = Number(arg.slice('--jobs='.length));
+    else if (arg.startsWith('--workers=')) options.workers = Number(arg.slice('--workers='.length));
+    else if (arg.startsWith('--lanes-at-once=')) options.lanesAtOnce = Number(arg.slice('--lanes-at-once='.length));
     else throw new Error(`Unknown argument: ${arg}`);
   }
   if (!['fast', 'slow', 'all'].includes(options.tier)) {
     throw new Error(`--tier must be fast, slow, or all (got ${options.tier})`);
   }
-  if (!Number.isInteger(options.jobs) || options.jobs < 1) {
-    throw new Error(`--jobs must be a positive integer (got ${options.jobs})`);
+  for (const key of ['workers', 'lanesAtOnce']) {
+    if (!Number.isInteger(options[key]) || options[key] < 1) {
+      throw new Error(`--${key} must be a positive integer (got ${options[key]})`);
+    }
   }
   return options;
 }
@@ -69,16 +95,16 @@ function formatDuration(ms) {
 // than rejecting, so a failing check is data and not an exception.
 function runCommand(command, { onChunk, workers }) {
   return new Promise((resolve) => {
-    const child = spawn(command, {
+    // nice 19 so anything Jacob does at the keyboard preempts the suite.
+    const child = spawn(`nice -n 19 ${command}`, {
       shell: '/bin/bash',
       cwd: cwd(),
       env: {
         ...env,
         CI: '1',
         FORCE_COLOR: '0',
-        // vitest reads these as its pool ceiling. Without them every lane sizes its own pool
-        // from the full core count, so N concurrent lanes each try to own the machine and the
-        // run gets slower and flakier than running them one at a time.
+        // vitest reads these as its pool ceiling; without them it sizes the pool from the core
+        // count and ignores every other session on the box.
         ...(workers ? { VITEST_MAX_THREADS: String(workers), VITEST_MAX_FORKS: String(workers) } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -99,7 +125,7 @@ async function probeLane(lane) {
   return code === 0;
 }
 
-async function runLane(lane) {
+async function runLane(lane, workers) {
   const startedAt = Date.now();
   if (!(await probeLane(lane))) {
     return {
@@ -117,7 +143,7 @@ async function runLane(lane) {
   let code = 0;
   for (const command of lane.commands) {
     chunks.push(Buffer.from(`\n$ ${command}\n`));
-    code = await runCommand(command, { onChunk: (chunk) => chunks.push(chunk), workers: lane.weight });
+    code = await runCommand(command, { onChunk: (chunk) => chunks.push(chunk), workers });
     if (code !== 0) {
       failedCommand = command;
       break; // Later commands in a lane assume the earlier ones succeeded.
@@ -136,37 +162,57 @@ async function runLane(lane) {
   };
 }
 
-// Pack lanes onto the core budget by weight, starting the slowest first so a long pole runs
-// from t=0 instead of being scheduled last and defining the wall clock on its own. Ordering is
-// by expected duration, not weight: the slowest lanes here are the deliberately serial ones,
-// which are exactly the lanes a weight-ordered queue would start last.
-async function runLanes(lanes, budget) {
+// Ask the shared-machine gate whether it is polite to start more work. A refusal is honoured,
+// not overridden: this box runs Jacob's desktop and other agent sessions. Waiting is correct;
+// starting anyway is how load reached 108 earlier and broke a sibling session's suite.
+async function waitForFleetGate() {
+  if (!existsSync(FLEET_GATE)) return { ok: true, waitedMs: 0 };
+  const startedAt = Date.now();
+  for (;;) {
+    const chunks = [];
+    await runCommand(FLEET_GATE, { onChunk: (chunk) => chunks.push(chunk) });
+    const output = Buffer.concat(chunks).toString();
+    if (output.includes('Launch allowed')) return { ok: true, waitedMs: Date.now() - startedAt };
+    if (Date.now() - startedAt >= GATE_MAX_WAIT_MS) {
+      return { ok: false, waitedMs: Date.now() - startedAt, reason: output.trim().split('\n')[0] };
+    }
+    stdout.write(dim(`  … fleet busy, waiting ${GATE_POLL_MS / 1000}s before the next lane\n`));
+    await new Promise((resolve) => setTimeout(resolve, GATE_POLL_MS));
+  }
+}
+
+// Slowest lane first, so if the gate later refuses and the run stops short, the expensive lane
+// is already done rather than the one left unrun.
+async function runLanes(lanes, options) {
   const queue = [...lanes].sort((a, b) => b.expectSeconds - a.expectSeconds);
   const results = [];
   const running = new Set();
-  let used = 0;
 
-  const startable = () => queue.findIndex((lane) => used === 0 || used + lane.weight <= budget);
-
-  while (queue.length > 0 || running.size > 0) {
-    let index = startable();
-    while (index !== -1) {
-      const [lane] = queue.splice(index, 1);
-      used += lane.weight;
-      stdout.write(dim(`  ▸ ${lane.id} started\n`));
-      const task = runLane(lane).then((result) => {
-        used -= lane.weight;
-        running.delete(task);
-        results.push(result);
-        const mark = result.status === 'passed' ? green('✓') : result.status === 'failed' ? red('✗') : yellow('–');
-        stdout.write(`  ${mark} ${lane.id} ${dim(formatDuration(result.durationMs))}\n`);
-        return result;
-      });
-      running.add(task);
-      index = startable();
+  while (queue.length > 0) {
+    if (running.size >= options.lanesAtOnce) {
+      await Promise.race(running);
+      continue;
     }
-    if (running.size > 0) await Promise.race(running);
+    const gate = await waitForFleetGate();
+    if (!gate.ok) {
+      // Never silently drop a lane: everything left is reported as not run.
+      for (const lane of queue) {
+        results.push({ lane, status: 'not-run', durationMs: 0, reason: gate.reason, logPath: null, failedCommand: null });
+      }
+      break;
+    }
+    const lane = queue.shift();
+    stdout.write(dim(`  ▸ ${lane.id} started\n`));
+    const task = runLane(lane, Math.min(options.workers, lane.weight)).then((result) => {
+      running.delete(task);
+      results.push(result);
+      const mark = result.status === 'passed' ? green('✓') : result.status === 'failed' ? red('✗') : yellow('–');
+      stdout.write(`  ${mark} ${lane.id} ${dim(formatDuration(result.durationMs))}\n`);
+      return result;
+    });
+    running.add(task);
   }
+  await Promise.all(running);
   return results;
 }
 
@@ -176,13 +222,20 @@ function report(results, wallMs, options) {
 
   const failed = results.filter((r) => r.status === 'failed');
   const skipped = results.filter((r) => r.status === 'skipped');
+  const notRun = results.filter((r) => r.status === 'not-run');
   const passed = results.filter((r) => r.status === 'passed');
 
   stdout.write(`\n${bold('Lane results')}\n`);
   const width = Math.max(...results.map((r) => r.lane.id.length));
   for (const result of results) {
-    const mark = result.status === 'passed' ? green('pass') : result.status === 'failed' ? red('FAIL') : yellow('skip');
-    const note = result.status === 'skipped' ? dim(`  needs ${result.reason}`) : '';
+    const mark = result.status === 'passed'
+      ? green('pass')
+      : result.status === 'failed'
+        ? red('FAIL')
+        : result.status === 'not-run' ? yellow('----') : yellow('skip');
+    const note = result.status === 'skipped'
+      ? dim(`  needs ${result.reason}`)
+      : result.status === 'not-run' ? dim('  not run — fleet gate refused') : '';
     stdout.write(`  ${mark}  ${result.lane.id.padEnd(width)}  ${formatDuration(result.durationMs).padStart(6)}${note}\n`);
   }
 
@@ -194,22 +247,27 @@ function report(results, wallMs, options) {
     }
   }
 
-  stdout.write(`\n${bold('Wall clock')}: ${formatDuration(wallMs)} (tier=${options.tier}, ${options.jobs} cores)\n`);
+  stdout.write(
+    `\n${bold('Wall clock')}: ${formatDuration(wallMs)} ` +
+      `(tier=${options.tier}, ${options.workers} workers/lane, ${options.lanesAtOnce} lane at a time, nice 19)\n`,
+  );
 
-  if (failed.length === 0 && skipped.length === 0) {
+  const incomplete = [...skipped, ...notRun];
+  if (failed.length === 0 && incomplete.length === 0) {
     stdout.write(`${green(bold('VERDICT: PASS'))} — ${passed.length} lanes, nothing skipped.\n`);
     return 0;
   }
   if (failed.length === 0) {
     stdout.write(
       `${yellow(bold('VERDICT: INCOMPLETE'))} — ${passed.length} lanes passed, ` +
-        `${skipped.length} could not run (${skipped.map((r) => r.lane.id).join(', ')}).\n`,
+        `${incomplete.length} did not run (${incomplete.map((r) => r.lane.id).join(', ')}).\n`,
     );
     return 0;
   }
   stdout.write(
     `${red(bold('VERDICT: FAIL'))} — ${failed.length} of ${results.length} lanes failed: ` +
-      `${failed.map((r) => r.lane.id).join(', ')}.\n`,
+      `${failed.map((r) => r.lane.id).join(', ')}.` +
+      (incomplete.length > 0 ? ` ${incomplete.length} did not run.` : '') + '\n',
   );
   return 1;
 }
@@ -228,7 +286,10 @@ async function main() {
   }
 
   await mkdir(LOG_DIR, { recursive: true });
-  stdout.write(`${bold('Local verdict')} — ${lanes.length} lanes, ${options.jobs} cores\n`);
+  stdout.write(
+    `${bold('Local verdict')} — ${lanes.length} lanes, ${options.workers} workers/lane, ` +
+      `${options.lanesAtOnce} lane at a time, nice 19\n`,
+  );
   const startedAt = Date.now();
 
   for (const note of ENVIRONMENT_NOTES) {
@@ -249,7 +310,7 @@ async function main() {
     stdout.write(dim(`  prepared ${step.label}\n`));
   }
 
-  const results = await runLanes(lanes, options.jobs);
+  const results = await runLanes(lanes, options);
   return report(results, Date.now() - startedAt, options);
 }
 
