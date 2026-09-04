@@ -17,6 +17,33 @@ Canonical lanes:
 
 Use the smallest relevant subset during RED/GREEN loops. Before handoff, run the touched package typecheck/build-enforcing lane and at least one broader relevant lane when shared contracts are touched.
 
+## Local verdict
+
+`yarn verdict` runs the checks from `.github/workflows/tests.yml` natively against the working
+tree and prints one pass/fail result. It is the answer to "is this tree good?" without waiting on
+a hosted runner.
+
+- `yarn verdict` — fast tier: typecheck, wiring/policy/inventory, and the unit and integration
+  lanes for UI, server, CLI, stack, shared packages, and release contracts.
+- `yarn verdict:slow` — opt-in tier: UI e2e, core e2e, CLI daemon e2e, and the Postgres DB
+  contract. Separate because these boot a web app, build artifacts, or need a service or device.
+- `yarn verdict:all`, `--lane=<id,...>`, `--list`, `--jobs=N` for narrower or wider runs.
+
+Lanes run in parallel, packed by a per-lane core `weight` so lanes that already parallelise
+internally do not oversubscribe the machine. Per-lane output lands in `.project/logs/verdict/`.
+
+Two properties make the result trustworthy:
+
+- The lane commands are copied from the workflow, and
+  `scripts/ci/verdictLanes.contract.test.mjs` fails if one stops appearing there. The local run
+  and CI cannot drift apart silently.
+- A lane whose prerequisite is missing (Bun, Sapling, Playwright browsers, `DATABASE_URL`) is
+  reported as `skip` and the run is `INCOMPLETE`, never `PASS`. A check that did not run is never
+  counted as one that passed.
+
+`yarn ci:act` is a different tool: it replays a GitHub Actions job inside Docker, which is for
+debugging the workflow itself rather than for getting a verdict on your code.
+
 ## TypeScript toolchain
 
 The repository deliberately separates the compiler from the programmatic TypeScript API:
