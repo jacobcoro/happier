@@ -256,6 +256,11 @@ generic KV API. The draft routes carry an explicit content envelope and enforce 
 This keeps one draft document and synchronization contract without weakening the different key
 ownership of Account-scoped and Session-scoped data.
 
+Snapshot hydration distinguishes a temporarily unavailable existing-Session key/context from an
+invalid envelope or payload. It may skip only the unavailable Session record while continuing to
+materialize other Account drafts; malformed or mode-incompatible content fails the snapshot so it
+cannot be silently classified as a local key-loading condition.
+
 ## On-wire formats (encrypted fields)
 
 ```mermaid
@@ -606,7 +611,7 @@ Users who want to opt into enforcement during the expansion phase can require th
 authenticated protocol locally:
 
 ```bash
-HAPPIER_TERMINAL_PAIRING_REQUIRE=v3 happier auth
+HAPPIER_TERMINAL_PAIRING_REQUIRE=v3 happier auth login
 ```
 
 `v3` is a minimum accepted pairing-protocol requirement: legacy v1/v2 responses are rejected, and

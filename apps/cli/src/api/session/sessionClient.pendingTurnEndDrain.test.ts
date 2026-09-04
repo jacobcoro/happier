@@ -1854,6 +1854,58 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     expect(materializeNextMock).toHaveBeenCalledTimes(2);
   });
 
+  it('identifies the server-claim subphase before awaiting an unsettled materialization transport', async () => {
+    const client = await createClient({
+      latestTurnStatus: 'completed',
+      pendingCount: 1,
+      pendingBlockedCount: 0,
+      pendingVersion: 1,
+    });
+    await waitForCurrentPendingInputContract(client);
+    const transport = createDeferred<{
+      didMaterialize: false;
+      localId: null;
+      didWrite: false;
+    }>();
+    materializeNextMock.mockImplementationOnce(async () => await transport.promise);
+    const observedPhases: string[] = [];
+    const pending = client.materializeNextPendingMessageSafely({
+      reconcileWhenEmpty: 'force',
+      onDiagnosticPhase: (phase) => observedPhases.push(phase),
+    });
+
+    try {
+      await vi.waitFor(() => expect(materializeNextMock).toHaveBeenCalledTimes(1));
+      expect(observedPhases.at(-1)).toBe('materialize.server_claim');
+    } finally {
+      transport.resolve({ didMaterialize: false, localId: null, didWrite: false });
+      await pending;
+    }
+  });
+
+  it('keeps diagnostic callback failures outside pending materialization behavior', async () => {
+    const client = await createClient({
+      latestTurnStatus: 'completed',
+      pendingCount: 1,
+      pendingBlockedCount: 0,
+      pendingVersion: 1,
+    });
+    await waitForCurrentPendingInputContract(client);
+    materializeNextMock.mockResolvedValueOnce({
+      didMaterialize: false,
+      localId: null,
+      didWrite: false,
+    });
+
+    await expect(client.materializeNextPendingMessageSafely({
+      reconcileWhenEmpty: 'force',
+      onDiagnosticPhase: () => {
+        throw new Error('diagnostic callback failed');
+      },
+    })).resolves.toEqual({ type: 'no_pending' });
+    expect(materializeNextMock).toHaveBeenCalledTimes(1);
+  });
+
   it('passes runtime-idle delivery timing to server materialization when locally eligible', async () => {
     const client = await createClient({
       latestTurnStatus: 'completed',
@@ -4099,6 +4151,56 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     });
     expect((client as any).canonicalPendingDeliveryByLocalId.has(replacementLocalId)).toBe(true);
     expect(materializeNextMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a proven pre-acceptance rejection when a later ambiguous terminal report races it', async () => {
+    const localId = 'proven-rejection-before-ambiguous-terminal';
+    const firstBlock = createDeferred<{
+      pendingQueueState: {
+        known: true;
+        pendingCount: number;
+        pendingBlockedCount: number;
+        pendingVersion: number;
+      };
+    }>();
+    const client = await createClient({
+      latestTurnStatus: 'completed',
+      pendingCount: 1,
+      pendingBlockedCount: 0,
+      pendingVersion: 1,
+      metadata: { deliveredUserMessageSeqV1: 0 },
+    });
+    await waitForCurrentPendingInputContract(client);
+    materializeNextMock.mockResolvedValueOnce(createProviderDeliveryMaterializeResult(localId));
+    blockPendingDeliveryMock.mockImplementationOnce(() => firstBlock.promise);
+
+    await expect(client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).resolves.toMatchObject({
+      type: 'materialized',
+      localId,
+    });
+
+    const provenRejection = client.blockPendingMessageDelivery({
+      localIds: [localId],
+      reason: 'provider_rejected_before_acceptance',
+    });
+    await waitUntil(() => blockPendingDeliveryMock.mock.calls.length === 1);
+    const ambiguousTerminal = client.blockPendingMessageDelivery({
+      localIds: [localId],
+      reason: 'ambiguous_terminal_delivery',
+    });
+
+    firstBlock.resolve({
+      pendingQueueState: { known: true, pendingCount: 1, pendingBlockedCount: 1, pendingVersion: 2 },
+    });
+
+    await expect(provenRejection).resolves.toBe(true);
+    await expect(ambiguousTerminal).resolves.toBe(false);
+    expect(blockPendingDeliveryMock).toHaveBeenCalledExactlyOnceWith({
+      token: 'tok',
+      sessionId: 's1',
+      localId,
+      reason: 'provider_rejected_before_acceptance',
+    });
   });
 
   it.each([

@@ -21,6 +21,7 @@ import {
     parseStoredSessionLatestTurnStatus,
     parseStoredSessionRuntimeIssue,
 } from "./v2SessionListRows";
+import { mapPendingActivationAuthorization } from "@/app/session/pending/pendingActivationAuthorization";
 import {
     createV2ActiveSessionListRowsWhere,
     createV2SessionListCursorWhere,
@@ -115,6 +116,10 @@ const V1_SESSION_LIST_ROW_SELECT = {
     pendingCount: true,
     pendingBlockedCount: true,
     pendingVersion: true,
+    pendingActivationRequestId: true,
+    pendingActivationRequestedAt: true,
+    pendingActivationStatus: true,
+    pendingActivationFailureCode: true,
     active: true,
     lastActiveAt: true,
 } as const satisfies Prisma.SessionSelect;
@@ -212,6 +217,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                 pendingCount: v.pendingCount,
                 pendingBlockedCount: v.pendingBlockedCount,
                 pendingVersion: v.pendingVersion,
+                pendingActivationAuthorization: mapPendingActivationAuthorization(v),
                 dataEncryptionKey: encodeSessionDataEncryptionKey(v.dataEncryptionKey),
                 lastMessage: null,
             })),
@@ -243,6 +249,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                     pendingCount: v.pendingCount,
                     pendingBlockedCount: v.pendingBlockedCount,
                     pendingVersion: v.pendingVersion,
+                    pendingActivationAuthorization: mapPendingActivationAuthorization(v),
                     dataEncryptionKey:
                         v.encryptionMode === "plain"
                             ? null

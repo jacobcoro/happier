@@ -43,6 +43,7 @@ function fixture({ missingRolling = false } = {}) {
   const archivePlatform = process.platform === 'darwin' ? 'darwin' : 'linux';
   const archiveArch = process.arch === 'arm64' ? 'arm64' : 'x64';
   const archiveName = `happier-v1.2.3-preview.4-${archivePlatform}-${archiveArch}.tar.gz`;
+  const aliasName = `happier-${archivePlatform}-${archiveArch}.tar.gz`;
   const archiveStem = archiveName.slice(0, -'.tar.gz'.length);
   const archiveStage = join(root, 'archive-stage');
   const archiveRoot = join(archiveStage, archiveStem);
@@ -70,6 +71,7 @@ function fixture({ missingRolling = false } = {}) {
   const log = join(root, 'gh.log');
   const uploadCounter = join(root, 'upload-counter');
   const draftState = join(root, 'draft-state');
+  const staleOtherDraftState = join(root, 'stale-other-draft-state');
   const publishedState = join(root, 'published-state');
   const channelRef = join(root, 'channel-ref');
   const stagingRef = join(root, 'staging-ref');
@@ -191,6 +193,9 @@ if [ "$1" = "api" ]; then
       done
       name="\${endpoint##*name=}"
       cp "$input" ${JSON.stringify(staging)}/"$name"
+      if [ "\${HAPPIER_TEST_CORRUPT_ALIAS:-0}" = "1" ] && [ "$name" = ${JSON.stringify(aliasName)} ]; then
+        printf 'corrupt\n' >> ${JSON.stringify(staging)}/"$name"
+      fi
       exit 0
       ;;
   esac
@@ -235,7 +240,11 @@ if [ "$1" = "api" ]; then
       fi
       ;;
     *"releases?per_page=100"*)
-      if [ "\${HAPPIER_TEST_DELAY_DRAFT_VISIBILITY:-0}" != "1" ] \
+      if echo "$*" | grep -q 'startswith'; then
+        if [ -f ${JSON.stringify(staleOtherDraftState)} ]; then
+          printf '88\\thappier-rolling-staging-cli-preview-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\n'
+        fi
+      elif [ "\${HAPPIER_TEST_DELAY_DRAFT_VISIBILITY:-0}" != "1" ] \
         && [ -f ${JSON.stringify(draftState)} ] \
         && echo "$*" | grep -q "cli-preview"; then
         printf '%s\\n' "77"
@@ -311,6 +320,15 @@ if [ "$1" = "api" ]; then
         printf '{"id":55,"tag_name":"cli-v1.2.3-preview.4","name":"Immutable CLI","body":"","prerelease":true,"draft":false}\n'
       fi
       ;;
+    *releases/88*)
+      if echo "$*" | grep -q -- "-X DELETE"; then
+        rm -f ${JSON.stringify(staleOtherDraftState)}
+      elif [ -f ${JSON.stringify(staleOtherDraftState)} ]; then
+        printf '{"id":88,"tag_name":"happier-rolling-staging-cli-preview-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","name":"old staging","body":"","prerelease":true,"draft":true}\n'
+      else
+        not_found
+      fi
+      ;;
     *releases/1*)
       if echo "$*" | grep -q -- "-X PATCH"; then
         tag_name=""; name=""
@@ -384,11 +402,13 @@ exit 2
     root,
     bin,
     archiveName,
+    aliasName,
     log,
     rolling,
     staging,
     uploadCounter,
     draftState,
+    staleOtherDraftState,
     publishedState,
     channelRef,
     stagingRef,
@@ -421,6 +441,25 @@ test('rolling promotion dry-run shows private staging and whole-release backup c
   assert.doesNotMatch(output, /releases\/assets\//);
 });
 
+test('rolling promotion removes an abandoned staging draft from an older target SHA', () => {
+  const testFixture = fixture();
+  try {
+    writeFileSync(testFixture.staleOtherDraftState, '1');
+    execFileSync(process.execPath, args(), {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PATH: `${testFixture.bin}:${process.env.PATH ?? ''}`,
+      },
+      encoding: 'utf8',
+    });
+    assert.equal(existsSync(testFixture.staleOtherDraftState), false);
+    assert.match(readFileSync(testFixture.log, 'utf8'), /-X DELETE repos\/test\/test\/releases\/88/);
+  } finally {
+    rmSync(testFixture.root, { recursive: true, force: true });
+  }
+});
+
 test('rolling promotion rejects a mismatched expected product/version before GitHub access', () => {
   const result = spawnSync(process.execPath, [
     ...args(),
@@ -449,7 +488,7 @@ test('rolling promotion sends release assets to the exact GitHub upload API host
     const uploadCalls = readFileSync(testFixture.log, 'utf8')
       .split('\n')
       .filter((line) => line.includes('releases/77/assets'));
-    assert.equal(uploadCalls.length, 3);
+    assert.equal(uploadCalls.length, 4);
     for (const call of uploadCalls) {
       assert.match(call, /gh api -X POST https:\/\/uploads\.github\.com\/repos\/test\/test\/releases\/77\/assets\?name=/);
       assert.doesNotMatch(call, /--hostname uploads\.github\.com/);
@@ -484,6 +523,29 @@ test('rolling promotion audits release assets without buffering their bytes in t
       readFileSync(join(testFixture.staging, 'large-release-metadata.json')),
       largeMetadata,
     );
+  } finally {
+    rmSync(testFixture.root, { recursive: true, force: true });
+  }
+});
+
+test('rolling promotion rejects a channel alias whose downloaded bytes differ from its immutable source', () => {
+  const testFixture = fixture();
+  try {
+    const result = spawnSync(process.execPath, args(), {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PATH: `${testFixture.bin}:${process.env.PATH ?? ''}`,
+        HAPPIER_TEST_CORRUPT_ALIAS: '1',
+      },
+      encoding: 'utf8',
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(String(result.stderr), new RegExp(`differs from immutable source bytes: ${testFixture.aliasName}`));
+    assert.equal(readFileSync(testFixture.release1Tag, 'utf8'), 'cli-preview');
+    assert.equal(readFileSync(testFixture.channelRef, 'utf8'), oldSha);
+    assert.deepEqual(readdirSync(testFixture.rolling), ['old-asset']);
   } finally {
     rmSync(testFixture.root, { recursive: true, force: true });
   }
@@ -557,13 +619,17 @@ test('existing rolling replacement stages privately, restores after publish fail
       [
         'checksums-happier-v1.2.3-preview.4.txt',
         'checksums-happier-v1.2.3-preview.4.txt.minisig',
+        `happier-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`,
         testFixture.archiveName,
       ],
     );
     for (const name of readdirSync(testFixture.staging)) {
+      const sourceName = name === `happier-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`
+        ? testFixture.archiveName
+        : name;
       assert.deepEqual(
         readFileSync(join(testFixture.staging, name)),
-        readFileSync(join(testFixture.root, 'source', basename(name))),
+        readFileSync(join(testFixture.root, 'source', basename(sourceName))),
       );
     }
 
@@ -599,7 +665,7 @@ test('rolling promotion retries a transient GitHub asset upload connectivity fai
     const uploadCalls = readFileSync(testFixture.log, 'utf8')
       .split('\n')
       .filter((line) => line.includes('uploads.github.com'));
-    assert.equal(uploadCalls.length, 4, 'the first asset upload should retry exactly once');
+    assert.equal(uploadCalls.length, 5, 'the first asset upload should retry exactly once');
   } finally {
     rmSync(testFixture.root, { recursive: true, force: true });
   }
@@ -623,7 +689,7 @@ test('rolling promotion outlasts four consecutive GitHub asset upload connection
     const uploadCalls = readFileSync(testFixture.log, 'utf8')
       .split('\n')
       .filter((line) => line.includes('uploads.github.com'));
-    assert.equal(uploadCalls.length, 7, 'the first asset should recover on attempt five before the remaining two uploads');
+    assert.equal(uploadCalls.length, 8, 'the first asset should recover on attempt five before the remaining three uploads');
   } finally {
     rmSync(testFixture.root, { recursive: true, force: true });
   }

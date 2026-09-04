@@ -90,7 +90,7 @@ function standardOptionalSurfaces(requested) {
   return STANDARD_OPTIONAL_SURFACE_IDS.map((id) => ({
     id,
     requested,
-    required: false,
+    required: id === 'deploy_ui' ? requested : false,
     evidence: 'accepted',
     state: requested ? 'failed' : 'not_requested',
     ...(requested ? { result: 'failed' } : {}),
@@ -156,6 +156,18 @@ test('resume resolution reuses only successful verified immutable candidates', (
       docker: false,
       npm: false,
     },
+    completed: {
+      cliRolling: false,
+      deployDocs: false,
+      deployServer: false,
+      deployUi: false,
+      deployWebsite: false,
+      docker: false,
+      serverRolling: false,
+      stackRolling: false,
+      npm: false,
+      uiWebRolling: false,
+    },
   });
 });
 
@@ -188,6 +200,139 @@ test('release resume preserves originally requested optional publication surface
     docker: true,
     npm: true,
   });
+});
+
+test('release resume preserves exact completed downstream publications without rerunning siblings', () => {
+  const optionalSurfaces = standardOptionalSurfaces(true).map((surface) => ({
+    ...surface,
+    state: 'published',
+    result: 'accepted',
+    identity: {
+      sourceSha: SOURCE_SHA,
+      verified: false,
+      ...(surface.identity ?? {}),
+    },
+  }));
+  const resolved = resolveReleaseResume({
+    originRun: originRun({ path: '.github/workflows/release.yml' }),
+    artifacts: [statusArtifact()],
+    downloadedDigest: DIGEST,
+    status: status({
+      channel: 'preview',
+      surfaces: [previewCliCandidate(), ...optionalSurfaces],
+    }),
+    expected: {
+      repository: REPOSITORY,
+      workflowPath: '.github/workflows/release.yml',
+      channel: 'preview',
+    },
+  });
+
+  assert.deepEqual(resolved.completed, {
+    cliRolling: false,
+    deployDocs: true,
+    deployServer: true,
+    deployUi: true,
+    deployWebsite: true,
+    docker: true,
+    serverRolling: false,
+    stackRolling: false,
+    npm: true,
+    uiWebRolling: false,
+  });
+});
+
+test('release resume preserves exact verified rolling projections without mutating them again', () => {
+  const rollingSurfaces = [
+    ['cli_rolling_release', 'cliRolling'],
+    ['hstack_rolling_release', 'stackRolling'],
+    ['server_rolling_release', 'serverRolling'],
+    ['ui_web_rolling_release', 'uiWebRolling'],
+  ].map(([id]) => ({
+    id,
+    requested: true,
+    required: true,
+    evidence: 'verified',
+    state: 'complete',
+    result: 'success',
+    identity: { sourceSha: SOURCE_SHA, verified: true },
+  }));
+  const resolved = resolveReleaseResume({
+    originRun: originRun({ path: '.github/workflows/release.yml' }),
+    artifacts: [statusArtifact()],
+    downloadedDigest: DIGEST,
+    status: status({
+      channel: 'preview',
+      surfaces: [previewCliCandidate(), ...rollingSurfaces, ...standardOptionalSurfaces(false)],
+    }),
+    expected: {
+      repository: REPOSITORY,
+      workflowPath: '.github/workflows/release.yml',
+      channel: 'preview',
+    },
+  });
+
+  assert.equal(resolved.completed.cliRolling, true);
+  assert.equal(resolved.completed.stackRolling, true);
+  assert.equal(resolved.completed.serverRolling, true);
+  assert.equal(resolved.completed.uiWebRolling, true);
+});
+
+test('release resume rejects rolling completion evidence without exact verified source identity', () => {
+  const invalidRolling = {
+    id: 'cli_rolling_release',
+    requested: true,
+    required: true,
+    evidence: 'verified',
+    state: 'complete',
+    result: 'success',
+    identity: { sourceSha: 'f'.repeat(40), verified: true },
+  };
+  assert.throws(() => resolveReleaseResume({
+    originRun: originRun({ path: '.github/workflows/release.yml' }),
+    artifacts: [statusArtifact()],
+    downloadedDigest: DIGEST,
+    status: status({
+      channel: 'preview',
+      surfaces: [previewCliCandidate(), invalidRolling, ...standardOptionalSurfaces(false)],
+    }),
+    expected: {
+      repository: REPOSITORY,
+      workflowPath: '.github/workflows/release.yml',
+      channel: 'preview',
+    },
+  }), /cli_rolling_release source SHA/);
+});
+
+test('release resume rejects completed downstream evidence bound to another source', () => {
+  const optionalSurfaces = standardOptionalSurfaces(false);
+  optionalSurfaces[0] = {
+    id: 'deploy_ui',
+    requested: true,
+    required: false,
+    evidence: 'accepted',
+    state: 'published',
+    result: 'accepted',
+    identity: {
+      sourceSha: 'f'.repeat(40),
+      verified: false,
+      deployWeb: true,
+      expoAction: 'none',
+      desktopMode: 'none',
+    },
+  };
+
+  assert.throws(() => resolveReleaseResume({
+    originRun: originRun({ path: '.github/workflows/release.yml' }),
+    artifacts: [statusArtifact()],
+    downloadedDigest: DIGEST,
+    status: status({ channel: 'preview', surfaces: [previewCliCandidate(), ...optionalSurfaces] }),
+    expected: {
+      repository: REPOSITORY,
+      workflowPath: '.github/workflows/release.yml',
+      channel: 'preview',
+    },
+  }), /deploy_ui source SHA/);
 });
 
 test('release resume preserves an explicitly requested UI no-op publication intent', () => {
@@ -230,6 +375,50 @@ test('release resume preserves an explicitly requested UI no-op publication inte
     deployWeb: false,
     expoAction: 'none',
     desktopMode: 'none',
+  });
+});
+
+test('release resume preserves full UI publication intent for exact recovery', () => {
+  const optionalSurfaces = standardOptionalSurfaces(false);
+  const deployUiIndex = optionalSurfaces.findIndex((surface) => surface.id === 'deploy_ui');
+  optionalSurfaces[deployUiIndex] = {
+    id: 'deploy_ui',
+    requested: true,
+    required: true,
+    evidence: 'accepted',
+    state: 'failed',
+    result: 'failed',
+    identity: {
+      sourceSha: SOURCE_SHA,
+      verified: false,
+      deployWeb: true,
+      expoAction: 'full',
+      desktopMode: 'build_and_publish',
+    },
+  };
+
+  const resolved = resolveReleaseResume({
+    originRun: originRun({ path: '.github/workflows/release.yml' }),
+    artifacts: [statusArtifact()],
+    downloadedDigest: DIGEST,
+    status: status({
+      channel: 'production',
+      surfaces: [{
+        ...previewCliCandidate(),
+        identity: { ...previewCliCandidate().identity, version: '0.2.11' },
+      }, ...optionalSurfaces],
+    }),
+    expected: {
+      repository: REPOSITORY,
+      workflowPath: '.github/workflows/release.yml',
+      channel: 'production',
+    },
+  });
+
+  assert.deepEqual(resolved.resumeInputs.deployUi, {
+    deployWeb: true,
+    expoAction: 'full',
+    desktopMode: 'build_and_publish',
   });
 });
 

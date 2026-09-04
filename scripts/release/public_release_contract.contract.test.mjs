@@ -32,7 +32,7 @@ test('release-contract exposes canonical release targets and suite capabilities 
   assert.equal(contract.kind, 'happier.public-release-contract.v1');
   assert.deepEqual(contract.conductorProtocol, {
     version: 1,
-    capabilities: ['release-analysis-v1', 'release-dispatch-plan-v3', 'ci-run-id'],
+    capabilities: ['release-analysis-v1', 'release-dispatch-plan-v3', 'ci-run-id', 'production-promotion-mode-v1'],
   });
   assert.deepEqual(
     contract.targets,
@@ -90,7 +90,7 @@ test('release-contract profiles distinguish bounded normal release validation fr
       normalRelease: false,
       checksProfile: null,
       automaticSuiteIds: [],
-      manualEntrypoint: 'skills/happier-release-validation/SKILL.md',
+      manualEntrypoint: '.agents/skills/happier-release-validation/SKILL.md',
     },
   ]);
   assert.deepEqual(releaseValidationRegistry.RELEASE_VALIDATION_PROFILES, contract.validationProfiles);

@@ -194,7 +194,7 @@ test('remote server command pins stable public URL and exact target-local SQLite
   assert.match(command, /HAPPIER_STACK_SERVER_PORT=43005/);
   assert.match(command, /HAPPIER_SERVER_RETENTION__SESSION_SIDECHAIN_MESSAGES__DAYS=7/);
   assert.match(command, /--server-public-url=.*127\.0\.0\.1:52753/);
-  assert.match(command, /--no-proxy/);
+  assert.doesNotMatch(command, /--no-proxy/);
   assert.doesNotMatch(command, /--no-server|--no-daemon/);
   assert.doesNotMatch(command, /guest\/data-must-not-leak|DATABASE_URL/);
   assert.match(stopCommand, /stack stop .*repo-local-dev.* --yes --no-docker --preserve-daemon/);
@@ -241,7 +241,8 @@ test('remote target resolves automatically detected mobile public addresses at i
     activeServerId: 'stack_repo__id_default',
     stackName: 'repo-local-dev',
     remoteServerPort: 52753,
-    remoteExpoPort: 18829,
+    remoteExpoPort: 30685,
+    expoPublicPort: 18829,
     expoPublicUrl: 'http://192.168.5.15:18829',
     startMobile: true,
     resolveServerPublicUrlOnTarget: true,
@@ -258,6 +259,8 @@ test('remote target resolves automatically detected mobile public addresses at i
 
   assert.match(command, /--mobile/);
   assert.match(command, /HAPPIER_STACK_EXPO_HOST=localhost/);
+  assert.match(command, /HAPPIER_STACK_EXPO_PUBLIC_PORT=18829/);
+  assert.match(command, /HAPPIER_STACK_EXPO_DEV_PORT=30685/);
   assert.doesNotMatch(command, /EXPO_PACKAGER_PROXY_URL=/);
   assert.doesNotMatch(command, /--server-public-url=/);
   assert.doesNotMatch(command, /192\.168\.5\.15/);

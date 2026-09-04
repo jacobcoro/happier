@@ -19,6 +19,12 @@ const RESUMABLE_REQUESTED_SURFACES = new Map([
   ['docker', 'docker'],
   ['npm', 'npm'],
 ]);
+const RESUMABLE_VERIFIED_SURFACES = new Map([
+  ['cli_rolling_release', 'cliRolling'],
+  ['hstack_rolling_release', 'stackRolling'],
+  ['server_rolling_release', 'serverRolling'],
+  ['ui_web_rolling_release', 'uiWebRolling'],
+]);
 const TRUSTED_RELEASE_CONTROL_BRANCHES = new Set(['dev', 'preview', 'main']);
 const RESUMABLE_WORKFLOW_EVENTS = new Map([
   ['.github/workflows/nightly-dev.yml', new Set(['schedule', 'workflow_dispatch'])],
@@ -184,6 +190,19 @@ export function resolveReleaseResume(input) {
   const versions = { cli: '', stack: '', server: '', 'ui-web': '' };
   /** @type {Record<'deployDocs' | 'deployServer' | 'deployUi' | 'deployWebsite' | 'docker' | 'npm', boolean>} */
   const requested = { deployDocs: false, deployServer: false, deployUi: false, deployWebsite: false, docker: false, npm: false };
+  /** @type {Record<'cliRolling' | 'deployDocs' | 'deployServer' | 'deployUi' | 'deployWebsite' | 'docker' | 'npm' | 'serverRolling' | 'stackRolling' | 'uiWebRolling', boolean>} */
+  const completed = {
+    cliRolling: false,
+    deployDocs: false,
+    deployServer: false,
+    deployUi: false,
+    deployWebsite: false,
+    docker: false,
+    npm: false,
+    serverRolling: false,
+    stackRolling: false,
+    uiWebRolling: false,
+  };
   const resumeInputs = {
     deployUi: { deployWeb: false, expoAction: 'none', desktopMode: 'none' },
     npm: { publishCli: false, publishStack: false, publishServer: false },
@@ -192,15 +211,27 @@ export function resolveReleaseResume(input) {
   for (const [index, rawSurface] of status.surfaces.entries()) {
     const surface = asRecord(rawSurface, `resume status surface ${index}`);
     const surfaceId = requiredString(surface.id, `resume status surface ${index} id`);
+    const verifiedCompletionKey = RESUMABLE_VERIFIED_SURFACES.get(surfaceId);
+    if (verifiedCompletionKey && surface.requested === true && surface.state === 'complete' && surface.result === 'success') {
+      const identity = asRecord(surface.identity, `completed ${surfaceId} identity`);
+      if (requiredSha(identity.sourceSha, `completed ${surfaceId} source SHA`) !== statusSourceSha) {
+        throw new Error(`[release] completed ${surfaceId} source SHA does not match the release`);
+      }
+      if (identity.verified !== true) {
+        throw new Error(`[release] completed ${surfaceId} must carry verified identity evidence`);
+      }
+      completed[/** @type {'cliRolling' | 'serverRolling' | 'stackRolling' | 'uiWebRolling'} */ (verifiedCompletionKey)] = true;
+    }
     const requestKey = RESUMABLE_REQUESTED_SURFACES.get(surfaceId);
     if (requestKey) {
+      const typedRequestKey = /** @type {'deployDocs' | 'deployServer' | 'deployUi' | 'deployWebsite' | 'docker' | 'npm'} */ (requestKey);
       if (seenRequestedSurfaces.has(surfaceId)) {
         throw new Error(`[release] duplicate resumable requested surface: ${surfaceId}`);
       }
       if (typeof surface.requested !== 'boolean') {
         throw new Error(`[release] resumable requested surface ${surfaceId} must declare requested as boolean`);
       }
-      requested[/** @type {'deployDocs' | 'deployServer' | 'deployUi' | 'deployWebsite' | 'docker' | 'npm'} */ (requestKey)] = surface.requested;
+      requested[typedRequestKey] = surface.requested;
       seenRequestedSurfaces.add(surfaceId);
       if (surface.requested && surfaceId === 'deploy_ui') {
         try {
@@ -210,7 +241,7 @@ export function resolveReleaseResume(input) {
           }
           resumeInputs.deployUi = {
             deployWeb: requiredBoolean(identity.deployWeb, 'requested deploy_ui deployWeb'),
-            expoAction: requiredChoice(identity.expoAction, 'requested deploy_ui expoAction', ['none', 'ota', 'native', 'native_submit']),
+            expoAction: requiredChoice(identity.expoAction, 'requested deploy_ui expoAction', ['none', 'ota', 'native', 'native_submit', 'full']),
             desktopMode: requiredChoice(identity.desktopMode, 'requested deploy_ui desktopMode', ['none', 'build_only', 'build_and_publish']),
           };
         } catch (error) {
@@ -234,6 +265,16 @@ export function resolveReleaseResume(input) {
         } catch (error) {
           throw new Error(`[release] cannot reconstruct requested npm intent: ${error instanceof Error ? error.message : String(error)}`);
         }
+      }
+      if (surface.requested && surface.state === 'published' && surface.result === 'accepted') {
+        const identity = asRecord(surface.identity, `completed ${surfaceId} identity`);
+        if (requiredSha(identity.sourceSha, `completed ${surfaceId} source SHA`) !== statusSourceSha) {
+          throw new Error(`[release] completed ${surfaceId} source SHA does not match the release`);
+        }
+        if (identity.verified !== false) {
+          throw new Error(`[release] completed ${surfaceId} must carry accepted, non-verified identity evidence`);
+        }
+        completed[typedRequestKey] = true;
       }
     }
     if (surface.state !== 'complete' || surface.result !== 'success') continue;
@@ -274,6 +315,7 @@ export function resolveReleaseResume(input) {
     sourceSha: statusSourceSha,
     versions: validated.versions,
     requested,
+    completed,
     ...(input.expected.workflowPath === '.github/workflows/release.yml' ? { resumeInputs } : {}),
   };
 }
@@ -350,6 +392,16 @@ export async function main(argv = process.argv.slice(2)) {
       deploy_website_requested: resolved.requested.deployWebsite,
       docker_requested: resolved.requested.docker,
       npm_requested: resolved.requested.npm,
+      deploy_docs_complete: resolved.completed.deployDocs,
+      deploy_server_complete: resolved.completed.deployServer,
+      deploy_ui_complete: resolved.completed.deployUi,
+      deploy_website_complete: resolved.completed.deployWebsite,
+      docker_complete: resolved.completed.docker,
+      npm_complete: resolved.completed.npm,
+      cli_rolling_complete: resolved.completed.cliRolling,
+      stack_rolling_complete: resolved.completed.stackRolling,
+      server_rolling_complete: resolved.completed.serverRolling,
+      ui_web_rolling_complete: resolved.completed.uiWebRolling,
       deploy_ui_web_requested: resolved.resumeInputs?.deployUi.deployWeb ?? false,
       deploy_ui_expo_action: resolved.resumeInputs?.deployUi.expoAction ?? 'none',
       deploy_ui_desktop_mode: resolved.resumeInputs?.deployUi.desktopMode ?? 'none',
