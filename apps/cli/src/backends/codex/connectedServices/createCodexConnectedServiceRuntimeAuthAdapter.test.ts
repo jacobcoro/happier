@@ -37,7 +37,7 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     });
   });
 
-  it('reports restart recovery when runtime apply RPC is unavailable', () => {
+  it('does not offer restart recovery when direct live runtime apply is unavailable', () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
 
     expect(adapter.canHotApply({
@@ -63,11 +63,10 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     })).toEqual({
       supported: false,
       reason: 'direct_live_hot_auth_unsupported',
-      recovery: 'restart_resume',
     });
   });
 
-  it('does not treat transport recycle hooks as direct live hot apply support', () => {
+  it('does not infer direct live hot apply support without the runtime apply owner', () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
 
     expect(adapter.canHotApply({
@@ -89,17 +88,15 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
             providerEmail: 'codex-user@example.test',
           },
         }),
-        invalidateTransports: async () => {},
         persistAuthStore: async () => {},
       },
     })).toEqual({
       supported: false,
       reason: 'direct_live_hot_auth_unsupported',
-      recovery: 'restart_resume',
     });
   });
 
-  it('uses direct live runtime apply before legacy transport recycle hooks', async () => {
+  it('uses the direct live runtime apply owner', async () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
     const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
       ok: true,
@@ -107,7 +104,6 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
       verification: { activeAccountId: 'acct' },
     }));
     const persistAuthStore = vi.fn(async () => {});
-    const invalidateTransports = vi.fn(async () => {});
     const client = { request: vi.fn(async () => ({ ok: true })) };
 
     await expect(adapter.hotApply({
@@ -131,7 +127,6 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
         }),
         client,
         applyConnectedServiceAuthGeneration,
-        invalidateTransports,
         persistAuthStore,
         applyReason: 'usage_limit',
       },
@@ -144,17 +139,15 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     expect(applyConnectedServiceAuthGeneration).toHaveBeenCalledWith(expect.objectContaining({
       serviceId: 'openai-codex',
       reason: 'usage_limit',
-      requireDirectLiveHotApply: false,
       authGeneration: expect.objectContaining({
         credential: expect.any(Object),
       }),
     }));
     expect(client.request).not.toHaveBeenCalled();
     expect(persistAuthStore).not.toHaveBeenCalled();
-    expect(invalidateTransports).not.toHaveBeenCalled();
   });
 
-  it('reports failed direct-live durability as restart-required partial state with diagnostics', async () => {
+  it('reports failed direct-live durability as an applied partial state without restarting', async () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
     const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
       ok: true,
@@ -197,7 +190,6 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
       appliedVia: 'direct_live_hot_auth',
       activeAccountId: 'acct_live',
       partialState: 'runtime_auth_applied',
-      recovery: 'restart_resume',
       reason: 'auth_store_persistence_failed_after_live_apply',
       error: 'auth_store_persistence_failed_after_live_apply',
       verification: {
@@ -212,12 +204,13 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     });
   });
 
-  it('threads direct-live-required policy into runtime apply requests', async () => {
+  it('threads the switch reason into runtime apply requests', async () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
     const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
       ok: false,
       errorCode: 'refresh_selection_resync_failed',
       error: 'refresh_selection_resync_failed',
+      recovery: 'restart_resume',
     }));
 
     await expect(adapter.hotApply({
@@ -242,7 +235,6 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
         }),
         applyConnectedServiceAuthGeneration,
         applyReason: 'same_provider_account_exhausted',
-        requireDirectLiveHotApply: true,
       },
     })).resolves.toEqual({
       applied: false,
@@ -252,11 +244,10 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
 
     expect(applyConnectedServiceAuthGeneration).toHaveBeenCalledWith(expect.objectContaining({
       reason: 'same_provider_account_exhausted',
-      requireDirectLiveHotApply: true,
     }));
   });
 
-  it('reports direct-live partial mutations as restart-required partial state', async () => {
+  it('reports direct-live partial mutations without restarting the live runtime', async () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
     const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
       ok: false,
@@ -293,14 +284,12 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
         }),
         applyConnectedServiceAuthGeneration,
         applyReason: 'same_provider_account_exhausted',
-        requireDirectLiveHotApply: true,
       },
     })).resolves.toEqual({
       applied: false,
       appliedVia: 'direct_live_hot_auth',
       activeAccountId: 'acct_live',
       partialState: 'runtime_auth_applied',
-      recovery: 'restart_resume',
       reason: 'refresh_selection_resync_failed',
       error: 'refresh_selection_resync_failed',
       verification: {
@@ -311,7 +300,7 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     });
   });
 
-  it('reports restart recovery when direct live runtime apply is unavailable', async () => {
+  it('does not offer restart recovery when direct live runtime apply is unavailable', async () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
 
     await expect(adapter.hotApply({
@@ -337,7 +326,6 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     })).resolves.toEqual({
       applied: false,
       reason: 'direct_live_hot_auth_unsupported',
-      recovery: 'restart_resume',
     });
   });
 

@@ -171,6 +171,8 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     oversizedResumePayloadChars?: number;
     omitTurnStartedForPrompt?: string;
     omitTurnCompletedForPrompt?: string;
+    failStateRuntimeInitializationOnce?: boolean;
+    failLocalDbLogDbLockInitializationOnce?: boolean;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
     const script = [
@@ -178,6 +180,17 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         'import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";',
         'import readline from "node:readline";',
         `const requestLogPath = ${JSON.stringify(params.requestLogPath)};`,
+        `const failStateRuntimeInitializationOnce = ${JSON.stringify(params.failStateRuntimeInitializationOnce === true)};`,
+        `const failLocalDbLogDbLockInitializationOnce = ${JSON.stringify(params.failLocalDbLogDbLockInitializationOnce === true)};`,
+        `const startupFailureMessage = ${JSON.stringify(params.failLocalDbLogDbLockInitializationOnce === true
+            ? "Codex couldn't start because another Codex process is using its local data\nfailed to initialize state runtime at /tmp/codex-home\nfailed to open log DB at /tmp/codex-home/log.sqlite: database is locked\nfailed to initialize sqlite local db at /tmp/codex-home"
+            : 'failed to initialize sqlite state runtime under /tmp/codex-state failed to initialize state runtime at /tmp/codex-state')};`,
+        'const startupFailureMarkerPath = requestLogPath + ".state-runtime-initialization-failed";',
+        'if ((failStateRuntimeInitializationOnce || failLocalDbLogDbLockInitializationOnce) && !(await readFile(startupFailureMarkerPath, "utf8").catch(() => null))) {',
+        '    await writeFile(startupFailureMarkerPath, "failed");',
+        '    process.stderr.write(startupFailureMessage + "\\n");',
+        '    process.exit(1);',
+        '}',
         'const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });',
         'let staleTerminalTurnId = null;',
         'let loginStartCount = 0;',
@@ -1626,6 +1639,8 @@ describe('createCodexAppServerRuntime', () => {
             rpcTimeoutMs?: number;
             startupRpcTimeoutMs?: number;
             resumeRecoveryTimeoutMs?: number;
+            failStateRuntimeInitializationOnce?: boolean;
+            failLocalDbLogDbLockInitializationOnce?: boolean;
         }> = {},
     ): Promise<{
         root: string;
@@ -1678,6 +1693,8 @@ describe('createCodexAppServerRuntime', () => {
             oversizedResumePayloadChars: options.oversizedResumePayloadChars,
             omitTurnStartedForPrompt: options.omitTurnStartedForPrompt,
             omitTurnCompletedForPrompt: options.omitTurnCompletedForPrompt,
+            failStateRuntimeInitializationOnce: options.failStateRuntimeInitializationOnce,
+            failLocalDbLogDbLockInitializationOnce: options.failLocalDbLogDbLockInitializationOnce,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
@@ -1723,6 +1740,56 @@ describe('createCodexAppServerRuntime', () => {
                 expect.objectContaining({ method: 'thread/start' }),
             ]),
         );
+    });
+
+    it('retries native resume when Codex transiently cannot initialize its shared SQLite state runtime', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture(
+            'happier-codex-app-server-runtime-state-runtime-startup-retry-',
+            { failStateRuntimeInitializationOnce: true },
+        );
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await expect(runtime.startOrLoad({ resumeId: 'thread-resume-after-state-runtime-pressure' }))
+            .resolves.toBeUndefined();
+
+        const requests = await readRequestLog(requestLogPath);
+        expect(requests).toEqual(expect.arrayContaining([
+            expect.objectContaining({ method: 'initialize' }),
+            expect.objectContaining({
+                method: 'thread/resume',
+                params: expect.objectContaining({ threadId: 'thread-resume-after-state-runtime-pressure' }),
+            }),
+        ]));
+    });
+
+    it('retries native resume when Codex local and log SQLite databases are locked during startup', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture(
+            'happier-codex-app-server-runtime-local-db-lock-startup-retry-',
+            { failLocalDbLogDbLockInitializationOnce: true },
+        );
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await expect(runtime.startOrLoad({ resumeId: 'thread-resume-after-local-db-lock' }))
+            .resolves.toBeUndefined();
+
+        const requests = await readRequestLog(requestLogPath);
+        expect(requests).toEqual(expect.arrayContaining([
+            expect.objectContaining({ method: 'initialize' }),
+            expect.objectContaining({
+                method: 'thread/resume',
+                params: expect.objectContaining({ threadId: 'thread-resume-after-local-db-lock' }),
+            }),
+        ]));
     });
 
     it('keeps a new app-server thread provisional until the first provider turn is accepted', async () => {
@@ -5982,7 +6049,7 @@ describe('createCodexAppServerRuntime', () => {
         ]));
     });
 
-    it('releases the native turn when the provider process exits after a nonterminal error', async () => {
+    it('reattaches the retained thread before the next explicit turn after the provider process exits', async () => {
         const { root, requestLogPath } = await createRuntimeFixture(
             'happier-codex-app-server-runtime-nonterminal-error-exit-',
         );
@@ -6023,6 +6090,34 @@ describe('createCodexAppServerRuntime', () => {
         });
         expect(runtime.isTurnInFlight()).toBe(false);
         expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledTimes(1);
+
+        await expect(runtime.sendPrompt('explicit-turn-after-process-exit')).resolves.toBeUndefined();
+
+        const requestLog = await readRequestLog(requestLogPath);
+        const processExitIndex = requestLog.findIndex((entry) => entry.method === 'test/process-exit');
+        const resumedThreadIndex = requestLog.findIndex((entry, index) => (
+            index > processExitIndex
+            && entry.method === 'thread/resume'
+            && typeof entry.params === 'object'
+            && entry.params !== null
+            && 'threadId' in entry.params
+            && entry.params.threadId === 'thread-started'
+        ));
+        const nextTurnIndex = requestLog.findIndex((entry, index) => (
+            index > processExitIndex
+            && entry.method === 'turn/start'
+            && typeof entry.params === 'object'
+            && entry.params !== null
+            && 'input' in entry.params
+            && Array.isArray(entry.params.input)
+            && typeof entry.params.input[0] === 'object'
+            && entry.params.input[0] !== null
+            && 'text' in entry.params.input[0]
+            && entry.params.input[0].text === 'explicit-turn-after-process-exit'
+        ));
+        expect(resumedThreadIndex).toBeGreaterThan(processExitIndex);
+        expect(nextTurnIndex).toBeGreaterThan(resumedThreadIndex);
+        expect(requestLog.filter((entry) => entry.method === 'thread/resume')).toHaveLength(1);
     });
 
     it('does not let an unknown terminal id claim a pending turn before its provider id is observed', async () => {
@@ -7470,7 +7565,6 @@ describe('createCodexAppServerRuntime', () => {
             await expect(runtimeControls.applyConnectedServiceAuthGeneration({
                 serviceId: 'openai-codex',
                 reason: 'same_provider_account_exhausted',
-                requireDirectLiveHotApply: true,
                 expected: {
                     profileId: 'replacement',
                     groupId: 'happier',
@@ -7602,7 +7696,6 @@ describe('createCodexAppServerRuntime', () => {
             await expect(runtimeControls.applyConnectedServiceAuthGeneration({
                 serviceId: 'openai-codex',
                 reason: 'same_provider_account_exhausted',
-                requireDirectLiveHotApply: true,
                 expected: { profileId: 'replacement', groupId: 'happier', generation: 8 },
                 authGeneration: {
                     credential: replacement,
@@ -7838,6 +7931,20 @@ describe('createCodexAppServerRuntime', () => {
                 }),
                 policyDisposition: 'evidence_only',
             });
+            expect(onUsageLimitGroupRecovery).toHaveBeenCalledTimes(1);
+            expect(onUsageLimitGroupRecovery).toHaveBeenCalledWith({
+                sessionId: 'session-stale-env-group',
+                classification: expect.objectContaining({
+                    kind: 'usage_limit',
+                    serviceId: 'openai-codex',
+                    groupId: 'happier',
+                    profileId: 'backup',
+                    groupGeneration: 7,
+                    sourceProviderAccountId: 'acct_team_seeded',
+                    failingAccessTokenFingerprint: 'sha256:deadbeef',
+                }),
+            });
+            onUsageLimitGroupRecovery.mockClear();
             const requestLogBeforeManualCheck = await readRequestLog(requestLogPath);
             expect(requestLogBeforeManualCheck.map((entry) => entry.method)).toEqual(expect.arrayContaining([
                 'account/rateLimits/read',
@@ -9228,6 +9335,8 @@ describe('createCodexAppServerRuntime', () => {
             await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
                 runtimeAuthClassification: { kind: 'usage_limit' },
             });
+            expect(onUsageLimitGroupRecovery).toHaveBeenCalledOnce();
+            onUsageLimitGroupRecovery.mockClear();
             const controls = runtime as typeof runtime & {
                 enableUsageLimitWaitResume?: (request: { sessionId: string }) => Promise<unknown>;
                 checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
@@ -10668,7 +10777,6 @@ describe('createCodexAppServerRuntime', () => {
             appliedVia: 'direct_live_hot_auth',
             activeAccountId: 'acct_target',
             partialState: 'runtime_auth_applied',
-            recovery: 'restart_resume',
             verification: {
                 activeAccountId: 'acct_target',
                 proofStrength: 'exact',
@@ -11211,7 +11319,6 @@ describe('createCodexAppServerRuntime', () => {
         await expect((runtime as any).applyConnectedServiceAuthGeneration({
             serviceId: 'openai-codex',
             reason: 'same_provider_account_exhausted',
-            requireDirectLiveHotApply: true,
             expected: {
                 profileId: 'target',
                 credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
@@ -11312,7 +11419,6 @@ describe('createCodexAppServerRuntime', () => {
         const authApply = (runtime as any).applyConnectedServiceAuthGeneration({
             serviceId: 'openai-codex',
             reason: 'same_provider_account_exhausted',
-            requireDirectLiveHotApply: true,
             expected: { profileId: 'target' },
             authGeneration: {
                 credential: candidate,
@@ -11333,147 +11439,8 @@ describe('createCodexAppServerRuntime', () => {
         })).toBe(false);
     });
 
-    it('invalidates connected-service auth transports by restarting the app-server and resuming the same thread', async () => {
+    it('keeps the legacy transport-invalidation RPC passive because Codex auth applies directly', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-hot-apply-invalidate-');
-
-        const sendSessionEvent = vi.fn();
-        const runtime = createCodexAppServerRuntime({
-            directory: root,
-            onThinkingChange: vi.fn(),
-            session: {
-                updateMetadata: vi.fn(),
-                sendCodexMessage: vi.fn(),
-                sendSessionEvent,
-            } as any,
-        });
-
-        await runtime.startOrLoad({});
-
-        await expect((runtime as any).invalidateConnectedServiceAuthTransports?.({})).resolves.toEqual({ ok: true });
-
-        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-        expect(requestLog.filter((entry: { method: string }) => entry.method === 'initialize')).toHaveLength(2);
-        expect(requestLog).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                method: 'thread/resume',
-                params: expect.objectContaining({
-                    threadId: 'thread-started',
-                    persistExtendedHistory: true,
-                }),
-            }),
-        ]));
-        // Intentional connected-service switch must NOT use the native "refused to continue" copy.
-        expect(sendSessionEvent).not.toHaveBeenCalledWith({
-            type: 'message',
-            message: expect.stringContaining('refused to continue in the current process'),
-        });
-        expect(sendSessionEvent).toHaveBeenCalledWith({
-            type: 'message',
-            message: expect.stringContaining('applying a connected-service account switch'),
-        });
-    });
-
-    it('continues an active prompt after connected-service auth transport invalidation restarts the app-server', async () => {
-        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-hot-apply-invalidate-active-');
-
-        const sendCodexMessage = vi.fn();
-        const sendAgentMessageCommitted = vi.fn(async () => {});
-        const sendSessionEvent = vi.fn();
-        const undeliverablePrompts: Array<Readonly<{
-            localIds?: readonly string[] | null;
-            text: string;
-            userMessageSeq: number | null;
-        }>> = [];
-        const acceptedPrompts: Array<Readonly<{
-            localIds?: readonly string[] | null;
-            userMessageSeq: number | null;
-            providerTurnId: string;
-        }>> = [];
-        const runtime = createCodexAppServerRuntime({
-            directory: root,
-            onThinkingChange: vi.fn(),
-            session: {
-                updateMetadata: vi.fn(),
-                sendAgentMessageCommitted,
-                sendCodexMessage,
-                sendSessionEvent,
-            } as any,
-        });
-        runtime.setOnUndeliverablePrompts((prompts) => {
-            undeliverablePrompts.push(...prompts);
-        });
-        runtime.setOnPromptAcceptedByProvider((prompt) => {
-            acceptedPrompts.push(prompt);
-        });
-
-        await runtime.startOrLoad({});
-
-        const prompt = 'connected-service-invalidation-before-acceptance-after-activity';
-        const promptPromise = runtime.sendPrompt(prompt, {
-            localId: 'local-auth-invalidation',
-            userMessageSeq: 927,
-        });
-        await waitForCondition(async () => {
-            const requestLog = await readRequestLog(requestLogPath);
-            return requestLog.some((entry) => {
-                const params = entry.params as { input?: Array<{ text?: string }> } | null;
-                return entry.method === 'turn/start' && params?.input?.[0]?.text === prompt;
-            });
-        }, {
-            timeoutMs: 1_000,
-            intervalMs: 10,
-            label: 'Codex app-server test prompt to start before transport invalidation',
-        });
-        await waitForCondition(() => sendAgentMessageCommitted.mock.calls.length > 0, {
-            timeoutMs: 1_000,
-            intervalMs: 10,
-            label: 'Codex app-server test prompt to report meaningful provider activity before transport invalidation',
-        });
-
-        await expect((runtime as any).invalidateConnectedServiceAuthTransports?.({})).resolves.toEqual({ ok: true });
-        await expect(promptPromise).resolves.toBeUndefined();
-
-        const requestLog = await readRequestLog(requestLogPath);
-        const turnStartPrompts = requestLog.flatMap((entry) => {
-            const params = entry.params as { input?: Array<{ text?: string }> } | null;
-            return entry.method === 'turn/start' ? [params?.input?.[0]?.text ?? null] : [];
-        });
-        expect(turnStartPrompts).toHaveLength(2);
-        expect(turnStartPrompts[0]).toBe(prompt);
-        expect(turnStartPrompts[1]).not.toBe(prompt);
-        expect(requestLog.filter((entry) => entry.method === 'initialize')).toHaveLength(2);
-        expect(requestLog).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                method: 'thread/resume',
-                params: expect.objectContaining({
-                    threadId: 'thread-started',
-                    persistExtendedHistory: true,
-                }),
-            }),
-        ]));
-        expect(acceptedPrompts).toEqual([{
-            localIds: ['local-auth-invalidation'],
-            userMessageSeq: 927,
-            providerTurnId: 'turn-Please continue the interrupted work from the compacted Codex context. Do not restart or repeat completed work.',
-        }]);
-        expect(undeliverablePrompts).toEqual([]);
-        // Intentional connected-service switch must NOT use the native "refused to continue" copy.
-        expect(sendSessionEvent).not.toHaveBeenCalledWith({
-            type: 'message',
-            message: expect.stringContaining('refused to continue in the current process'),
-        });
-        expect(sendSessionEvent).toHaveBeenCalledWith({
-            type: 'message',
-            message: expect.stringContaining('applying a connected-service account switch'),
-        });
-        expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
-            type: 'message',
-            message: expect.stringContaining('access token could not be refreshed'),
-        }));
-    });
-
-    it('treats connected-service auth invalidation as a no-op when no active thread is running', async () => {
-        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-hot-apply-unsupported-');
 
         const runtime = createCodexAppServerRuntime({
             directory: root,
@@ -11485,7 +11452,17 @@ describe('createCodexAppServerRuntime', () => {
             } as any,
         });
 
-        await expect((runtime as any).invalidateConnectedServiceAuthTransports?.({})).resolves.toEqual({ ok: true });
+        await runtime.startOrLoad({});
+
+        await expect((runtime as any).invalidateConnectedServiceAuthTransports?.({})).resolves.toEqual({
+            ok: false,
+            errorCode: 'unsupported_session_runtime_method',
+            error: 'unsupported_session_runtime_method:session.connectedServiceAuth.invalidateTransports',
+        });
+
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'initialize')).toHaveLength(1);
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'thread/resume')).toHaveLength(0);
     });
 
     it('suppresses retryable Codex errors until a later hard failure aborts the pending turn', async () => {

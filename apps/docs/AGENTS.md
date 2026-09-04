@@ -72,7 +72,7 @@ These pages are generated. Do not hand-edit the output — change the generator 
 | `/extras/feature-flags` | the protocol feature catalog, the client's UI feature registry, and `apps/ui/.../translations/en.ts` |
 | `/apps/keyboard-shortcuts` | `apps/ui/sources/keyboard/commands.ts` |
 | `/self-hosting/rate-limits` | `apps/server/.../apiRateLimitCatalog.ts` |
-| `/getting-started/get-the-apps` | `apps/website/src/data/downloads.ts` |
+| `/getting-started/get-the-apps` | `apps/website/src/data/downloads.json` |
 
 Regenerate with `yarn --cwd apps/docs generate:reference`. A generator whose source is not built in this checkout is skipped, not failed — a docs-only build is legitimate.
 
@@ -148,7 +148,7 @@ Published product pages avoid repository paths and implementation trivia unless 
 - Use a small number of current, non-sensitive screenshots only when they materially improve a UI-heavy workflow.
 - Changes to the documentation site's own UI, navigation, accessibility, responsive behavior, or meaningful loading/error states are user-facing web changes. Read `../../DESIGN.md` when the experience is materially affected and apply the relevant live-validation rules.
 
-Use `skills/happier-docs` for the complete evidence, editing, validation, and handoff workflow.
+Use `.agents/skills/happier-docs` for the complete evidence, editing, validation, and handoff workflow.
 
 ## Navigation and hubs
 

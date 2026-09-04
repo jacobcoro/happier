@@ -578,6 +578,7 @@ export function createAcpRuntime(params: {
     observedAt: number;
   }> | null = null;
   let accumulatedResponse = '';
+  let accumulatedAssistantSegmentResponse = '';
   let accumulatedThinkingText = '';
   let isResponseInProgress = false;
   let taskStartedSent = false;
@@ -815,6 +816,7 @@ export function createAcpRuntime(params: {
       });
     }
     accumulatedResponse = '';
+    accumulatedAssistantSegmentResponse = '';
     accumulatedThinkingText = '';
     isResponseInProgress = false;
     taskStartedSent = false;
@@ -1076,43 +1078,111 @@ export function createAcpRuntime(params: {
     sessionMediaTurnState.track(forwardPromise);
   };
 
-  const surfaceStatusError = (detailRaw: unknown) => {
-    if (isAbortLikeError(detailRaw)) return false;
-    const providerTurnId = currentTurnId ?? (turnInFlight ? ensureCurrentTurnId() : null);
-    void (async () => {
-      let compatibilityMarkerId = providerTurnId;
-      if (turnInFlight && !taskStartedSent && params.session.sessionTurnLifecycle) {
-        const handle = await params.session.sessionTurnLifecycle.beginTurn({
-          provider: params.provider,
-          ...(providerTurnId ? { providerTurnId } : {}),
-        });
-        compatibilityMarkerId = handle.turnId;
-      }
-      const issue = await surfacePrimarySessionRuntimeIssue({
-        cause: 'status_error',
+  type TerminalTurnSnapshot = Readonly<{
+    providerTurnId: string | null;
+    turnInFlight: boolean;
+    taskStartedSent: boolean;
+  }>;
+
+  const captureTerminalTurn = (): TerminalTurnSnapshot => ({
+    providerTurnId: currentTurnId ?? (turnInFlight ? ensureCurrentTurnId() : null),
+    turnInFlight,
+    taskStartedSent,
+  });
+
+  const beginCapturedLifecycleTurn = (turn: TerminalTurnSnapshot): Promise<string | null> => {
+    if (turn.turnInFlight && !turn.taskStartedSent && params.session.sessionTurnLifecycle) {
+      return params.session.sessionTurnLifecycle.beginTurn({
         provider: params.provider,
-        providerTurnId,
-        error: detailRaw,
-        session: params.session,
-      });
-      if (turnInFlight && compatibilityMarkerId && params.session.sessionTurnLifecycle) {
-        params.session.sendAgentMessage(params.provider, {
-          type: 'turn_failed',
-          id: compatibilityMarkerId,
-          ...(issue ? { issue } : {}),
-        });
-      }
-    })().catch((error) => {
-      logger.debug(`[${params.provider}] Failed to persist primary session runtime issue (non-fatal)`, error);
+        ...(turn.providerTurnId ? { providerTurnId: turn.providerTurnId } : {}),
+      }).then((handle) => handle.turnId);
+    }
+    return Promise.resolve(turn.providerTurnId);
+  };
+
+  const publishTerminalCompatibilityMarker = (
+    body: Extract<ACPMessageData, { type: 'turn_failed' | 'turn_aborted' }>,
+  ): void => {
+    const lifecycle = params.session.sessionTurnLifecycle;
+    if (!lifecycle || !lifecycle.hasActiveTurn()) {
+      params.session.sendAgentMessage(params.provider, body);
+      return;
+    }
+
+    // The lifecycle mutation above already terminalized the captured turn. If another turn became
+    // active while transcript settlement was pending, commit the legacy marker without feeding it
+    // back through the lifecycle adapter, where it would otherwise terminalize that newer turn.
+    void params.session.sendAgentMessageCommitted(params.provider, body, { localId: randomUUID() }).catch((error) => {
+      logger.debug(`[${params.provider}] Failed to commit delayed status:error compatibility marker (non-fatal)`, error);
     });
-    return true;
+  };
+
+  const beginStatusErrorSurface = (
+    detailRaw: unknown,
+    turn: TerminalTurnSnapshot = captureTerminalTurn(),
+  ): Promise<Extract<ACPMessageData, { type: 'turn_failed' }> | null> | null => {
+    if (isAbortLikeError(detailRaw)) return null;
+    const compatibilityMarkerId = beginCapturedLifecycleTurn(turn);
+    const issuePromise = surfacePrimarySessionRuntimeIssue({
+      cause: 'status_error',
+      provider: params.provider,
+      providerTurnId: turn.providerTurnId,
+      error: detailRaw,
+      session: params.session,
+    });
+    return Promise.all([compatibilityMarkerId, issuePromise]).then(([markerId, issue]) => {
+      if (turn.turnInFlight && markerId && params.session.sessionTurnLifecycle) {
+        return {
+          type: 'turn_failed',
+          id: markerId,
+          ...(issue ? { issue } : {}),
+        };
+      }
+      return null;
+    });
+  };
+
+  const beginStatusAbortSurface = (
+    turn: TerminalTurnSnapshot,
+  ): Promise<Extract<ACPMessageData, { type: 'turn_aborted' }> | null> => {
+    if (!params.session.sessionTurnLifecycle) {
+      return Promise.resolve(
+        turn.providerTurnId ? { type: 'turn_aborted', id: turn.providerTurnId } : null,
+      );
+    }
+    const compatibilityMarkerId = beginCapturedLifecycleTurn(turn);
+    const settlement = surfacePrimarySessionRuntimeIssue({
+      cause: 'cancelled',
+      provider: params.provider,
+      providerTurnId: turn.providerTurnId,
+      session: params.session,
+    });
+    return Promise.all([compatibilityMarkerId, settlement]).then(([markerId]) => {
+      if (turn.turnInFlight && markerId) {
+        return { type: 'turn_aborted', id: markerId };
+      }
+      return null;
+    });
   };
 
   const surfacePromptFailure = async (detailRaw: unknown): Promise<boolean> => {
     if (isAbortLikeError(detailRaw)) return false;
     if (turnAborted) return true;
 
-    const providerTurnId = currentTurnId ?? (turnInFlight ? ensureCurrentTurnId() : null);
+    const failedTurn = captureTerminalTurn();
+    const compatibilityMarkerId = beginCapturedLifecycleTurn(failedTurn);
+    const issueError = normalizeAcpPromptFailureRuntimeIssueError({
+      provider: params.provider,
+      error: detailRaw,
+      turnInFlight: failedTurn.turnInFlight,
+    });
+    const issuePromise = surfacePrimarySessionRuntimeIssue({
+      cause: 'session_error',
+      provider: params.provider,
+      providerTurnId: failedTurn.providerTurnId,
+      error: issueError,
+      session: params.session,
+    });
     turnAborted = true;
     clearToolCallCache();
     params.onThinkingChange(false);
@@ -1131,31 +1201,12 @@ export function createAcpRuntime(params: {
       },
     );
 
-    let compatibilityMarkerId = providerTurnId;
-    if (turnInFlight && !taskStartedSent && params.session.sessionTurnLifecycle) {
-      const handle = await params.session.sessionTurnLifecycle.beginTurn({
-        provider: params.provider,
-        ...(providerTurnId ? { providerTurnId } : {}),
-      });
-      compatibilityMarkerId = handle.turnId;
-    }
-    const issueError = normalizeAcpPromptFailureRuntimeIssueError({
-      provider: params.provider,
-      error: detailRaw,
-      turnInFlight,
-    });
-    const issue = await surfacePrimarySessionRuntimeIssue({
-      cause: 'session_error',
-      provider: params.provider,
-      providerTurnId,
-      error: issueError,
-      session: params.session,
-    });
+    const [markerId, issue] = await Promise.all([compatibilityMarkerId, issuePromise]);
     let compatibilityMarkerSent = false;
-    if (turnInFlight && compatibilityMarkerId && params.session.sessionTurnLifecycle) {
-      params.session.sendAgentMessage(params.provider, {
+    if (failedTurn.turnInFlight && markerId && params.session.sessionTurnLifecycle) {
+      publishTerminalCompatibilityMarker({
         type: 'turn_failed',
-        id: compatibilityMarkerId,
+        id: markerId,
         ...(issue ? { issue } : {}),
       });
       compatibilityMarkerSent = true;
@@ -1164,7 +1215,7 @@ export function createAcpRuntime(params: {
       provider: params.provider,
       error: detailRaw,
       issue: issue ?? null,
-      turnInFlight,
+      turnInFlight: failedTurn.turnInFlight,
       lifecycleAvailable: !!params.session.sessionTurnLifecycle,
       compatibilityMarkerSent,
     });
@@ -1261,8 +1312,15 @@ export function createAcpRuntime(params: {
       if (loadingSession) {
         if (msg.type === 'status' && msg.status === 'error') {
           turnAborted = true;
-          if (!surfaceStatusError(msg.detail)) {
+          const statusErrorSurface = beginStatusErrorSurface(msg.detail);
+          if (!statusErrorSurface) {
             params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: ensureCurrentTurnId() });
+          } else {
+            void statusErrorSurface.then((marker) => {
+              if (marker) publishTerminalCompatibilityMarker(marker);
+            }).catch((error) => {
+              logger.debug(`[${params.provider}] Failed to persist primary session runtime issue (non-fatal)`, error);
+            });
           }
         }
         return;
@@ -1273,11 +1331,18 @@ export function createAcpRuntime(params: {
           const fullText = typeof (msg as any).fullText === 'string' ? String((msg as any).fullText) : '';
           let deltaRaw = typeof (msg as any).textDelta === 'string' ? String((msg as any).textDelta) : '';
           if (!deltaRaw && fullText) {
-            if (fullText.startsWith(accumulatedResponse)) {
-              deltaRaw = fullText.slice(accumulatedResponse.length);
+            const fullTextScope = msg.fullTextScope ?? 'turn';
+            const reconciledText = fullTextScope === 'segment'
+              ? accumulatedAssistantSegmentResponse
+              : accumulatedResponse;
+            if (fullText.startsWith(reconciledText)) {
+              deltaRaw = fullText.slice(reconciledText.length);
             } else {
-              // Defensive: if a provider restarts and sends a divergent fullText, restart accumulation.
-              accumulatedResponse = '';
+              // Defensive: if a provider restarts and sends divergent fullText, restart snapshot reconciliation.
+              if (fullTextScope === 'turn') {
+                accumulatedResponse = '';
+              }
+              accumulatedAssistantSegmentResponse = '';
               deltaRaw = fullText;
             }
           }
@@ -1298,7 +1363,10 @@ export function createAcpRuntime(params: {
             messageBuffer: params.messageBuffer,
             getIsResponseInProgress: () => isResponseInProgress,
             setIsResponseInProgress: (value) => { isResponseInProgress = value; },
-            appendToAccumulatedResponse: (delta) => { accumulatedResponse += delta; },
+            appendToAccumulatedResponse: (delta) => {
+              accumulatedResponse += delta;
+              accumulatedAssistantSegmentResponse += delta;
+            },
           });
           params.turnAssistantPreviewTracker?.replace(accumulatedResponse);
 
@@ -1335,17 +1403,25 @@ export function createAcpRuntime(params: {
           }
 
           if (msg.status === 'error') {
+            const statusErrorTurn = captureTerminalTurn();
             const shouldSurfaceFailure = !turnAborted && !isAbortLikeError(msg.detail);
+            const statusErrorSettlement = shouldSurfaceFailure
+              ? beginStatusErrorSurface(msg.detail, statusErrorTurn)
+              : beginStatusAbortSurface(statusErrorTurn);
             void abortPendingAcpPermissionRequests(params.permissionHandler, 'ACP runtime status:error', (error) => {
               logger.debug(`[${params.provider}] Failed to abort pending permission requests after status:error`, error);
             });
-            void streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'status-error' }).finally(() => {
-              if (shouldSurfaceFailure) {
-                surfaceStatusError(msg.detail);
-              } else {
-                params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: ensureCurrentTurnId() });
-              }
-            });
+            void streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'status-error' })
+              .catch((error) => {
+                logger.debug(`[${params.provider}] Failed to flush streamed transcript after status:error`, error);
+              })
+              .then(async () => {
+                const marker = await statusErrorSettlement;
+                if (marker) publishTerminalCompatibilityMarker(marker);
+              })
+              .catch((error) => {
+                logger.debug(`[${params.provider}] Failed to persist primary session runtime issue (non-fatal)`, error);
+              });
             turnAborted = true;
             clearToolCallCache();
             params.onThinkingChange(false);
@@ -1364,6 +1440,7 @@ export function createAcpRuntime(params: {
             break;
           }
 
+          accumulatedAssistantSegmentResponse = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' });
           params.messageBuffer.addMessage(`Executing: ${msg.toolName}`, 'tool');
           recordToolCall(msg.callId, msg.toolName);
@@ -1526,6 +1603,7 @@ export function createAcpRuntime(params: {
           } catch (e) {
             logger.debug(`[${params.provider}] Failed to run permission-request hook (non-fatal)`, e);
           }
+          accumulatedAssistantSegmentResponse = '';
           void streamedTranscriptWriter.flushAll({ reason: 'tool-call-boundary' }).finally(() => {
             forwarder.forward(msg);
           });

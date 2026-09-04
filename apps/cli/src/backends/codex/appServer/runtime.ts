@@ -182,6 +182,21 @@ type CodexAppServerStartOrLoadOptions = Readonly<{
     initialGoal?: SessionInitialGoalRequestV1 | null;
 }>;
 
+const CODEX_APP_SERVER_STATE_RUNTIME_RETRY_INITIAL_DELAY_MS = 250;
+const CODEX_APP_SERVER_STATE_RUNTIME_RETRY_MAX_DELAY_MS = 10_000;
+
+function isRetryableCodexStateRuntimeInitializationFailure(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('Codex app-server exited before completing the request')) return false;
+    if (message.includes('failed to initialize sqlite state runtime')) return true;
+    const normalizedMessage = message.toLowerCase();
+    return normalizedMessage.includes("codex couldn't start because another codex process is using its local data")
+        && normalizedMessage.includes('failed to initialize state runtime at ')
+        && normalizedMessage.includes('failed to open log db at ')
+        && normalizedMessage.includes('database is locked')
+        && normalizedMessage.includes('failed to initialize sqlite local db');
+}
+
 /** The app server explicitly named a different thread for the requested resume. */
 export class CodexAppServerResumeIdentityMismatchError extends Error {
     readonly code = 'codex_app_server_resume_identity_mismatch';
@@ -852,11 +867,6 @@ function mergeSparseCodexSnapshotUpdate(previous: unknown, next: unknown): unkno
 
 const CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_MESSAGE =
     'Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.';
-// Emitted ONLY when Happier intentionally invalidates the connected-service auth transports to
-// apply an account switch (NOT on the real native account-changed error, which defers to the
-// prompt loop). The copy must describe the deliberate switch/restart, never "refused to continue".
-const CODEX_APP_SERVER_CONNECTED_SERVICE_SWITCH_RESTART_STATUS_MESSAGE =
-    'Happier is applying a connected-service account switch and restarting the Codex runtime...';
 const CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS = [
     'codex ran out of room',
     'context window',
@@ -898,19 +908,6 @@ class CodexAppServerTurnFailure extends Error {
         this.isTemporaryRecoverableTurnFailure = options.isTemporaryRecoverableTurnFailure;
         this.runtimeAuthClassification = options.runtimeAuthClassification;
     }
-}
-
-class CodexAppServerConnectedServiceAuthTransportInvalidatedTurn extends Error {
-    constructor() {
-        super('Codex app-server connected-service auth transport invalidated the active turn');
-        this.name = 'CodexAppServerConnectedServiceAuthTransportInvalidatedTurn';
-    }
-}
-
-function isCodexAppServerConnectedServiceAuthTransportInvalidatedTurn(
-    error: unknown,
-): error is CodexAppServerConnectedServiceAuthTransportInvalidatedTurn {
-    return error instanceof CodexAppServerConnectedServiceAuthTransportInvalidatedTurn;
 }
 
 function readModelId(value: unknown): string | null {
@@ -1340,7 +1337,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
     };
     let clientPromise: Promise<DisposableCodexAppServerClient> | null = null;
-    let connectedServiceAuthTransportInvalidationRecoveryPromise: Promise<void> | null = null;
     let currentModeId: string | null = null;
     let currentModelId: string | null = null;
     let currentReasoningEffort: string | null = null;
@@ -1403,8 +1399,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const readLiveAccountIdentity = async (): Promise<CodexLiveAccountIdentity> => {
         const client = await ensureClient();
         return await readCodexLiveAccountIdentityFromClient({
-            request: async (_method, params) => await client.request('account/read', params),
-        });
+            request: async (_method, params, options) => await client.request('account/read', params, options),
+        }, { timeoutMs: null });
     };
 
     const verifyLiveAccountAgainstAppliedIdentity = (
@@ -1971,6 +1967,21 @@ export function createCodexAppServerRuntime(params: Readonly<{
             turnId = pendingTurn?.turnId ?? latestPendingTurnId;
         }
         return turnId ?? null;
+    };
+
+    const waitForSteerableActiveTurnId = async (candidate: PendingTurn): Promise<string | null> => {
+        // Explicit prompt starts may still be waiting for provider acknowledgement. Provider-
+        // originated regular turns (including goal successors) have no providerPrompt but are
+        // already marked steerable; native reviews and compaction have neither signal.
+        if (!candidate.providerPrompt && !activeTurnAcceptsSteer) return null;
+        const waitStartedAt = Date.now();
+        while (pendingTurn?.promise === candidate.promise) {
+            const turnId = pendingTurn.turnId ?? latestPendingTurnId;
+            if (turnId && canSteerPrompt()) return turnId;
+            if (Date.now() - waitStartedAt >= turnIdWaitTimeoutMs) return null;
+            await delay(turnIdWaitPollMs);
+        }
+        return null;
     };
 
     const publishThreadId = (): void => {
@@ -3209,6 +3220,27 @@ export function createCodexAppServerRuntime(params: Readonly<{
         await updateUsageLimitRecoveryFromSurfacedIssue(issue);
     };
 
+    const requestUsageLimitGroupRecoveryForTerminalFailure = async (
+        classification: CodexConnectedServiceRuntimeFailureClassification | null,
+    ): Promise<void> => {
+        if (
+            classification?.kind !== 'usage_limit'
+            || !classification.groupId
+            || !classification.profileId
+            || typeof params.onUsageLimitGroupRecovery !== 'function'
+        ) {
+            return;
+        }
+        try {
+            await params.onUsageLimitGroupRecovery({
+                sessionId: params.session.sessionId,
+                classification,
+            });
+        } catch (error) {
+            logger.debug('[codex-app-server] Failed to request connected-service group recovery after terminal usage limit', error);
+        }
+    };
+
     // Settle the tracked primary pending turn from a terminal (`turn/completed` /
     // `turn/interrupted`) notification. Both the terminal-status write
     // (`turnBoundaryTracker.completeActiveTurn`) and the `thinking` reset live inside
@@ -3247,6 +3279,17 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 return;
             }
             await abortPendingTurnWithFailure(failure);
+            const usageLimitGroupRecoveryClassification = failure instanceof CodexAppServerTurnFailure
+                && failure.runtimeAuthClassification?.kind === 'usage_limit'
+                ? failure.runtimeAuthClassification
+                : null;
+            // The daemon may hot-apply a replacement credential back through this same
+            // runtime. Start recovery only after the terminal boundary and quota evidence
+            // are published, but do not await it while a notification bridge owns the
+            // runtime queue or the hot-apply callback can deadlock behind that bridge.
+            void requestUsageLimitGroupRecoveryForTerminalFailure(
+                usageLimitGroupRecoveryClassification,
+            );
             return;
         }
         if (method !== 'turn/completed' || isCodexTurnInterruptedStatus(terminalStatus)) {
@@ -3591,8 +3634,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
         });
     };
 
-    const ensureClient = async (): Promise<DisposableCodexAppServerClient> => {
+    const ensureClient = async (options: Readonly<{
+        reattachRetainedThread?: boolean;
+    }> = {}): Promise<DisposableCodexAppServerClient> => {
         if (!clientPromise) {
+            const retainedThreadId = options.reattachRetainedThread === false ? null : threadId;
             historyBoundary.beginHydration();
             clientPromise = createCodexAppServerClient({
                 cwd: params.directory,
@@ -3858,7 +3904,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                     }
                                 }
                                 if (terminalNotificationMatchesPendingTurn(notificationParams, terminalTurnId)) {
-                                    await settleTerminalPendingTurn(method, notificationParams, terminalTurnId);
+                                    await settleTerminalPendingTurn(
+                                        method,
+                                        notificationParams,
+                                        terminalTurnId,
+                                    );
                                     return;
                                 }
                                 // No pending turn to settle: nothing owns this completion.
@@ -3889,6 +3939,18 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     };
                     registerTerminalHandler('turn/completed');
                     registerTerminalHandler('turn/interrupted');
+                    if (retainedThreadId) {
+                        return resumeThread(client, retainedThreadId, {
+                            preserveRequestedThreadId: true,
+                        }).then(async (resumedThread) => {
+                            await applyStartOrLoadResponse(
+                                client,
+                                resumedThread.nextThreadId,
+                                resumedThread.response,
+                            );
+                            return client;
+                        });
+                    }
                     return client;
                 })
                 .catch((error) => {
@@ -4103,61 +4165,84 @@ export function createCodexAppServerRuntime(params: Readonly<{
         } else if (existingSessionId) {
             publishRequestedResumeThreadId(existingSessionId);
         }
-        const client = await ensureClient();
-        const startOrLoadResult = await (async (): Promise<Readonly<{ nextThreadId: string; response: unknown }>> => {
-            const importHistory = options.importHistory === true;
-            if (resumeId) {
-                return await resumeThread(client, resumeId, {
-                    preserveRequestedThreadId: options.strictNativeResumeIdentity === true,
-                    strictNativeResumeIdentity: options.strictNativeResumeIdentity === true,
-                    allowOversizedResponseRecovery: !importHistory,
-                    includeTurns: importHistory,
-                });
-            }
-            if (existingSessionId) {
-                return await resumeThread(client, existingSessionId, {
-                    preserveRequestedThreadId: false,
-                    allowOversizedResponseRecovery: !importHistory,
-                    includeTurns: importHistory,
-                });
-            }
-            const requestParams = {
-                cwd: params.directory,
-                ...(currentModelId ? { model: currentModelId } : {}),
-                ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                ...buildThreadConfigOverrideParams(currentReasoningEffort),
-                ...buildCurrentPermissionParams('thread'),
-                experimentalRawEvents: true,
-                persistExtendedHistory: true,
-            };
-            let response: unknown;
+        let client: DisposableCodexAppServerClient;
+        let startOrLoadResult: Readonly<{ nextThreadId: string; response: unknown }>;
+        let stateRuntimeRetryAttempt = 0;
+        let stateRuntimeRetryDelayMs = CODEX_APP_SERVER_STATE_RUNTIME_RETRY_INITIAL_DELAY_MS;
+        while (true) {
             try {
-                response = await client.request('thread/start', requestParams);
-                if (Object.prototype.hasOwnProperty.call(requestParams, 'permissions')) {
-                    permissionSupport = 'supported';
-                }
+                client = await ensureClient({ reattachRetainedThread: false });
+                startOrLoadResult = await (async (): Promise<Readonly<{ nextThreadId: string; response: unknown }>> => {
+                    const importHistory = options.importHistory === true;
+                    if (resumeId) {
+                        return await resumeThread(client, resumeId, {
+                            preserveRequestedThreadId: options.strictNativeResumeIdentity === true,
+                            strictNativeResumeIdentity: options.strictNativeResumeIdentity === true,
+                            allowOversizedResponseRecovery: !importHistory,
+                            includeTurns: importHistory,
+                        });
+                    }
+                    if (existingSessionId) {
+                        return await resumeThread(client, existingSessionId, {
+                            preserveRequestedThreadId: false,
+                            allowOversizedResponseRecovery: !importHistory,
+                            includeTurns: importHistory,
+                        });
+                    }
+                    const requestParams = {
+                        cwd: params.directory,
+                        ...(currentModelId ? { model: currentModelId } : {}),
+                        ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                        ...buildThreadConfigOverrideParams(currentReasoningEffort),
+                        ...buildCurrentPermissionParams('thread'),
+                        experimentalRawEvents: true,
+                        persistExtendedHistory: true,
+                    };
+                    let response: unknown;
+                    try {
+                        response = await client.request('thread/start', requestParams);
+                        if (Object.prototype.hasOwnProperty.call(requestParams, 'permissions')) {
+                            permissionSupport = 'supported';
+                        }
+                    } catch (error) {
+                        if (!shouldRetryWithoutPermissionProfile(error, requestParams)) {
+                            throw error;
+                        }
+                        permissionSupport = 'legacy';
+                        response = await client.request('thread/start', {
+                            cwd: params.directory,
+                            ...(currentModelId ? { model: currentModelId } : {}),
+                            ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                            ...buildThreadConfigOverrideParams(currentReasoningEffort),
+                            ...buildCurrentLegacyPermissionParams('thread'),
+                            experimentalRawEvents: true,
+                            persistExtendedHistory: true,
+                        });
+                    }
+                    const startedThreadId = readThreadId(response);
+                    if (!startedThreadId) {
+                        throw new Error('Codex app-server thread/start returned no thread id');
+                    }
+                    await historyBoundary.hydrateFromThreadSnapshot(response);
+                    return { nextThreadId: startedThreadId, response };
+                })();
+                break;
             } catch (error) {
-                if (!shouldRetryWithoutPermissionProfile(error, requestParams)) {
+                if (!isRetryableCodexStateRuntimeInitializationFailure(error)) {
                     throw error;
                 }
-                permissionSupport = 'legacy';
-                response = await client.request('thread/start', {
-                    cwd: params.directory,
-                    ...(currentModelId ? { model: currentModelId } : {}),
-                    ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                    ...buildThreadConfigOverrideParams(currentReasoningEffort),
-                    ...buildCurrentLegacyPermissionParams('thread'),
-                    experimentalRawEvents: true,
-                    persistExtendedHistory: true,
+                stateRuntimeRetryAttempt += 1;
+                logger.warn('[codex-app-server] Shared SQLite state runtime is temporarily unavailable; retrying attach', {
+                    attempt: stateRuntimeRetryAttempt,
+                    retryDelayMs: stateRuntimeRetryDelayMs,
                 });
+                await delay(stateRuntimeRetryDelayMs);
+                stateRuntimeRetryDelayMs = Math.min(
+                    stateRuntimeRetryDelayMs * 2,
+                    CODEX_APP_SERVER_STATE_RUNTIME_RETRY_MAX_DELAY_MS,
+                );
             }
-            const startedThreadId = readThreadId(response);
-            if (!startedThreadId) {
-                throw new Error('Codex app-server thread/start returned no thread id');
-            }
-            await historyBoundary.hydrateFromThreadSnapshot(response);
-            return { nextThreadId: startedThreadId, response };
-        })();
+        }
         await applyStartOrLoadResponse(
             client,
             startOrLoadResult.nextThreadId,
@@ -4277,51 +4362,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
             '[codex-app-server] Codex context-window recovery failed; surfacing original turn failure',
             recoveryError,
         );
-    };
-
-    const waitForConnectedServiceAuthTransportInvalidationRecovery = async (): Promise<void> => {
-        const recovery = connectedServiceAuthTransportInvalidationRecoveryPromise;
-        if (recovery) {
-            await recovery;
-        }
-    };
-
-    const restartCodexRuntimeForConnectedServiceSwitch = async (activeThreadId: string): Promise<void> => {
-        if (connectedServiceAuthTransportInvalidationRecoveryPromise) {
-            await connectedServiceAuthTransportInvalidationRecoveryPromise;
-            return;
-        }
-        params.session.sendSessionEvent({
-            type: 'message',
-            message: CODEX_APP_SERVER_CONNECTED_SERVICE_SWITCH_RESTART_STATUS_MESSAGE,
-        });
-        logger.debug('[codex-app-server] restarting process after Codex auth account changed', {
-            threadId: activeThreadId,
-        });
-        const recovery = (async () => {
-            const pendingTurnError = new CodexAppServerConnectedServiceAuthTransportInvalidatedTurn();
-            await disposeClient({
-                emitUndeliverablePrompts: false,
-                pendingTurnError,
-            });
-            const resumedClient = await ensureClient();
-            const resumedThread = await resumeThread(resumedClient, activeThreadId, {
-                preserveRequestedThreadId: true,
-            });
-            await applyStartOrLoadResponse(
-                resumedClient,
-                resumedThread.nextThreadId,
-                resumedThread.response,
-            );
-        })();
-        connectedServiceAuthTransportInvalidationRecoveryPromise = recovery;
-        try {
-            await recovery;
-        } finally {
-            if (connectedServiceAuthTransportInvalidationRecoveryPromise === recovery) {
-                connectedServiceAuthTransportInvalidationRecoveryPromise = null;
-            }
-        }
     };
 
     const beginPendingTurnForThread = async (
@@ -4635,7 +4675,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
             assertConnectedServiceAuthGroupAvailable();
             const client = await ensureClient();
-            const expectedTurnId = (activeTurn.turnId ?? latestPendingTurnId) ?? (await waitForActiveTurnId());
+            const expectedTurnId = await waitForSteerableActiveTurnId(activeTurn);
             if (pendingTurn?.promise !== activeTurn.promise || !canSteerPrompt()) {
                 throw new Error('Codex app-server active turn is not steerable');
             }
@@ -4865,21 +4905,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 } catch (error) {
                     const failure = error instanceof Error ? error : new Error(String(error));
                     const failedTurnHadMeaningfulActivity = activeTurnHasMeaningfulContextWindowRecoveryActivity;
-                    const isConnectedServiceAuthTransportInvalidation =
-                        isCodexAppServerConnectedServiceAuthTransportInvalidatedTurn(failure);
                     await finishPendingTurn({
                         error: failure,
-                        emitUndeliverablePrompt: isConnectedServiceAuthTransportInvalidation ? false : undefined,
                         flushReason: 'abort',
                     });
-                    if (isConnectedServiceAuthTransportInvalidation) {
-                        await waitForConnectedServiceAuthTransportInvalidationRecovery();
-                        if (failedTurnHadMeaningfulActivity) {
-                            promptForAttempt = contextWindowRecoveryConfig.continuationPrompt;
-                            optionsForAttempt = buildCodexAppServerRetryDeliveryIdentityOptions(pendingProviderPrompt);
-                        }
-                        continue;
-                    }
                     if (isCodexAppServerTemporaryRecoverableTurnFailureError(failure)) {
                         const originalFailure: Error = originalTemporaryRecoverableTurnFailure ?? failure;
                         originalTemporaryRecoverableTurnFailure = originalFailure;
@@ -5100,7 +5129,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             verification: buildDirectLiveExactVerification(partialAppliedIdentity),
                         }
                         : {}),
-                    ...(applied.recovery ? { recovery: applied.recovery } : {}),
                 };
             }
             const appliedRuntimeIdentity = buildAppliedRuntimeIdentity(applied.activeAccountId, null);
@@ -5114,7 +5142,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     appliedVia: applied.appliedVia,
                     activeAccountId: applied.activeAccountId,
                     partialState: 'runtime_auth_applied',
-                    recovery: 'restart_resume',
                     verification: buildDirectLiveExactVerification(appliedRuntimeIdentity),
                     durability: applied.durability,
                 };
@@ -5230,13 +5257,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
             };
         },
         invalidateConnectedServiceAuthTransports: async () => {
-            const activeThreadId = threadId;
-            if (!activeThreadId) {
-                // A completed/idle app-server session has no thread-local transports to reset.
-                return { ok: true };
-            }
-            await restartCodexRuntimeForConnectedServiceSwitch(activeThreadId);
-            return { ok: true };
+            // Kept only as a tolerant RPC seam for older callers. Codex applies connected-service
+            // credentials through account/login/start; restarting the app-server would interrupt
+            // an active turn and create a second, competing auth-application path.
+            return unsupportedSessionRuntimeMethod(
+                SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS,
+            );
         },
         refreshGoal: async () => {
             const activeThreadId = threadId;

@@ -146,6 +146,12 @@ test('release workflow fans a versioned Stack target through immutable publicati
 
   assert.match(String(npm?.if ?? ''), /needs\.plan\.outputs\.publish_npm_needed == 'true'/);
   assert.match(String(npm?.with?.publish_stack ?? ''), /needs\.plan\.outputs\.npm_publish_stack_needed == 'true'/);
+  assert.ok(npm?.needs?.includes('publish_cli_binaries'));
+  assert.ok(npm?.needs?.includes('publish_hstack_binaries'));
+  assert.ok(npm?.needs?.includes('publish_server_runtime'));
+  assert.equal(npm?.with?.cli_version, '${{ needs.publish_cli_binaries.outputs.version }}');
+  assert.equal(npm?.with?.stack_version, '${{ needs.publish_hstack_binaries.outputs.version }}');
+  assert.equal(npm?.with?.server_version, '${{ needs.publish_server_runtime.outputs.version }}');
 
   assert.equal(finalVerifier?.needs?.includes('publish_hstack_binaries'), false);
   assert.ok(finalVerifier?.needs?.includes('verify_release_candidates'));
@@ -250,7 +256,8 @@ test('release-npm is compatible with npm trusted publishing (OIDC)', async () =>
   const raw = await loadWorkflow('release-npm.yml');
 
   assert.match(raw, /node scripts\/pipeline\/npm\/publish-tarball\.mjs/, 'trusted release control should invoke the canonical npm tarball publisher directly');
-  assert.match(raw, /node scripts\/pipeline\/run\.mjs npm-release/, 'release-npm should delegate npm pack preparation to the pipeline command');
+  assert.match(raw, /trusted-control\/scripts\/pipeline\/npm\/release-packages\.mjs/, 'release-npm should prepare packs with trusted workflow-control code');
+  assert.match(raw, /--repo-root "\$GITHUB_WORKSPACE"/, 'trusted npm control must operate on the exact candidate checkout');
   assert.doesNotMatch(raw, /npm pack --ignore-scripts --json/, 'release-npm should not embed npm pack json parsing boilerplate (use release-packages.mjs)');
   assert.doesNotMatch(raw, /npm install --global npm@11/, 'release-npm should avoid global npm installs (use pinned npm via npx inside the pipeline)');
   assert.doesNotMatch(raw, /NPM_TOKEN is required for npm publish\./);
@@ -293,11 +300,29 @@ test('release-npm derives unique preview prerelease versions from base versions'
   assert.match(raw, /dir="packages\/relay-server"/);
   assert.match(raw, /SERVER_RUNNER_DIR:\s*\$\{\{ steps\.server_runner\.outputs\.dir \}\}/);
   assert.match(raw, /SERVER_RUNNER_DIR:\s*\$\{\{ steps\.server_runner\.outputs\.dir \}\}[\s\S]*?yarn --cwd "\$\{SERVER_RUNNER_DIR\}" test/);
-  assert.match(raw, /node scripts\/pipeline\/run\.mjs npm-release[\s\S]*?--server-runner-dir "\$\{SERVER_RUNNER_DIR\}"/);
+  assert.match(raw, /trusted-control\/scripts\/pipeline\/npm\/release-packages\.mjs[\s\S]*?--server-runner-dir "\$\{SERVER_RUNNER_DIR\}"/);
 
   const script = await loadFile('scripts/pipeline/npm/set-preview-versions.mjs');
   assert.match(script, /resolveRollingPublishVersion/);
   assert.doesNotMatch(script, /GITHUB_RUN_NUMBER/);
+});
+
+test('release-npm reuses caller-bound candidate versions instead of allocating replacements', async () => {
+  const workflow = parse(await loadWorkflow('release-npm.yml'));
+  const inputs = workflow?.on?.workflow_call?.inputs ?? {};
+  for (const name of ['cli_version', 'stack_version', 'server_version']) {
+    assert.equal(inputs[name]?.required, false);
+    assert.equal(inputs[name]?.default, '');
+    assert.equal(inputs[name]?.type, 'string');
+  }
+
+  const metadata = workflow?.jobs?.release?.steps?.find((step) => step.name === 'Release metadata');
+  assert.equal(metadata?.env?.INPUT_CLI_VERSION, '${{ inputs.cli_version }}');
+  assert.equal(metadata?.env?.INPUT_STACK_VERSION, '${{ inputs.stack_version }}');
+  assert.equal(metadata?.env?.INPUT_SERVER_VERSION, '${{ inputs.server_version }}');
+  assert.match(metadata?.run ?? '', /--cli-version "\$\{INPUT_CLI_VERSION\}"/);
+  assert.match(metadata?.run ?? '', /--stack-version "\$\{INPUT_STACK_VERSION\}"/);
+  assert.match(metadata?.run ?? '', /--server-version "\$\{INPUT_SERVER_VERSION\}"/);
 });
 
 test('final release workflows only consume already-materialized version bumps', async () => {
@@ -337,10 +362,10 @@ test('publish-github-release delegates release creation + asset upload to the pi
   assert.doesNotMatch(raw, /gh api -X DELETE/, 'publish-github-release should not embed release asset pruning logic');
 });
 
-test('promote-ui native_submit uses the shared Expo submit script (handles preview credential gaps)', async () => {
+test('promote-ui native_submit uses the shared Expo submit script and reports preview credential gaps after preserving siblings', async () => {
   const promoteUi = await loadWorkflow('promote-ui.yml');
   assert.match(promoteUi, /uses:\s*\.\/\.github\/workflows\/build-ui-mobile-local\.yml/);
-  assert.match(promoteUi, /action:\s*\$\{\{\s*inputs\.expo_action == 'native_submit' && 'build_and_submit' \|\| 'build_only'\s*\}\}/);
+  assert.match(promoteUi, /action:\s*\$\{\{\s*\(inputs\.expo_action == 'native_submit' \|\| inputs\.expo_action == 'full'\) && 'build_and_submit' \|\| 'build_only'\s*\}\}/);
 
   const buildUiMobileLocal = await loadWorkflow('build-ui-mobile-local.yml');
   assert.match(buildUiMobileLocal, /node scripts\/pipeline\/run\.mjs ui-mobile-release/);
@@ -355,6 +380,16 @@ test('promote-ui native_submit uses the shared Expo submit script (handles previ
   assert.match(script, /for \(const platform of platforms\)/);
   assert.match(script, /allowsBestEffortSubmit\(environment\)/);
   assert.match(script, /::warning::Expo submit failed for/);
+  assert.match(script, /process\.exitCode = 1/);
+});
+
+test('promote-ui full publication prepares OTA and publishes native and APK surfaces', async () => {
+  const promoteUi = await loadWorkflow('promote-ui.yml');
+  assert.match(promoteUi, /- full\b/);
+  assert.match(promoteUi, /inputs\.expo_action == 'ota' \|\| inputs\.expo_action == 'full'/);
+  assert.match(promoteUi, /inputs\.expo_action == 'native_submit' \|\| inputs\.expo_action == 'full'/);
+  assert.match(promoteUi, /inputs\.expo_action == 'native' \|\| inputs\.expo_action == 'native_submit' \|\| inputs\.expo_action == 'full'/);
+  assert.match(promoteUi, /\(inputs\.expo_action == 'native_submit' \|\| inputs\.expo_action == 'full'\) && 'build_and_submit'/);
 });
 
 test('promote-ui prepares OTA bytes without secrets and publishes the exact bound artifacts with trusted control', async () => {
@@ -398,6 +433,7 @@ test('release workflow lets promote-ui derive exact-candidate Expo notes from th
   const workflow = parse(raw);
   assert.equal(workflow?.on?.workflow_dispatch?.inputs?.release_message, undefined, 'release.yml must not accept operator-authored release notes');
   assert.match(raw, /deploy_ui:[\s\S]*?uses:\s*\.\/\.github\/workflows\/promote-ui\.yml/);
+  assert.equal(workflow.jobs.deploy_ui.with.run_tests, false, 'release admission owns source tests; UI promotion must not rerun them after artifact verification');
   assert.doesNotMatch(raw, /deploy_ui:[\s\S]*?expo_update_message:/);
 });
 

@@ -4414,6 +4414,9 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
             fail('--qualified-v4-activation-approval is not supported by this release line because it has no Qualified V4 activation path.');
           }
           const promotionSourceBranch = resolveReleasePromotionSourceBranch(action);
+          const productionPromotionMode = action === 'reset main from preview' || action === 'reset main from dev'
+            ? 'reset'
+            : 'fast-forward';
 
           const uiExpoAction = String(values['ui-expo-action'] ?? '').trim() || 'none';
           const desktopMode = String(values['desktop-mode'] ?? '').trim() || 'none';
@@ -4448,11 +4451,17 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           if (releaseNotesId && !RELEASE_NOTES_ID.test(releaseNotesId)) {
             fail('--release-notes-id must contain only lowercase letters, digits, dots, underscores, or hyphens.');
           }
-          if (!['none', 'ota', 'native', 'native_submit'].includes(uiExpoAction)) {
-            fail(`--ui-expo-action must be one of: none, ota, native, native_submit (got: ${uiExpoAction})`);
+          if (!['none', 'ota', 'native', 'native_submit', 'full'].includes(uiExpoAction)) {
+            fail(`--ui-expo-action must be one of: none, ota, native, native_submit, full (got: ${uiExpoAction})`);
           }
           if (!['none', 'build_only', 'build_and_publish'].includes(desktopMode)) {
             fail(`--desktop-mode must be one of: none, build_only, build_and_publish (got: ${desktopMode})`);
+          }
+          if (!deployTargets.includes('ui') && uiExpoAction !== 'none') {
+            fail('--ui-expo-action requires --deploy-targets to include ui.');
+          }
+          if (!deployTargets.includes('ui') && desktopMode !== 'none') {
+            fail('--desktop-mode requires --deploy-targets to include ui.');
           }
 
           const requestedReleaseProfileId = String(values['release-profile'] ?? '').trim();
@@ -4484,8 +4493,11 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
                 kind: 'happier.release-dispatch-plan.v3',
                 schemaVersion: 3,
                 sourceBranch: promotionSourceBranch,
+                productionPromotionMode,
                 authorizedPromotionSourceSha: authorizedPromotionSource.sha,
                 effectiveDeployTargets: deployTargets,
+                uiExpoAction,
+                desktopMode,
                 validationProfile: releaseProfile.id,
                 operationId,
                 releaseNotesId,

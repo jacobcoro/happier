@@ -244,7 +244,7 @@ jobs:
       - name: Upload the exact built site
         uses: actions/upload-artifact@v4
         with:
-          name: docs-out-${{ github.sha }}
+          name: docs-out-${{ needs.resolve_source.outputs.candidate_sha }}
           path: apps/docs/out
           retention-days: 7
           if-no-files-found: error
@@ -306,7 +306,7 @@ jobs:
 
   # Publishes the exact bytes the build job produced. Kept out of `promote`
   # because that job owns release-shared (GitHub App) secrets and a job may only
-  # bind one environment; Cloudflare credentials live in docs-deploy.
+  # bind one environment; shared Cloudflare credentials live in cloudflare-deploy.
   #
   # This replaced a Cloudflare PAGES deploy hook, which rebuilt the app inside
   # Cloudflare's build container on every push to deploy/<env>/docs — bypassing
@@ -314,10 +314,10 @@ jobs:
   # reconnect Cloudflare's Git integration: two publishers for one Worker race,
   # and CI is the one that ran the checks.
   deploy_cloudflare:
-    needs: [promote]
+    needs: [release_actor_guard, resolve_source, validate_candidate, promote]
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: docs-deploy
+    environment: cloudflare-deploy
     permissions:
       contents: read
     steps:
@@ -333,7 +333,7 @@ jobs:
       - name: Download the exact built site
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: docs-out-${{ github.sha }}
+          name: docs-out-${{ needs.resolve_source.outputs.candidate_sha }}
           path: apps/docs/out
       # A green build that produced a partial export publishes a dead site just
       # as successfully as a good one. These are the files whose absence is
@@ -360,16 +360,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_SHA: ${{ needs.resolve_source.outputs.candidate_sha }}
         working-directory: apps/docs
         run: |
-          set -euo pipefail
-          if [ "$DEPLOY_ENVIRONMENT" = production ]; then
-            npx --yes wrangler@4 deploy --message "promote ${{ github.sha }}"
-          else
-            npx --yes wrangler@4 versions upload --preview-alias preview --message "promote ${{ github.sha }}"
-          fi
+          bash ../../scripts/pipeline/cloudflare/publish-worker.sh \
+            --environment "$DEPLOY_ENVIRONMENT" \
+            --release-sha "$RELEASE_SHA"
       - name: Cloudflare note
         env:
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_SHA: ${{ needs.resolve_source.outputs.candidate_sha }}
         run: |
-          echo "Published apps/docs/out to the happier-docs Worker ($DEPLOY_ENVIRONMENT) from ${{ github.sha }}." >> "$GITHUB_STEP_SUMMARY"
+          echo "Published apps/docs/out to the happier-docs Worker ($DEPLOY_ENVIRONMENT) from $RELEASE_SHA." >> "$GITHUB_STEP_SUMMARY"

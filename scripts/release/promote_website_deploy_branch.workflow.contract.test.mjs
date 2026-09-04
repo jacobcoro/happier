@@ -41,8 +41,7 @@ test('promote-website publishes to Cloudflare and not to the Dokploy webhook', a
   const raw = await loadWorkflow('promote-website.yml');
   assert.doesNotMatch(raw, /node scripts\/pipeline\/deploy\/trigger-webhooks\.mjs/);
   assert.doesNotMatch(raw, /CF_WEBHOOK_DEPLOY_CLIENT_(ID|SECRET)/);
-  assert.match(raw, /wrangler@4 deploy/);
-  assert.match(raw, /wrangler@4 versions upload --preview-alias preview/);
+  assert.match(raw, /scripts\/pipeline\/cloudflare\/publish-worker\.sh/);
 });
 
 // Cloudflare credentials must stay out of the job that builds candidate code,
@@ -57,7 +56,7 @@ test('promote-website builds without deploy secrets and publishes only the built
   assert.doesNotMatch(validate, /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/);
   assert.match(validate, /actions\/upload-artifact@/);
 
-  assert.equal(deploy?.environment, 'website-deploy');
+  assert.equal(deploy?.environment, 'cloudflare-deploy');
   assert.match(JSON.stringify(deploy), /actions\/download-artifact@/);
 
   const upload = parsed.jobs.validate_candidate.steps.find(
