@@ -51,6 +51,34 @@ Two properties make the result trustworthy:
 `yarn ci:act` is a different tool: it replays a GitHub Actions job inside Docker, which is for
 debugging the workflow itself rather than for getting a verdict on your code.
 
+### Known limits, measured 2026-09-04
+
+The first full local pass on `fork/self-host` finished **INCOMPLETE**. Six lanes completed in
+50m50s serial: `typecheck`, `server` and `release-contracts` passed; `stack`, `cli` and
+`shared-packages` failed; `ui` was killed and `privacy-kit-bun` never ran. Two obstacles came out
+of it, and both must be fixed before a local verdict is fast enough or safe enough to be the
+everyday check.
+
+**The `ui` lane can exhaust the machine.** One vitest worker in `apps/ui` reached **21.4 GB** after
+40 minutes on a 62 GB desktop, driving the box to 56 GB used with swap fully exhausted and 658 MB
+free; every other process was under 1 GB. That is a leak or an unbounded fixture, not slowness.
+Capping workers does not help, because a worker cap bounds concurrency and not per-worker heap, so
+no `--workers` value makes this lane safe to run beside a desktop session. Until the heap growth
+itself is fixed, keep `ui` off a machine someone is using. Diagnosing it is its own task.
+
+**The `stack` lane is serial for a fixable reason.** Its ~16 minutes are serial because
+`apps/stack/scripts/test_ci.mjs` creates a *single* `isolatedStackRoot` and shares it across every
+test file, so the files genuinely cannot run concurrently as written. Giving each shard its own
+`isolatedStackRoot` and running shards in parallel preserves that isolation exactly while cutting
+the lane to roughly three minutes. Bundled-dependency preparation has to be hoisted ahead of the
+fork, which is the other race the current comment warns about.
+
+**The largest day-to-day win is not either of those.** It is running only the lanes a change can
+affect: diff against the merge base, map paths to lanes, and run that subset, keeping the full pass
+as the pre-merge gate. `tests.yml` already does this for UI E2E, so the pattern exists in-repo.
+
+Neither change weakens a test.
+
 ## TypeScript toolchain
 
 The repository deliberately separates the compiler from the programmatic TypeScript API:
