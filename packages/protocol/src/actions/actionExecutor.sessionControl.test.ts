@@ -337,6 +337,54 @@ describe('createActionExecutor (session control)', () => {
     expect(sessionArchiveSet).toHaveBeenCalledWith({ sessionId: 's1', archived: false, serverId: 'server-a' });
   });
 
+  it('executes session.pin via deps.sessionPinSet', async () => {
+    const sessionPinSet = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionPinSet,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    const res = await executor.execute(
+      'session.pin' as any,
+      { sessionId: 's1' },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true } });
+    expect(sessionPinSet).toHaveBeenCalledWith({ sessionId: 's1', pinned: true, serverId: 'server-a' });
+  });
+
+  it('executes session.unpin via deps.sessionPinSet', async () => {
+    const sessionPinSet = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionPinSet,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    const res = await executor.execute(
+      'session.unpin' as any,
+      { sessionId: 's1' },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true } });
+    expect(sessionPinSet).toHaveBeenCalledWith({ sessionId: 's1', pinned: false, serverId: 'server-a' });
+  });
+
+  it('executes session.pins.list via deps.sessionPinsList', async () => {
+    const sessionPinsList = vi.fn(async () => ({ ok: true, pins: [] }));
+    const executor = createExecutor({ sessionPinsList });
+
+    const res = await executor.execute(
+      'session.pins.list' as any,
+      {},
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true, pins: [] } });
+    expect(sessionPinsList).toHaveBeenCalledWith({});
+  });
+
   it('executes session.status.get via deps.sessionStatusGet', async () => {
     const sessionStatusGet = vi.fn(async () => ({ ok: true }));
     const executor = createExecutor({

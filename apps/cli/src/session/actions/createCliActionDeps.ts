@@ -62,6 +62,7 @@ import { requestSessionStop } from '@/session/services/requestSessionStop';
 import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
 import { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import { setSessionArchivedState } from '@/session/services/setSessionArchivedState';
+import { listSessionPins, setSessionPinState } from '@/session/services/setSessionPinState';
 import { setSessionModel } from '@/session/services/setSessionModel';
 import { setSessionMode } from '@/session/services/setSessionMode';
 import { setSessionPermissionMode } from '@/session/services/setSessionPermissionMode';
@@ -1733,6 +1734,20 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
       return await setSessionArchivedState({ credentials: params.credentials, idOrPrefix: sessionId, archived: archived === true });
+    },
+
+    sessionPinSet: async ({ sessionId, pinned }) => {
+      if (!params.credentials) {
+        return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      }
+      return await setSessionPinState({ credentials: params.credentials, idOrPrefix: sessionId, pinned: pinned === true });
+    },
+
+    sessionPinsList: async () => {
+      if (!params.credentials) {
+        return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      }
+      return await listSessionPins({ credentials: params.credentials });
     },
 
     sessionStatusGet: async ({ sessionId, live }) => {

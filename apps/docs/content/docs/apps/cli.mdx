@@ -389,7 +389,7 @@ Wait for an agent response (useful for scripts; can time out if the agent is bus
 happier session send <session-id> "ping" --wait --timeout 60
 ```
 
-### Status, stop, archive
+### Status, stop, archive, pin
 
 ```bash
 happier session status <session-id>
@@ -398,6 +398,9 @@ happier session wait <session-id> --timeout 60
 happier session stop <session-id>
 happier session archive <session-id>
 happier session unarchive <session-id>
+happier session pin <session-id>
+happier session unpin <session-id>
+happier session pins
 ```
 
 ### Set title / model / permission mode
