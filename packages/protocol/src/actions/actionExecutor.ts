@@ -286,6 +286,8 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
   sessionModelSet?: (args: Readonly<{ sessionId: string; modelId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionArchiveSet?: (args: Readonly<{ sessionId: string; archived: boolean; serverId?: string | null }>) => Promise<unknown>;
+  sessionPinSet?: (args: Readonly<{ sessionId: string; pinned: boolean; serverId?: string | null }>) => Promise<unknown>;
+  sessionPinsList?: (args: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
   sessionStatusGet?: (args: Readonly<{ sessionId: string; live?: boolean; serverId?: string | null }>) => Promise<unknown>;
   sessionWorkStateGet?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionGoalGet?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
@@ -2227,6 +2229,29 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             archived: actionId === 'session.archive',
             ...(serverId ? { serverId } : {}),
           });
+          return { ok: true, result: res };
+        }
+
+        if (actionId === 'session.pin' || actionId === 'session.unpin') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionPinSet) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.pin' };
+          }
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const res = await deps.sessionPinSet({
+            sessionId,
+            pinned: actionId === 'session.pin',
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: res };
+        }
+
+        if (actionId === 'session.pins.list') {
+          if (!deps.sessionPinsList) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.pins.list' };
+          }
+          const res = await deps.sessionPinsList({});
           return { ok: true, result: res };
         }
 

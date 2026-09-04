@@ -23,6 +23,9 @@ describe('handleSessionCommand help output', () => {
       expect(output.text()).toContain('happier session set-model <session-id-or-prefix-or-tag> <model-id> [--json]');
       expect(output.text()).toContain('happier session archive <session-id-or-prefix-or-tag> [--json]');
       expect(output.text()).toContain('happier session unarchive <session-id-or-prefix-or-tag> [--json]');
+      expect(output.text()).toContain('happier session pin <session-id-or-prefix-or-tag> [--json]');
+      expect(output.text()).toContain('happier session unpin <session-id-or-prefix-or-tag> [--json]');
+      expect(output.text()).toContain('happier session pins [--json]');
       expect(output.text()).toContain('happier session history <session-id-or-prefix-or-tag> [--limit N] [--format compact|raw] [--include-meta] [--include-structured-payload] [--json]');
       expect(output.text()).toContain('happier session actions list [--json]');
       expect(output.text()).toContain('happier session actions describe <action-id> [--json]');
@@ -55,6 +58,9 @@ describe('handleSessionCommand help output', () => {
     [['set-model', '--help'], 'happier session set-model <session-id-or-prefix-or-tag> <model-id>'],
     [['archive', '--help'], 'happier session archive <session-id-or-prefix-or-tag>'],
     [['unarchive', '--help'], 'happier session unarchive <session-id-or-prefix-or-tag>'],
+    [['pin', '--help'], 'happier session pin <session-id-or-prefix-or-tag>'],
+    [['unpin', '--help'], 'happier session unpin <session-id-or-prefix-or-tag>'],
+    [['pins', '--help'], 'happier session pins [--json]'],
     [['review', '--help'], 'happier session review start <session-id-or-prefix-or-tag>'],
     [['review', 'start', '--help'], 'happier session review start <session-id-or-prefix-or-tag>'],
     [['plan', '--help'], 'happier session plan start <session-id-or-prefix-or-tag>'],

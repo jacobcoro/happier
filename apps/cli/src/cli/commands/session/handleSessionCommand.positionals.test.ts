@@ -16,6 +16,8 @@ describe('handleSessionCommand required positionals', () => {
     ['history', ['history', '--json']],
     ['archive', ['archive', '--json']],
     ['unarchive', ['unarchive', '--json']],
+    ['pin', ['pin', '--json']],
+    ['unpin', ['unpin', '--json']],
     ['run list', ['run', 'list', '--json']],
   ] as const)('rejects missing %s ids before reading credentials', async (_label, argv) => {
     const readCredentialsFn = vi.fn(async () => {

@@ -168,6 +168,20 @@ happier session archive <session-id-or-prefix>
 happier session unarchive <session-id-or-prefix>
 ```
 
+Pin / unpin, and read the pinned set back:
+
+```bash
+happier session pin <session-id-or-prefix>
+happier session unpin <session-id-or-prefix>
+happier session pins
+```
+
+Both writes are idempotent: pinning an already-pinned session and unpinning an
+unpinned one both succeed and change nothing. `happier session pins` reports
+what the server holds, so an automation can verify a pin rather than trust the
+write response. The server only reports a pin for a visible, unarchived
+session.
+
 Update metadata:
 
 ```bash
@@ -210,6 +224,9 @@ These session control commands map to canonical actions such as:
 - `session.stop`
 - `session.archive`
 - `session.unarchive`
+- `session.pin`
+- `session.unpin`
+- `session.pins.list`
 - `session.wait.idle`
 - `session.message.send`
 - `session.run.start`

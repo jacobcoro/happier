@@ -12,6 +12,8 @@ import { cmdSessionWait } from './wait';
 import { cmdSessionStop } from './stop';
 import { cmdSessionArchive } from './archive';
 import { cmdSessionUnarchive } from './unarchive';
+import { cmdSessionSetPin } from './pin';
+import { cmdSessionPins } from './pins';
 import { cmdSessionSetTitle } from './setTitle';
 import { cmdSessionSetPermissionMode } from './setPermissionMode';
 import { cmdSessionSetModel } from './setModel';
@@ -50,6 +52,9 @@ function inferSessionKind(argv: readonly string[]): string {
   if (sub === 'stop') return 'session_stop';
   if (sub === 'archive') return 'session_archive';
   if (sub === 'unarchive') return 'session_unarchive';
+  if (sub === 'pin') return 'session_pin';
+  if (sub === 'unpin') return 'session_unpin';
+  if (sub === 'pins') return 'session_pins';
   if (sub === 'history') return 'session_history';
   if (sub === 'actions') {
     const actionSub = String(argv[1] ?? '').trim();
@@ -92,6 +97,9 @@ const SESSION_HELP_BY_COMMAND = {
   'set-model': 'happier session set-model <session-id-or-prefix-or-tag> <model-id> [--json]',
   archive: 'happier session archive <session-id-or-prefix-or-tag> [--json]',
   unarchive: 'happier session unarchive <session-id-or-prefix-or-tag> [--json]',
+  pin: 'happier session pin <session-id-or-prefix-or-tag> [--json]',
+  unpin: 'happier session unpin <session-id-or-prefix-or-tag> [--json]',
+  pins: 'happier session pins [--json]',
   'review start': 'happier session review start <session-id-or-prefix-or-tag> --engines <id1,id2> [--instructions <text>] [--json]',
   'plan start': 'happier session plan start <session-id-or-prefix-or-tag> --backends <id1,id2> --instructions <text> [--json]',
   'delegate start': 'happier session delegate start <session-id-or-prefix-or-tag> --backends <id1,id2> --instructions <text> [--json]',
@@ -229,6 +237,15 @@ export async function handleSessionCommand(
         return;
       case 'unarchive':
         await cmdSessionUnarchive(argv, { readCredentialsFn });
+        return;
+      case 'pin':
+        await cmdSessionSetPin(argv, { readCredentialsFn }, { pinned: true });
+        return;
+      case 'unpin':
+        await cmdSessionSetPin(argv, { readCredentialsFn }, { pinned: false });
+        return;
+      case 'pins':
+        await cmdSessionPins(argv, { readCredentialsFn });
         return;
       case 'history':
         await cmdSessionHistory(argv, { readCredentialsFn });
