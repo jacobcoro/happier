@@ -717,6 +717,53 @@ describe('messages domain: ordering', () => {
         expect(get().sessionMessages.s1.messageIdsOldestFirst).toHaveLength(1);
     });
 
+    it('settles an accepted direct-send projection from its matching recovered committed message', () => {
+        const { get, domain } = createHarness({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    createdAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    metadataVersion: 1,
+                    metadata: null,
+                    permissionMode: null,
+                    permissionModeUpdatedAt: 0,
+                    agentState: null,
+                },
+            },
+            sessionPending: {
+                s1: {
+                    isLoaded: true,
+                    discarded: [],
+                    messages: [{
+                        id: 'pending-direct',
+                        localId: 'direct-local',
+                        source: 'local_outbound',
+                        deliveryStatus: 'accepted',
+                        createdAt: 1_000,
+                        updatedAt: 1_000,
+                        text: 'delivered through RPC',
+                        rawRecord: { role: 'user', content: { type: 'text', text: 'delivered through RPC' } },
+                    }],
+                },
+            },
+        });
+
+        domain.applyMessages('s1', [{
+            id: 'history-direct',
+            seq: 2,
+            localId: 'direct-local',
+            createdAt: 2_000,
+            transcriptObservationProvenance: { kind: 'non_dependent', source: 'history' },
+            isSidechain: false,
+            role: 'user',
+            content: { type: 'text', text: 'delivered through RPC' },
+        } as any]);
+
+        expect(get().sessionPending.s1.messages).toEqual([]);
+    });
+
     it('retains recovered history when its localId collides with an already materialized live row', () => {
         const { get, domain } = createHarness({ sessions: { s1: { id: 's1', createdAt: 1, updatedAt: 1 } } });
         domain.applyMessages('s1', [{

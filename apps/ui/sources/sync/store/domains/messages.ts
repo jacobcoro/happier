@@ -842,13 +842,25 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 if (pendingState && pendingState.messages.length > 0) {
                     const localIdsToClear = new Set<string>();
                     for (const m of processedMessages) {
-                        if (
-                            !isRecoveredHistoryTranscriptObservationProvenance(m.transcriptObservationProvenance)
-                            && m.kind === 'user-text'
-                            && m.localId
-                        ) {
+                        if (m.kind !== 'user-text' || !m.localId) continue;
+                        if (!isRecoveredHistoryTranscriptObservationProvenance(m.transcriptObservationProvenance)) {
                             localIdsToClear.add(m.localId);
+                            continue;
                         }
+                        // A runtime-RPC acknowledgement proves provider custody but has no
+                        // committed message id or sequence. If reconnect turns its only echo
+                        // into recovered history, retain the historical-collision guard unless
+                        // that exact accepted local projection also proves the same user text.
+                        // The server's session-local localId is then the canonical receipt.
+                        const acceptedDirectProjection = pendingState.messages.some((pending) => (
+                            pending.source === 'local_outbound'
+                            && pending.deliveryStatus === 'accepted'
+                            && pending.pendingOutboxScope === undefined
+                            && pending.pendingDeliveryStatus === undefined
+                            && pending.localId === m.localId
+                            && pending.text === m.text
+                        ));
+                        if (acceptedDirectProjection) localIdsToClear.add(m.localId);
                     }
                     if (localIdsToClear.size > 0) {
                         const filtered = pendingState.messages.filter((p) => (
