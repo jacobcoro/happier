@@ -847,20 +847,24 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             localIdsToClear.add(m.localId);
                             continue;
                         }
-                        // A runtime-RPC acknowledgement proves provider custody but has no
-                        // committed message id or sequence. If reconnect turns its only echo
-                        // into recovered history, retain the historical-collision guard unless
-                        // that exact accepted local projection also proves the same user text.
-                        // The server's session-local localId is then the canonical receipt.
-                        const acceptedDirectProjection = pendingState.messages.some((pending) => (
+                        // A runtime-RPC acknowledgement, or an acknowledgement timeout, can
+                        // leave a local projection without a committed message id or sequence.
+                        // If reconnect turns its only echo into recovered history, retain the
+                        // historical-collision guard unless that exact direct-send projection
+                        // also proves the same user text. The server's session-local localId is
+                        // then the canonical receipt.
+                        const settledDirectProjection = pendingState.messages.some((pending) => (
                             pending.source === 'local_outbound'
-                            && pending.deliveryStatus === 'accepted'
                             && pending.pendingOutboxScope === undefined
                             && pending.pendingDeliveryStatus === undefined
                             && pending.localId === m.localId
                             && pending.text === m.text
+                            && (
+                                pending.deliveryStatus === 'accepted'
+                                || (pending.deliveryStatus === 'queued' && pending.sendState === 'unconfirmed')
+                            )
                         ));
-                        if (acceptedDirectProjection) localIdsToClear.add(m.localId);
+                        if (settledDirectProjection) localIdsToClear.add(m.localId);
                     }
                     if (localIdsToClear.size > 0) {
                         const filtered = pendingState.messages.filter((p) => (

@@ -764,6 +764,54 @@ describe('messages domain: ordering', () => {
         expect(get().sessionPending.s1.messages).toEqual([]);
     });
 
+    it('settles an unconfirmed direct-send projection from its matching recovered committed message', () => {
+        const { get, domain } = createHarness({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    createdAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    metadataVersion: 1,
+                    metadata: null,
+                    permissionMode: null,
+                    permissionModeUpdatedAt: 0,
+                    agentState: null,
+                },
+            },
+            sessionPending: {
+                s1: {
+                    isLoaded: true,
+                    discarded: [],
+                    messages: [{
+                        id: 'pending-unconfirmed',
+                        localId: 'unconfirmed-local',
+                        source: 'local_outbound',
+                        deliveryStatus: 'queued',
+                        sendState: 'unconfirmed',
+                        createdAt: 1_000,
+                        updatedAt: 1_000,
+                        text: 'delivered despite ACK timeout',
+                        rawRecord: { role: 'user', content: { type: 'text', text: 'delivered despite ACK timeout' } },
+                    }],
+                },
+            },
+        });
+
+        domain.applyMessages('s1', [{
+            id: 'history-unconfirmed',
+            seq: 2,
+            localId: 'unconfirmed-local',
+            createdAt: 2_000,
+            transcriptObservationProvenance: { kind: 'non_dependent', source: 'history' },
+            isSidechain: false,
+            role: 'user',
+            content: { type: 'text', text: 'delivered despite ACK timeout' },
+        } as any]);
+
+        expect(get().sessionPending.s1.messages).toEqual([]);
+    });
+
     it('retains recovered history when its localId collides with an already materialized live row', () => {
         const { get, domain } = createHarness({ sessions: { s1: { id: 's1', createdAt: 1, updatedAt: 1 } } });
         domain.applyMessages('s1', [{
