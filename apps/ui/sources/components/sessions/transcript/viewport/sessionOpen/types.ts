@@ -82,9 +82,10 @@ export type SessionOpenLatchArmInput = Readonly<{
     webInitialPinRetryDelaysMs: readonly number[];
     webInitialPinStabilizeMs: number;
     /**
-     * Hard bound on the whole web open phase: past `nowMs + delay`, the phase
-     * completes ('done') regardless of fill settlement, ending initial-open pin
-     * authority. The open is a bounded authority — a starved settlement (aborted,
+     * Bounds web positioning once its initial fill has started. Past `nowMs +
+     * delay`, a loaded entry completes ('done') regardless of fill settlement,
+     * ending initial-open pin authority. An idle fill still waits for its first
+     * data/layout facts; a deadline is not data readiness. A starved settlement (aborted,
      * failed, or hung fill executor) must never leave it fighting the user
      * (live capture 2026-07-20). Ignored on native (paint deadline owns that path).
      */

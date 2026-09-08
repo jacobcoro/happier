@@ -1,5 +1,4 @@
 import { existsSync } from 'fs';
-import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type {
@@ -8,51 +7,11 @@ import type {
 } from '@happier-dev/protocol';
 import type { ScmRepoDetection } from '../../types';
 import { runScmCommand } from '../../runtime';
+import { readUntrackedFileStats } from '../../readUntrackedFileStats';
 
 import { createSaplingCapabilities } from './capabilities';
 import { parseSaplingStatusLine } from './statusParser';
 import { parseGitPatchDiffStats } from './diffStats';
-
-const UNTRACKED_STATS_MAX_FILES = 512;
-const UNTRACKED_STATS_MAX_BYTES = 5_000_000;
-
-function countTextLines(buffer: Buffer): number {
-    if (buffer.length === 0) return 0;
-    let lines = 1;
-    for (let i = 0; i < buffer.length; i += 1) {
-        if (buffer[i] === 10) lines += 1;
-    }
-    return lines;
-}
-
-async function computeUntrackedStatsByPath(repoRoot: string, rawPaths: string[]): Promise<Record<string, { pendingAdded: number; isBinary: boolean }>> {
-    const paths = rawPaths.filter((p) => p && p.trim().length > 0).slice(0, UNTRACKED_STATS_MAX_FILES);
-    const statsByPath: Record<string, { pendingAdded: number; isBinary: boolean }> = {};
-
-    for (const relativePath of paths) {
-        if (relativePath === '.') continue;
-        const absPath = join(repoRoot, relativePath);
-        try {
-            const info = await stat(absPath);
-            if (!info.isFile()) continue;
-            if (info.size > UNTRACKED_STATS_MAX_BYTES) {
-                statsByPath[relativePath] = { pendingAdded: 0, isBinary: true };
-                continue;
-            }
-
-            const buf = await readFile(absPath);
-            const isBinary = buf.includes(0);
-            statsByPath[relativePath] = {
-                pendingAdded: isBinary ? 0 : countTextLines(buf),
-                isBinary,
-            };
-        } catch {
-            // Ignore unreadable files (permissions/races).
-        }
-    }
-
-    return statsByPath;
-}
 
 export async function detectSaplingRepo(input: { cwd: string }): Promise<ScmRepoDetection> {
     const root = await runScmCommand({
@@ -190,7 +149,7 @@ export async function getSaplingSnapshot(input: {
 
     const repoRoot = input.detection.rootPath ?? input.cwd;
     const untrackedPaths = statusEntries.filter((entry) => entry.kind === 'untracked').map((entry) => entry.path);
-    const untrackedStatsByPath = repoRoot ? await computeUntrackedStatsByPath(repoRoot, untrackedPaths) : {};
+    const untrackedStatsByPath = repoRoot ? await readUntrackedFileStats(repoRoot, untrackedPaths) : {};
 
     const entries = buildSnapshotEntries(statusEntries, unresolvedPaths).map((entry) => {
         if (entry.kind === 'untracked') {
@@ -202,11 +161,13 @@ export async function getSaplingSnapshot(input: {
                     pendingAdded: stats ? Math.max(0, Number(stats.pendingAdded) || 0) : 0,
                     pendingRemoved: 0,
                     isBinary: stats ? Boolean(stats.isBinary) : false,
+                    ...(stats ? {} : { isComplete: false }),
                 },
             };
         }
 
         const stats = diffStatsByPath.get(entry.path) ?? null;
+        if (!diff.success) return { ...entry, stats: { ...entry.stats, isComplete: false } };
         if (!stats) return entry;
         return {
             ...entry,
@@ -245,6 +206,7 @@ export async function getSaplingSnapshot(input: {
         hasConflicts: unresolvedPaths.size > 0 || entries.some((entry) => entry.kind === 'conflicted'),
         entries,
         totals: {
+            ...(entries.some((entry) => entry.stats.isComplete === false) ? { isComplete: false } : {}),
             includedFiles: 0,
             pendingFiles: entries.length,
             untrackedFiles: entries.filter((entry) => entry.kind === 'untracked').length,

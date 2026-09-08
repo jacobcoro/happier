@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { maybeParseJson } from './parseJson';
+import { maybeParseJson } from './parseJson.js';
 
 describe('maybeParseJson', () => {
     it('parses direct JSON objects', () => {

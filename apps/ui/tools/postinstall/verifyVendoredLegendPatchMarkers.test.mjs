@@ -192,7 +192,7 @@ test('no marker is a substring of another, so one hunk cannot mask another', () 
 test('every documented marker carries the provenance a future reader needs', () => {
     for (const entry of LEGEND_PATCH_MARKERS) {
         assert.ok(entry.defect.length > 80, `${entry.id} needs a real defect description`);
-        assert.ok(entry.evidence.includes('.project/'), `${entry.id} needs an evidence pointer`);
+        assert.ok(entry.evidence.includes('.project/') || entry.evidence.startsWith('sources/'), `${entry.id} needs an evidence pointer`);
         assert.ok(entry.removeWhen.length > 20, `${entry.id} needs a deletion condition`);
     }
 });

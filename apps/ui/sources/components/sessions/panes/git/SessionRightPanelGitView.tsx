@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
+import { useOpenSessionTarget } from '@/components/sessions/panes/open/useOpenSessionTarget';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -99,6 +101,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     const { theme } = useUnistyles();
     const gitTheme = useStableGitTheme(theme);
     const pane = useAppPaneScope(props.scopeId);
+    const openSessionTarget = useOpenSessionTarget({ sessionId: props.sessionId, scopeId: props.scopeId, serverId: resolveServerIdForSessionIdFromLocalCache(props.sessionId) });
     const resumeSession = useSessionResumeAction();
     const requestSessionResume = React.useCallback(() => {
         fireAndForget(emitSessionResumeRequest(props.sessionId), {
@@ -176,6 +179,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     const getSnapshotSignature = React.useCallback(() => snapshotSignature, [snapshotSignature]);
 
     const {
+        historyIdentity: commitHistoryInitKey,
         historyEntries,
         historyLoading,
         historyHasMore,
@@ -184,6 +188,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         sessionId: props.sessionId,
         readLogEnabled: effectiveScmSnapshot?.repo.isRepo === true && (effectiveScmSnapshot?.capabilities?.readLog ?? true),
         sessionPath,
+        historyBranch: effectiveScmSnapshot?.branch.head,
     });
 
     const refreshScmData = React.useCallback(async () => {
@@ -195,7 +200,6 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
 
     const initialRefreshKey = `${props.sessionId}:${sessionPath ?? ''}`;
     const didInitialRefreshKeyRef = React.useRef<string | null>(null);
-    const commitHistoryInitKey = `${props.sessionId}:${sessionPath ?? ''}`;
     const didInitCommitHistoryKeyRef = React.useRef<string | null>(null);
     React.useEffect(() => {
         if (didInitialRefreshKeyRef.current === initialRefreshKey) return;
@@ -318,10 +322,11 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         return await generateCommitMessageSuggestionRef.current();
     }, []);
 
-    const onOpenFilesSidebar = React.useCallback(() => {
-        pane.openRight({ tabId: 'files' });
-        pane.setRightTab('files');
-    }, [pane.openRight, pane.setRightTab]);
+    const openSessionTargetRef = React.useRef(openSessionTarget);
+    openSessionTargetRef.current = openSessionTarget;
+    const onOpenFilesSidebar = React.useCallback((revealPath?: string) => {
+        openSessionTargetRef.current({ kind: 'fileBrowser', revealPath });
+    }, []);
 
     const defaultOpenReviewAllChanges = React.useCallback(() => {
         pane.openDetailsTab(createSessionScmReviewDetailsTab(), { intent: 'pinned' });
@@ -643,6 +648,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
 
     const historyTab = (
         <SessionRightPanelGitHistoryTab
+            historyIdentity={commitHistoryInitKey}
             theme={gitTheme}
             historyLoading={historyLoading}
             historyEntries={historyEntries}

@@ -70,14 +70,21 @@ describe('probeAgentModesBestEffort (configured ACP backend)', () => {
       timeoutMs: 100,
       accountSettings: { acpCatalogSettingsV1: { v: 2, backends: [] } },
       credentials,
+      processEnv: { HAPPIER_FAKE_PROFILE_MARKER: 'profile-env' },
     });
 
     expect(result.source).toBe('dynamic');
     expect(result.provider).toBe('customAcp');
     expect(result.availableModes).toEqual([{ id: 'plan', name: 'Plan' }]);
+    expect(materializeConfiguredAcpEnvironmentMock).toHaveBeenCalledWith(expect.objectContaining({
+      processEnv: { HAPPIER_FAKE_PROFILE_MARKER: 'profile-env' },
+    }));
     expect(createConfiguredAcpBackendMock).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/repo',
-      launchEnv: { API_TOKEN: 'secret' },
+      launchEnv: expect.objectContaining({
+        API_TOKEN: 'secret',
+        HAPPIER_FAKE_PROFILE_MARKER: 'profile-env',
+      }),
       backend: expect.objectContaining({ backendId: 'custom-backend' }),
     }));
     expect(dispose).toHaveBeenCalled();

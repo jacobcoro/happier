@@ -1,3 +1,4 @@
+import { useFilesystemTreeKeyboard } from '@/components/ui/filesystemBrowser/useFilesystemTreeKeyboard';
 import * as React from 'react';
 import { Platform, View, type ScrollViewProps, type ViewStyle } from 'react-native';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -36,6 +37,10 @@ type RepositoryTreeListProps = {
     sessionId: string;
     reloadToken?: number;
     detailsMode?: boolean;
+    visibilityMode?: 'project' | 'all';
+    revealedPaths?: readonly string[];
+    revealRequest?: Readonly<{ path: string }>;
+    onGitIgnoreAvailableChange?: (available: boolean | undefined) => void;
     writeActionsEnabled?: boolean;
     onRequestRefresh?: (() => void) | null;
     onRequestDownload?: ((params: Readonly<{ path: string; asZip: boolean }>) => Promise<{ ok: true } | { ok: false; error: string }>) | null;
@@ -126,18 +131,38 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
     const writeActionsEnabled = props.writeActionsEnabled !== false;
     const canDownload = useSessionFileTransferAvailabilityResolver(sessionId);
     const copyFeedback = useTemporaryCopyFeedback();
-    const { rootLoading, rootError, nodes, toggleDirectory, retryRoot, retryDirectory } = useRepositoryTreeBrowser({
+    const preservedPaths = React.useMemo(() => [
+        ...(props.revealedPaths ?? []),
+        ...(scmSnapshot?.entries.flatMap((entry) => entry.previousPath ? [entry.path, entry.previousPath] : [entry.path]) ?? []),
+    ], [props.revealedPaths, scmSnapshot]);
+    const { rootLoading, rootError, nodes, toggleDirectory, retryRoot, retryDirectory, gitIgnoreAvailable } = useRepositoryTreeBrowser({
         sessionId,
         enabled: true,
         expandedPaths,
         onExpandedPathsChange,
         reloadToken: props.reloadToken,
+        visibilityMode: props.visibilityMode,
+        preservedPaths,
     });
 
     React.useEffect(() => {
         props.onRootLoadingChange?.(rootLoading);
     }, [props.onRootLoadingChange, rootLoading]);
 
+    React.useEffect(() => {
+        props.onGitIgnoreAvailableChange?.(gitIgnoreAvailable);
+    }, [props.onGitIgnoreAvailableChange, gitIgnoreAvailable]);
+
+    const keyboardListRef = React.useRef<import('react-native').FlatList<import('@/components/ui/filesystemBrowser/filesystemBrowserTypes').FilesystemBrowserNode>>(null);
+    const focusIndex = React.useCallback((index: number) => keyboardListRef.current?.scrollToIndex({ index, animated: false }), []);
+    const treeKeyboard = useFilesystemTreeKeyboard(nodes, focusIndex);
+    const focusedRevealRef = React.useRef<typeof props.revealRequest>(undefined);
+    React.useEffect(() => {
+        const request = props.revealRequest;
+        if (!request || focusedRevealRef.current === request || !nodes.some(node => node.path === request.path)) return;
+        focusedRevealRef.current = request;
+        treeKeyboard.focusPath(request.path);
+    }, [nodes, props.revealRequest, treeKeyboard.focusPath]);
     const badgeIndex = useScmTreeBadgeIndex(props.scmSnapshot ?? null);
     const badgeSignature = React.useMemo(
         () => buildScmTreeBadgeSignature(props.scmSnapshot ?? null),
@@ -155,6 +180,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
     });
 
     const rowRenderStateRef = React.useRef({
+        treeKeyboard,
         badgeIndex,
         canDownload,
         detailsMode,
@@ -172,6 +198,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         writeActionsEnabled,
     });
     rowRenderStateRef.current = {
+        treeKeyboard,
         badgeIndex,
         canDownload,
         detailsMode,
@@ -191,6 +218,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
 
     const hasDownloadRequest = onRequestDownload != null;
     const rowVisualExtraData = React.useMemo(() => [
+        treeKeyboard.activePath,
         renderedBadgeSignature,
         detailsMode ? 'details' : 'compact',
         copyFeedback.copiedKey ?? '',
@@ -207,6 +235,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         detailsMode,
         copyFeedback.copiedKey,
         hasDownloadRequest,
+        treeKeyboard.activePath,
         renderedBadgeSignature,
         theme.colors.state?.danger?.foreground,
         theme.colors.state?.neutral?.foreground,
@@ -220,6 +249,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
 
     const renderRow = React.useCallback(({ node, index, totalCount }: FilesystemBrowserRowRenderInput) => {
         const {
+            treeKeyboard,
             badgeIndex,
             canDownload,
             copiedPath,
@@ -320,12 +350,12 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
                         <Text style={{ fontSize: 12, color: theme.colors.state.neutral.foreground, ...Typography.mono('semiBold') }}>
                             {node.type === 'directory' ? `${badge.kindLetter}${badge.changedCount}` : badge.kindLetter}
                         </Text>
-                        {badge.added > 0 ? (
+                        {badge.isComplete !== false && badge.added > 0 ? (
                             <Text style={{ fontSize: 12, color: theme.colors.state.success.foreground, ...Typography.mono('semiBold') }}>
                                 {`+${badge.added}`}
                             </Text>
                         ) : null}
-                        {badge.removed > 0 ? (
+                        {badge.isComplete !== false && badge.removed > 0 ? (
                             <Text
                                 style={{
                                     fontSize: 12,
@@ -365,6 +395,10 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
 
         return (
             <FilesystemBrowserRow
+                treeItemProps={treeKeyboard.getRowProps(node,
+                    node.type === 'directory' ? () => { void toggleDirectory(node.path); } : undefined,
+                    node.type === 'file' ? () => (onOpenFilePinned ?? onOpenFile)(node.path) : undefined,
+                )}
                 node={node}
                 index={index}
                 totalCount={totalCount}
@@ -442,6 +476,8 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
 
     return (
         <FilesystemBrowser
+            treeRole
+            listRef={keyboardListRef}
             nodes={nodes}
             rootLoading={rootLoading}
             showInlineLoadingHeader={props.showInlineLoadingHeader}

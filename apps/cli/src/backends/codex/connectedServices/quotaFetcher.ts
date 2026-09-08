@@ -12,6 +12,7 @@ import {
 } from '@/daemon/connectedServices/quotas/types';
 import { isRecord, normalizeNonEmptyString, normalizePct, resolveConnectedServiceQuotaAccountLabel } from '@/daemon/connectedServices/quotas/quotaNormalization';
 import { parseRetryAfterHeader } from '@/daemon/connectedServices/quotas/normalization';
+import { createOpenAiCodexSubscriptionFetcher } from './subscriptionFetcher';
 
 const RESET_AT_PLAUSIBILITY_FLOOR_TOLERANCE_MS = 24 * 60 * 60_000;
 
@@ -87,6 +88,10 @@ function parseDisableQuotaEndpointEnv(raw: string | undefined): boolean {
 }
 
 export const openAiCodexQuotaFetcherDescriptor: ConnectedServiceQuotaFetcherDescriptor = {
+  loadSubscription: ({ env, staleAfterMs }) => createOpenAiCodexSubscriptionFetcher({
+    staleAfterMs,
+    disablePrivateEndpoint: parseDisableQuotaEndpointEnv(env.HAPPIER_CONNECTED_SERVICES_DISABLE_CODEX_SUBSCRIPTION_ENDPOINT),
+  }),
   loadQuota: ({ env, staleAfterMs }) => createOpenAiCodexQuotaFetcher({
     usageUrl: parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_OPENAI_CODEX_USAGE_URL),
     resetCreditsUrl: parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_OPENAI_CODEX_RESET_CREDITS_URL),
@@ -155,6 +160,8 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
               ? 'network'
               : 'provider_backoff',
             providerCode: result.providerCode ?? result.errorCode,
+            recoveryCreditConsumeOutcomeUnknown: result.errorCode === 'codex_reset_credit_consume_network_error'
+              || (typeof result.status === 'number' && (result.status >= 500 || (result.status >= 200 && result.status < 300))),
           },
         );
       }

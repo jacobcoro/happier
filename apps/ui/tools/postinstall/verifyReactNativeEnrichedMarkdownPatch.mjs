@@ -11,6 +11,7 @@ function countOccurrences(contents, marker) {
 export function verifyReactNativeEnrichedMarkdownPatch({ packageDir }) {
     const enrichedMarkdownTextPath = path.resolve(packageDir, 'lib', 'module', 'web', 'EnrichedMarkdownText.js');
     const streamingRevealPath = path.resolve(packageDir, 'lib', 'module', 'web', 'streamingReveal.js');
+    const streamingRevealSourcePath = path.resolve(packageDir, 'src', 'web', 'streamingReveal.ts');
     const parseMarkdownPath = path.resolve(packageDir, 'lib', 'module', 'web', 'parseMarkdown.js');
     const parseMarkdownSourcePath = path.resolve(packageDir, 'src', 'web', 'parseMarkdown.ts');
     const enrichedMarkdownTextSourcePath = path.resolve(packageDir, 'src', 'web', 'EnrichedMarkdownText.tsx');
@@ -36,6 +37,7 @@ export function verifyReactNativeEnrichedMarkdownPatch({ packageDir }) {
     const requiredPaths = [
         enrichedMarkdownTextPath,
         streamingRevealPath,
+        streamingRevealSourcePath,
         parseMarkdownPath,
         parseMarkdownSourcePath,
         enrichedMarkdownTextSourcePath,
@@ -49,6 +51,7 @@ export function verifyReactNativeEnrichedMarkdownPatch({ packageDir }) {
 
     const enrichedMarkdownTextContents = fs.readFileSync(enrichedMarkdownTextPath, 'utf8');
     const streamingRevealContents = fs.readFileSync(streamingRevealPath, 'utf8');
+    const streamingRevealSourceContents = fs.readFileSync(streamingRevealSourcePath, 'utf8');
     const parseMarkdownContents = fs.readFileSync(parseMarkdownPath, 'utf8');
     const parseMarkdownSourceContents = fs.readFileSync(parseMarkdownSourcePath, 'utf8');
     const enrichedMarkdownTextSourceContents = fs.readFileSync(enrichedMarkdownTextSourcePath, 'utf8');
@@ -64,6 +67,10 @@ export function verifyReactNativeEnrichedMarkdownPatch({ packageDir }) {
         enrichedMarkdownTextContents.includes('markStreamingRevealOffsets')
         && enrichedMarkdownTextContents.includes('streamingAnimation')
         && enrichedMarkdownTextContents.includes('updateStreamingRevealRanges')
+        && enrichedMarkdownTextContents.includes('if (syncAst) return;')
+        && enrichedMarkdownTextSourceContents.includes('if (syncAst) return;')
+        && streamingRevealContents.includes('.start <= start')
+        && streamingRevealSourceContents.includes('.start <= start')
         && parseMarkdownContents.includes('preloadMarkdownRuntime')
         && parseMarkdownContents.includes("import createMd4cModule from './wasm/md4c.js'")
         && !parseMarkdownContents.includes("import('./wasm/md4c")

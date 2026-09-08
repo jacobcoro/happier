@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createDbMocks, installDbModuleMock } from "../../testkit/dbMocks";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 import { createFakeRouteApp } from "../../testkit/routeHarness";
 
@@ -20,6 +21,9 @@ const markPendingDeliveryHandled = vi.fn();
 const dismissPendingDelivery = vi.fn();
 const sendPendingDeliveryAsNew = vi.fn();
 const updatePendingMessage = vi.fn();
+const dbMocks = createDbMocks({ session: ["findUnique"] } as const);
+
+installDbModuleMock({ db: dbMocks.db });
 
 vi.mock("@/app/events/eventRouter", () => ({
     eventRouter: { emitUpdate },
@@ -55,6 +59,8 @@ vi.mock("@/app/session/pending/pendingMessageService", async (importOriginal) =>
 describe("sessionPendingRoutes (materialize-next)", () => {
     beforeEach(() => {
         vi.resetModules();
+        dbMocks.reset();
+        dbMocks.db.session.findUnique.mockResolvedValue(null);
         emitUpdate.mockReset();
         buildNewMessageUpdate.mockClear();
         buildMessageUpdatedUpdate.mockClear();

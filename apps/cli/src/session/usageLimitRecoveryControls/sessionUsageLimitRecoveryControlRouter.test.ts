@@ -7,6 +7,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type { Credentials } from '@/persistence';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { TemporaryThrottleRecoveryScheduler } from '@/daemon/connectedServices/temporaryThrottle/TemporaryThrottleRecoveryScheduler';
 
 const mocks = vi.hoisted(() => ({
   fetchAccountMachineReplacements: vi.fn(),
@@ -544,6 +545,27 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     expect(retryTemporaryThrottleNow).toHaveBeenCalledWith({ sessionId: 'sess_1' });
     expect(callLiveSessionRpc).not.toHaveBeenCalled();
     expect(resolveAdapter).not.toHaveBeenCalled();
+  });
+
+  it('stops the real capacity scheduler through the active-session recovery control route', async () => {
+    const scheduler = new TemporaryThrottleRecoveryScheduler({ nowMs: () => 1_000, random: () => 0.5 });
+    try {
+      await scheduler.enable({ sessionId: 'sess_1', issueFingerprint: 'temporary-throttle:codex',
+        continuation: { interruptedOriginId: 'turn', resumePromptMode: 'standard', recoveryKind: 'capacity' },
+      });
+      const intent = scheduler.read('sess_1')!;
+      await routeSessionUsageLimitRecoveryWaitResumeCancel({
+        token: 'token', credentials: createCredentials(), sessionId: 'sess_1',
+        rawSession: createRawSession({ active: true, latestTurnStatus: 'failed', lastRuntimeIssue: createTemporaryThrottleIssue() }),
+        metadata: createMetadata(), currentMachineId: 'machine-local', ctx, mode: 'plain',
+        request: { sessionId: 'sess_1', issueFingerprint: intent.issueFingerprint, armedAtMs: intent.armedAtMs },
+        callLiveSessionRpc: async () => ({ ok: false }),
+        readTemporaryThrottleRecovery: (id) => scheduler.read(id),
+        cancelTemporaryThrottleRecovery: (input) => scheduler.stopRetrying(input),
+      });
+      expect(scheduler.read('sess_1')?.status).toBe('cancelled');
+      expect(await scheduler.wake({ sessionId: 'sess_1', reason: 'timer' })).toEqual({ status: 'inactive' });
+    } finally { scheduler.dispose(); }
   });
 
   it('terminally cancels inactive local wait-resume metadata without live session RPC', async () => {

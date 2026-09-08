@@ -3,7 +3,7 @@ import {
     type HappierToolsShellBridgeCommand,
 } from '@happier-dev/protocol';
 
-import { extractShellCommand } from './shellCommand';
+import { extractShellCommand } from '@happier-dev/protocol';
 
 type UnknownRecord = Record<string, unknown>;
 

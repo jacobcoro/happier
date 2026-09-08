@@ -37,7 +37,9 @@ const DEFAULT_IGNORES = [
   '.restore.*',
   '.dist.hstack-*',
   '.cxx',
-  'apps/ui/ios/build',
+  // Expo prebuild generates this entire Git-ignored tree for the target's
+  // native identity and toolchain. Replication would undo its Info.plist.
+  'apps/ui/ios',
   'apps/ui/android/app/build',
   'apps/ui/android/build',
   'apps/ui/android/.gradle',

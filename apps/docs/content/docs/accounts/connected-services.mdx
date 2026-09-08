@@ -56,6 +56,40 @@ In the CLI:
 - `happier connect claude ...`
 - `happier connect gemini`
 
+## Model-capacity retries
+
+In development builds, a terminal model-capacity failure such as Codex
+`server_overloaded` keeps the same session and selected model. Happier waits before
+retrying, with longer delays for consecutive capacity failures: the initial delay
+is about five seconds and the exponential schedule levels off at about five
+minutes. Each delay varies by up to 20% to spread retries across sessions. A
+provider-supplied retry time can extend the wait.
+
+Capacity retries have no attempt limit. A continuation being accepted or queued
+does not reset the delay; a successfully completed model turn does. Authentication
+failures and exhausted subscription quota follow their separate recovery paths.
+Stopping retries or stopping the session takes precedence over automatic recovery.
+
+## Automatic quota resets for Codex pools
+
+In development builds with a supporting relay, a Codex subscription pool's Behavior
+section includes **Automatically use quota resets**. It is off by default. Enabling
+it authorizes spending a banked reset only after ordinary recovery finds no ready
+pool account and a quota-exhausted account is eligible for a reset. Normal account
+selection and session continuation still apply; the setting does not authorize resets
+for authentication failures or unrelated cooldowns.
+
+The option is hidden on older relays and for services without banked resets. Turning it
+off prevents future automatic spending; it cannot restore a reset already consumed.
+If a reset response is lost or cannot confirm the outcome, Happier pauses further
+automatic resets for that account for the current daemon lifetime; a newer quota
+observation alone does not authorize another credit.
+
+Confirmed automatic spending sends a notification through your enabled quota-recovery
+notification channels, identifying the account and pool. This reports that a reset
+was used; session recovery may still be in progress. Uncertain outcomes do not send
+a success notification, and replaying the same receipt does not send another one.
+
 ## Connection methods
 
 ### OpenAI Codex

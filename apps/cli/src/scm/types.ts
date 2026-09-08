@@ -266,6 +266,10 @@ export interface ScmBackend {
     sourceController?: ScmSourceController;
     pullRequests?: ScmPullRequestBackend;
     repository?: ScmRepositoryProvisioningBackend;
+    classifyDirectoryIgnores?(input: Readonly<{
+        cwd: string;
+        entries: readonly Readonly<{ name: string; type: 'file' | 'directory' | 'other' }>[];
+    }>): Promise<ReadonlySet<string>>;
     detectRepo(input: { cwd: string }): Promise<ScmRepoDetection>;
     getCapabilities(input: { mode: ScmRepoMode | null }): ScmCapabilities;
     describeBackend(input: {

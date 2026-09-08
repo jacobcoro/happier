@@ -178,25 +178,6 @@ const mockAppPaneStore = (() => {
   };
 })();
 
-const mockDrawerLifecycle = { mounts: 0, unmounts: 0 };
-
-vi.mock('expo-router/drawer', () => ({
-  Drawer: (props: any) => {
-    React.useEffect(() => {
-      mockDrawerLifecycle.mounts += 1;
-      return () => {
-        mockDrawerLifecycle.unmounts += 1;
-      };
-    }, []);
-
-    return React.createElement(
-      'Drawer',
-      props,
-      props.drawerContent ? props.drawerContent({}) : null
-    );
-  },
-}));
-
 vi.mock('@/auth/context/AuthContext', () => ({
   useAuth: () => ({ isAuthenticated: true }),
 }));
@@ -293,8 +274,8 @@ vi.mock('@/components/appShell/panes/AppPaneProvider', () => ({
   },
 }));
 
-function getDrawer(tree: renderer.ReactTestRenderer) {
-  return tree.findByType('Drawer' as any);
+function getSidebar(tree: renderer.ReactTestRenderer) {
+  return tree.findByProps({ testID: 'navigation-sidebar' });
 }
 
 function getResizableSidebarPane(tree: renderer.ReactTestRenderer) {
@@ -318,8 +299,31 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     hoistedState.routerReplaceMock.mockReset();
     hoistedState.setActiveTabMock.mockClear();
     hoistedState.tauriDesktop = false;
-    mockDrawerLifecycle.mounts = 0;
-    mockDrawerLifecycle.unmounts = 0;
+  });
+
+  it.each(['web', 'ios'] as const)('preserves the mounted route through compact and wide layouts on %s', async (platform) => {
+    hoistedState.mockPlatformOS = platform;
+    hoistedState.mockPathname = '/session/s1';
+    hoistedState.mockWindowDimensions = { width: 1280, height: 577 };
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const screen = await renderScreen(<SidebarNavigator />);
+    const { Stack } = await import('expo-router');
+    const navigator = screen.tree.findByType(Stack);
+
+    for (const dimensions of [{ width: 1440, height: 1007 }, { width: 1280, height: 577 }]) {
+      hoistedState.mockWindowDimensions = dimensions;
+      await screen.update(<SidebarNavigator desktopUpdateIndicator={React.createElement('UpdateIndicator')} />);
+      expect(screen.tree.findByType(Stack) === navigator).toBe(true);
+    }
+    hoistedState.mockWindowDimensions = { width: 1440, height: 1007 };
+    for (const pathname of ['/session/s1', '/terminal/connect', '/session/s1']) {
+      hoistedState.mockPathname = pathname;
+      await screen.update(<SidebarNavigator desktopUpdateIndicator={React.createElement('UpdateIndicator')} />);
+      expect(screen.tree.findByType(Stack) === navigator).toBe(true);
+      expect(screen.findAllHostsByTestId('navigation-sidebar')).toHaveLength(
+        platform === 'web' && pathname === '/terminal/connect' ? 0 : 1,
+      );
+    }
   });
 
   it('stops wheel propagation on web so sidebar scrolling is not blocked by document scroll-lock listeners', async () => {
@@ -337,7 +341,18 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(stopPropagation).toHaveBeenCalledTimes(1);
   }, 60_000);
 
-  it('uses a collapsed drawer width when sidebarCollapsed is true', async () => {
+  it('does not paint an opaque sidebar canvas over the transparent desktop pet window', async () => {
+    hoistedState.tauriDesktop = true;
+    vi.stubGlobal('window', { location: { href: 'http://localhost/desktop/pet-overlay' } });
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const { StyleSheet } = await import('react-native');
+    const screen = await renderScreen(<SidebarNavigator />);
+    const surface = screen.findByTestId('desktop-main-content-drag-surface');
+    expect(screen.findAllHostsByTestId('navigation-sidebar')).toHaveLength(0);
+    expect(StyleSheet.flatten(surface?.props.style).backgroundColor).toBeUndefined();
+  });
+
+  it('uses a collapsed sidebar width when sidebarCollapsed is true', async () => {
     act(() => {
       mockLocalSettingsStore.setSidebarCollapsed(true);
     });
@@ -347,11 +362,11 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
-    const drawer = getDrawer(tree);
-    expect(drawer.props.screenOptions.drawerStyle.width).toBe(72);
+    const drawer = getSidebar(tree);
+    expect(drawer.props.style.width).toBe(72);
   });
 
-  it('forces the compact sidebar on narrow permanent-drawer viewports so routed content keeps width', async () => {
+  it('forces the compact sidebar on narrow docked-sidebar viewports so routed content keeps width', async () => {
     hoistedState.forceIsTablet = true;
     hoistedState.mockWindowDimensions = { width: 360, height: 900 };
     act(() => {
@@ -362,13 +377,13 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     const { SidebarNavigator } = await import('./SidebarNavigator');
     const screen = await renderScreen(<SidebarNavigator />);
 
-    const drawer = getDrawer(screen.tree);
-    expect(drawer.props.screenOptions.drawerStyle.width).toBe(72);
+    const drawer = getSidebar(screen.tree);
+    expect(drawer.props.style.width).toBe(72);
     expect(screen.tree.findAllByType('CollapsedSidebarView' as any)).toHaveLength(1);
     expect(screen.tree.findAllByType('SidebarView' as any)).toHaveLength(0);
   });
 
-  it('enables the permanent drawer when min edge is at least 600px', async () => {
+  it('enables the docked sidebar when min edge is at least 600px', async () => {
     hoistedState.mockWindowDimensions = { width: 800, height: 600 };
 
     const { SidebarNavigator } = await import('./SidebarNavigator');
@@ -376,12 +391,12 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
-    const drawer = getDrawer(tree);
-    expect(drawer.props.screenOptions.drawerType).toBe('permanent');
-    expect(drawer.props.screenOptions.drawerStyle.width).toBeGreaterThan(0);
+    const drawer = getSidebar(tree);
+    expect(drawer.findByType('SidebarView' as any)).toBeDefined();
+    expect(drawer.props.style.width).toBeGreaterThan(0);
   });
 
-  it('wraps authenticated desktop drawer content in the main-content drag surface on Tauri web', async () => {
+  it('wraps authenticated desktop sidebar content in the main-content drag surface on Tauri web', async () => {
     hoistedState.tauriDesktop = true;
     const { SidebarNavigator } = await import('./SidebarNavigator');
     const screen = await renderScreen(<SidebarNavigator />);
@@ -390,7 +405,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     expect(dragSurface).not.toBeNull();
     expect(dragSurface?.props.enabled).toBe(true);
-    expect(dragSurface?.props.leftOffsetPx).toBe(getDrawer(screen.tree).props.screenOptions.drawerStyle.width);
+    expect(dragSurface?.props.leftOffsetPx).toBe(getSidebar(screen.tree).props.style.width);
   });
 
   it('forwards shell update indicator to the expanded sidebar host', async () => {
@@ -418,16 +433,14 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(tree.findByProps({ testID: 'shell-update-indicator' })).toBeDefined();
   });
 
-  it('hides the permanent drawer when min edge is below 600px (e.g. landscape phone)', async () => {
+  it('hides the docked sidebar when min edge is below 600px (e.g. landscape phone)', async () => {
     hoistedState.mockWindowDimensions = { width: 812, height: 375 };
 
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
-
-    expect(mockDrawerLifecycle.mounts).toBe(0);
-    expect(tree.findAllByType('Drawer' as any)).toHaveLength(0);
+    expect(tree.findAllByProps({ testID: 'navigation-sidebar' })).toHaveLength(0);
   });
 
   it('leaves mobile bottom chrome ownership to the app layout on mobile settings stack routes', async () => {
@@ -440,7 +453,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
     expect(tree.findAllByType('TabBar' as any)).toHaveLength(0);
-    expect(tree.findAllByType('Drawer' as any)).toHaveLength(0);
+    expect(tree.findAllByProps({ testID: 'navigation-sidebar' })).toHaveLength(0);
     expect(hoistedState.setActiveTabMock).not.toHaveBeenCalled();
     expect(hoistedState.routerReplaceMock).not.toHaveBeenCalled();
   });
@@ -472,8 +485,8 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
     expect(mockLocalSettingsStore.sidebarWidthPx).toBe(250);
 
-    const drawer = getDrawer(tree);
-    expect(drawer.props.screenOptions.drawerStyle.width).toBe(250);
+    const drawer = getSidebar(tree);
+    expect(drawer.props.style.width).toBe(250);
   });
 
   it('collapses into compact view when resized narrower again from the minimum width', async () => {
@@ -500,8 +513,8 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
 
-    const drawer = getDrawer(tree);
-    expect(drawer.props.screenOptions.drawerStyle.width).toBe(72);
+    const drawer = getSidebar(tree);
+    expect(drawer.props.style.width).toBe(72);
   });
 
   it('renders the expand icon button in collapsed sidebar on desktop', async () => {
@@ -534,8 +547,8 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
       type: 'exitFocusMode',
       scopeId: 'session:s1',
     });
-    const drawer = getDrawer(tree);
-    expect(drawer.props.screenOptions.drawerStyle.width).toBeGreaterThan(72);
+    const drawer = getSidebar(tree);
+    expect(drawer.props.style.width).toBeGreaterThan(72);
   });
 
   it('can collapse again on the first resize attempt after expanding from compact view', async () => {
@@ -588,31 +601,28 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
   });
 
-  it('uses the collapsed permanent drawer when scoped focus mode toggles without remounting', async () => {
+  it('uses the collapsed docked sidebar when scoped focus mode toggles without remounting', async () => {
     hoistedState.mockPathname = '/session/s1';
     const { SidebarNavigator } = await import('./SidebarNavigator');
     let tree!: renderer.ReactTestRenderer;
 
     tree = (await renderScreen(<SidebarNavigator />)).tree;
 
-    expect(mockDrawerLifecycle.mounts).toBe(1);
-    expect(mockDrawerLifecycle.unmounts).toBe(0);
-
-    const drawerBefore = getDrawer(tree);
-    expect(drawerBefore.props.screenOptions.drawerStyle.width).toBeGreaterThan(0);
+    const { Stack } = await import('expo-router');
+    const navigatorBefore = tree.findByType(Stack);
+    const drawerBefore = getSidebar(tree);
+    expect(drawerBefore.props.style.width).toBeGreaterThan(0);
 
     await act(async () => {
       mockAppPaneStore.setFocusModeScopeId('session:s1');
     });
 
     // No remount: toggling focus should not reset session/details state.
-    expect(mockDrawerLifecycle.mounts).toBe(1);
-    expect(mockDrawerLifecycle.unmounts).toBe(0);
+    expect(tree.findByType(Stack) === navigatorBefore).toBe(true);
 
-    const drawerAfter = getDrawer(tree);
+    const drawerAfter = getSidebar(tree);
     expect(drawerAfter).toBeDefined();
-    expect(drawerAfter.props.screenOptions.drawerType).toBe('permanent');
-    expect(drawerAfter.props.screenOptions.drawerStyle.width).toBe(72);
+    expect(drawerAfter.props.style.width).toBe(72);
     expect(drawerAfter.findByType('CollapsedSidebarView' as any).props.focusModeActive).toBe(true);
 
     const expandButton = tree.findByProps({ testID: 'sidebar-expand-button' });

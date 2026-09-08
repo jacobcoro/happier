@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveCodexCliInvocation } from './resolveCodexCliInvocation';
+
+// Observe genuine filesystem reads while keeping executable resolution and runtime selection real.
+vi.mock('node:fs', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:fs')>();
+    return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 async function createExecutable(params: Readonly<{ dir: string; name: string }>): Promise<string> {
     mkdirSync(params.dir, { recursive: true });
@@ -23,6 +29,38 @@ describe('resolveCodexCliInvocation', () => {
             Object.defineProperty(process, 'platform', originalPlatformDescriptor);
         }
         vi.unstubAllEnvs();
+        vi.mocked(readFileSync).mockClear();
+    });
+
+    it.each([
+        { name: 'native', contents: '\u007fELF\u0000native executable payload', needsRuntime: false },
+        { name: 'node-shim', contents: '#!/usr/bin/env node\nconsole.log("codex");', needsRuntime: true },
+        { name: 'codex.js', contents: 'console.log("codex");', needsRuntime: true },
+    ])('resolves $name without reading the entire executable', async ({ name, contents, needsRuntime }) => {
+        if (process.platform === 'win32') return;
+        const root = await mkdtemp(join(tmpdir(), 'happier-codex-header-'));
+        try {
+            const executable = join(root, name);
+            writeFileSync(executable, contents, 'utf8');
+            chmodSync(executable, 0o755);
+            const args = ['app-server', '--listen', 'stdio://'];
+            const invocation = await resolveCodexCliInvocation({
+                args,
+                processEnv: {
+                    ...process.env,
+                    HAPPIER_CODEX_APP_SERVER_BIN: executable,
+                    HAPPIER_JS_RUNTIME_PATH: process.execPath,
+                },
+                overrideEnvVarKeys: ['HAPPIER_CODEX_APP_SERVER_BIN'],
+            });
+
+            expect(invocation).toEqual(needsRuntime
+                ? { command: process.execPath, args: [executable, ...args] }
+                : { command: executable, args });
+            expect(vi.mocked(readFileSync).mock.calls.filter(([path]) => path === executable)).toEqual([]);
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
     });
 
     it('ignores missing app-server override paths and falls back to the provider CLI resolution', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractShellCommand } from './shellCommand';
+import { extractShellCommand } from './shellCommand.js';
 
 describe('extractShellCommand', () => {
     it('extracts a command from argv[] arrays', () => {

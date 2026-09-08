@@ -166,9 +166,6 @@ export async function executeBoundedBackendRun(args: Readonly<{
         backendCtrl.turnCancelReason = 'steer';
         backendCtrl.turnCancelEpoch = activeEpoch;
         await backendCtrl.streamWriter?.flushAll({ reason: 'abort', interruptedReason: 'steer' });
-        void Promise.resolve()
-          .then(() => backendCtrl.backend.cancel(backendCtrl.childSessionId!))
-          .catch(() => {});
 
         void completionPromise.catch((error) => {
           if (isAbortLikeError(error)) return;
@@ -182,11 +179,13 @@ export async function executeBoundedBackendRun(args: Readonly<{
             : `User update:\n${updateText}`;
         }
         const updatedPrompt = profile.buildPrompt({ ...start, instructions: effectiveInstructions });
-        const updatedSendPromise = sendTurnPrompt(updatedPrompt);
         // ACK as soon as the bounded runtime adopts the replacement turn. Waiting for the backend
         // send promise to settle can incorrectly surface "Run is busy" even though the follow-up
         // prompt has already been accepted into the run state machine.
         next.resolve();
+        await backendCtrl.backend.cancel(backendCtrl.childSessionId!);
+        if (backendCtrl.cancelled) return;
+        const updatedSendPromise = sendTurnPrompt(updatedPrompt);
         void updatedSendPromise.catch((error) => {
           logger.debug('[ExecutionRuns] replacement turn send rejected after external ACK', error);
         });
@@ -404,7 +403,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
 
     await backendCtrl.streamWriter?.flushAll({ reason: 'turn-end' });
 
-    args.finishRun(
+    await args.finishRun(
       runId,
       { status: completion.status, summary: completion.summary, finishedAtMs },
       { output: completion.toolResultOutput, meta: completion.toolResultMeta },
@@ -423,7 +422,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
       await backendCtrl.streamWriter?.flushAll({ reason: 'abort', interruptedReason: message });
       const finishedAtMs = args.getNowMs();
       const livenessProbe = e && typeof e === 'object' ? (e as ExecutionRunTimeoutError).livenessProbe : null;
-      args.finishRun(
+      await args.finishRun(
         runId,
         { status: 'timeout', summary: message, finishedAtMs, error: { code: executionRunErrorCode, message } },
         {
@@ -445,7 +444,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
     }
     await backendCtrl.streamWriter?.flushAll({ reason: 'abort', interruptedReason: message });
     const finishedAtMs = args.getNowMs();
-    args.finishRun(
+    await args.finishRun(
       runId,
       { status: 'failed', summary: message, finishedAtMs, error: { code: executionRunErrorCode, message } },
       {

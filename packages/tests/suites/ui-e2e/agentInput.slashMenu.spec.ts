@@ -19,6 +19,7 @@ import {
 } from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
+import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const require = createRequire(import.meta.url);
 const textareaCaretScriptPath = require.resolve('textarea-caret');
@@ -37,22 +38,6 @@ type CaretSnapshot = Readonly<{
   input: RectSnapshot;
   caret: RectSnapshot;
 }>;
-
-function collectBrowserDiagnostics(params: Readonly<{ page: Page }>): () => string {
-  const browserErrors: string[] = [];
-  params.page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`));
-  params.page.on('console', (message) => {
-    if (message.type() === 'error') {
-      browserErrors.push(`console.error: ${message.text()}`);
-    }
-  });
-
-  return () => (
-    browserErrors.length > 0
-      ? `Browser diagnostics:\n${browserErrors.slice(-20).join('\n')}`
-      : 'Browser diagnostics: none'
-  );
-}
 
 function createFakeJwt(email: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -312,7 +297,7 @@ test.describe('UI e2e: AgentInput slash command menu', () => {
         expectedValue: /^\$code-review\s*$/,
       });
     } catch (error) {
-      throw new Error(`${String(error)}\n\n${browserDiagnostics()}`);
+      throw appendBrowserDiagnostics(error, browserDiagnostics());
     }
   });
 });

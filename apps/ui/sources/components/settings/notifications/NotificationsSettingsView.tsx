@@ -429,6 +429,19 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
                     showChevron={false}
                 />
                 <Item
+                    title={t('settingsNotifications.local.requestPreviewTitle')}
+                    subtitle={t('settingsNotifications.local.requestPreviewSubtitle')}
+                    icon={<Icon name="chat-circle-dots" size={29} color={theme.colors.text.secondary} />}
+                    rightElement={(
+                        <Switch
+                            value={localSettings.localNotificationsShowRequestMessageText !== false}
+                            disabled={localSettings.localNotificationsEnabled === false || (localSettings.localNotificationsShowPendingPermissionRequests === false && localSettings.localNotificationsShowPendingUserActionRequests === false)}
+                            onValueChange={(value) => setLocalSetting({ localNotificationsShowRequestMessageText: Boolean(value) })}
+                        />
+                    )}
+                    showChevron={false}
+                />
+                <Item
                     title={t('settingsNotifications.local.permissionRequestsTitle')}
                     subtitle={t('settingsNotifications.local.permissionRequestsSubtitle')}
                     icon={<Icon name="hand" size={29} color={theme.colors.text.secondary} />}
@@ -631,6 +644,23 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
                                 showChevron={false}
                             />
                             <Item
+                                title={t('settingsNotifications.webhooks.requestPreviewTitle')}
+                                subtitle={t('settingsNotifications.webhooks.requestPreviewSubtitle')}
+                                icon={<Icon name="chat-circle-dots" size={29} color={theme.colors.text.secondary} />}
+                                rightElement={(
+                                    <Switch
+                                        value={channel.requestIncludeMessageText === true}
+                                        disabled={channel.enabled === false || (channel.topics.permissionRequest === false && channel.topics.userActionRequest === false)}
+                                        onValueChange={(value) => setWebhookChannels(updateNotificationChannelById({
+                                            channels: webhookChannels,
+                                            channelId: channel.id,
+                                            patch: { requestIncludeMessageText: Boolean(value) },
+                                        }))}
+                                    />
+                                )}
+                                showChevron={false}
+                            />
+                            <Item
                                 title={t('settingsNotifications.webhooks.permissionRequestsTitle')}
                                 subtitle={t('settingsNotifications.webhooks.permissionRequestsSubtitle')}
                                 icon={<Icon name="hand" size={29} color={theme.colors.text.secondary} />}
@@ -813,6 +843,19 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
                             value={notifications.readyIncludeMessageText !== false}
                             disabled={!pushEnabled || notifications.ready === false}
                             onValueChange={(value) => setNotifications({ readyIncludeMessageText: Boolean(value) })}
+                        />
+                    )}
+                    showChevron={false}
+                />
+                <Item
+                    title={t('settingsNotifications.types.requestPreview.title')}
+                    subtitle={t('settingsNotifications.types.requestPreview.subtitle')}
+                    icon={<Icon name="chat-circle-dots" size={29} color={theme.colors.text.secondary} />}
+                    rightElement={(
+                        <Switch
+                            value={notifications.requestIncludeMessageText === true}
+                            disabled={!pushEnabled || (notifications.permissionRequest === false && notifications.userActionRequest === false)}
+                            onValueChange={(value) => setNotifications({ requestIncludeMessageText: Boolean(value) })}
                         />
                     )}
                     showChevron={false}

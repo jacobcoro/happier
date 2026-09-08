@@ -15,6 +15,7 @@ import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connected
 import { CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 import { createCodexPermissionHandler } from './utils/createCodexPermissionHandler';
 import { applyPermissionModeToCodexPermissionHandler } from './utils/applyPermissionModeToHandler';
+import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
 
 const modelSyncFlushPendingAfterStartSpy = vi.fn(async () => {});
 const sessionModeSyncFlushPendingAfterStartSpy = vi.fn(async () => {});
@@ -1055,8 +1056,17 @@ describe('runCodex CodexACP resume behavior', () => {
       mcpServers: {},
     }));
     let daemonReadinessResolved = false;
+    const sessionTurnMutations: Array<Record<string, unknown>> = [];
     initializeBackendRunSessionSpy.mockImplementationOnce(async (opts: any) => {
       const initialized = await initializeDefaultBackendRunSession(opts);
+      initialized.session.sessionTurnLifecycle = createSessionTurnLifecycle({
+        sessionId: initialized.session.sessionId,
+        createId: () => 'strict-resume-failure',
+        now: () => 123,
+        enqueueSessionTurn: async (mutation) => {
+          sessionTurnMutations.push(mutation);
+        },
+      });
       void Promise.resolve()
         .then(async () => await opts.waitForDaemonReportReadiness?.())
         .then(() => {
@@ -1081,6 +1091,19 @@ describe('runCodex CodexACP resume behavior', () => {
     await Promise.resolve();
     expect(outcome).toMatchObject({ ok: false });
     expect(daemonReadinessResolved).toBe(false);
+    expect(sessionTurnMutations).toEqual([
+      expect.objectContaining({ action: 'begin', turnId: 'session-turn:strict-resume-failure', provider: 'codex' }),
+      expect.objectContaining({
+        action: 'fail',
+        turnId: 'session-turn:strict-resume-failure',
+        provider: 'codex',
+        issue: expect.objectContaining({
+          scope: 'primary_session',
+          status: 'failed',
+          source: 'provider_status_error',
+        }),
+      }),
+    ]);
   });
 
   it('does not report an ordinary metadata-driven app-server resume ready when provider resume fails', async () => {
@@ -2284,6 +2307,19 @@ describe('runCodex CodexACP resume behavior', () => {
     sessionInputConsumerWaitForNextInputImpl = async () => {
       throw new Error('wait-called');
     };
+    const sessionTurnMutations: Array<Record<string, unknown>> = [];
+    initializeBackendRunSessionSpy.mockImplementationOnce(async (opts: any) => {
+      const initialized = await initializeDefaultBackendRunSession(opts);
+      initialized.session.sessionTurnLifecycle = createSessionTurnLifecycle({
+        sessionId: initialized.session.sessionId,
+        createId: () => 'local-to-remote-resume-failure',
+        now: () => 456,
+        enqueueSessionTurn: async (mutation) => {
+          sessionTurnMutations.push(mutation);
+        },
+      });
+      return initialized;
+    });
 
     const { runCodex } = await import('./runCodex');
 
@@ -2310,6 +2346,23 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(startOrLoad?.mock.calls[0]?.[0]).toMatchObject({ resumeId: 'resume-from-local', importHistory: false });
 
     expect(outcome.ok).toBe(false);
+    expect(sessionTurnMutations).toEqual([
+      expect.objectContaining({
+        action: 'begin',
+        turnId: 'session-turn:local-to-remote-resume-failure',
+        provider: 'codex',
+      }),
+      expect.objectContaining({
+        action: 'fail',
+        turnId: 'session-turn:local-to-remote-resume-failure',
+        provider: 'codex',
+        issue: expect.objectContaining({
+          scope: 'primary_session',
+          status: 'failed',
+          source: 'provider_status_error',
+        }),
+      }),
+    ]);
   });
 
   it('can switch remote→local while app-server resume is still in progress', async () => {
@@ -4262,23 +4315,47 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(warnCalls.some((call) => call.some((value) => value instanceof Error && value.message.includes('secret-test-token')))).toBe(false);
   });
 
-  it('does not report a group usage limit again after the app-server terminal owner requests recovery', async () => {
+  it.each([
+    {
+      label: 'usage limit',
+      prompt: 'continue after usage limit',
+      classification: {
+        kind: 'usage_limit' as const,
+        serviceId: 'openai-codex' as const,
+        profileId: 'limited',
+        groupId: 'main',
+        resetsAtMs: 2_000,
+        retryAfterMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'provider_runtime_marker' as const,
+      },
+    },
+    {
+      label: 'plan-incompatible permission failure',
+      prompt: 'continue after switching away from an unsupported free account',
+      classification: {
+        kind: 'permission_denied' as const,
+        limitCategory: 'plan_invalid' as const,
+        serviceId: 'openai-codex' as const,
+        profileId: 'free-account',
+        groupId: 'main',
+        resetsAtMs: null,
+        retryAfterMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error' as const,
+      },
+    },
+  ])('does not report a group $label again after the app-server terminal owner requests recovery', async ({
+    classification: runtimeAuthClassification,
+    prompt,
+  }) => {
     resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
       happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
       mcpServers: {},
     }));
-    const runtimeAuthClassification = {
-      kind: 'usage_limit',
-      serviceId: 'openai-codex',
-      profileId: 'limited',
-      groupId: 'main',
-      resetsAtMs: 2_000,
-      retryAfterMs: null,
-      planType: null,
-      rateLimits: null,
-      source: 'provider_runtime_marker',
-    };
-    const providerError = Object.assign(new Error('usage limit reached'), {
+    const providerError = Object.assign(new Error('connected-service group recovery required'), {
       runtimeAuthClassification,
     });
     const flushTurn = vi.fn(async () => {});
@@ -4314,7 +4391,7 @@ describe('runCodex CodexACP resume behavior', () => {
       waitCallCount += 1;
       if (waitCallCount === 1) {
         return {
-          message: 'continue after usage limit',
+          message: prompt,
           mode: {
             permissionMode: 'default',
             permissionModeUpdatedAt: 1,
@@ -4338,7 +4415,7 @@ describe('runCodex CodexACP resume behavior', () => {
       .then(() => ({ ok: true as const }))
       .catch((error: unknown) => ({ ok: false as const, error }));
 
-    expect(outcome).toMatchObject({ ok: true });
+    if (!outcome.ok) throw outcome.error;
     expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledTimes(1);
     expect(notifyDaemonConnectedServiceRuntimeAuthFailureSpy).toHaveBeenCalledWith(
       expect.objectContaining({

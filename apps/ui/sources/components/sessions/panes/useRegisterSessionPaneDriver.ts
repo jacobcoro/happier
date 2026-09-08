@@ -17,7 +17,15 @@ export const sessionPaneModulePrefetchLoaders: Array<() => Promise<void>> = [
 ];
 
 export async function prefetchSessionPaneModules(): Promise<void> {
-    await Promise.all(sessionPaneModulePrefetchLoaders.map((loadModule) => loadModule()));
+    await Promise.all(sessionPaneModulePrefetchLoaders.map(async (loadModule) => {
+        try {
+            await loadModule();
+        } catch (error) {
+            // Speculative loading failures must not become unhandled rejections.
+            // Demand loading owns its own import and can retry a failed chunk fetch.
+            console.warn('Failed to prefetch session pane module', error);
+        }
+    }));
 }
 
 export function useRegisterSessionPaneDriver(sessionId: string): string {

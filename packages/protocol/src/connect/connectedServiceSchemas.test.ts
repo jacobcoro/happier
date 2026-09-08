@@ -601,6 +601,16 @@ describe('connectedServiceSchemas', () => {
         expect(ConnectedServiceAuthGroupIdSchema.safeParse('bad:group').success).toBe(false);
     });
 
+    it('preserves an explicit quota-reset opt-in without adding it to older policies or patches', () => {
+        for (const name of ['ConnectedServiceAuthGroupPolicyV1Schema', 'ConnectedServiceAuthGroupPolicyPatchV1Schema']) {
+            const schema = expectSchema(name);
+            expect(schema.parse({})).not.toHaveProperty('autoUseQuotaResetsWhenExhausted');
+            expect(schema.parse({ autoUseQuotaResetsWhenExhausted: true })).toMatchObject({ autoUseQuotaResetsWhenExhausted: true });
+            expect(schema.parse({ autoUseQuotaResetsWhenExhausted: false })).toMatchObject({ autoUseQuotaResetsWhenExhausted: false });
+            expect(schema.safeParse({ autoUseQuotaResetsWhenExhausted: 'true' }).success).toBe(false);
+        }
+    });
+
     it('parses the default connected-service account group policy', () => {
         const ConnectedServiceAuthGroupPolicyV1Schema = expectSchema('ConnectedServiceAuthGroupPolicyV1Schema');
         expect(ConnectedServiceAuthGroupPolicyV1Schema.parse({ v: 1 })).toEqual({

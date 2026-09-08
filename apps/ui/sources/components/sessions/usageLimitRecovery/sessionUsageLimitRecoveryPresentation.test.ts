@@ -50,6 +50,34 @@ function temporaryThrottleIssue(provider: string): SessionRuntimeIssueV1 {
 }
 
 describe('sessionUsageLimitRecoveryPresentation', () => {
+    it('projects overload retry timing and controls without quota actions, including while awaiting the provider', () => {
+        const recovery: SessionUsageLimitRecoveryV1 = {
+            v: 1, status: 'waiting', issueFingerprint: 'temporary-throttle:s1:1', armedAtMs: 1,
+            nextCheckAtMs: 12_001, attemptCount: 2, maxAttempts: 5, resumePromptMode: 'standard',
+            resetAtMs: null, lastProbeError: null, selectedAuth: { kind: 'native' },
+        };
+        const input = { featureEnabled: true, issue: temporaryThrottleIssue('codex'), recovery,
+            checkNowSupported: true, rememberedMode: 'auto_wait', formatTime: String,
+            translate: (key: string) => key } as const;
+        const scheduled = buildSessionUsageLimitRecoveryPresentation(input);
+        expect(buildSessionUsageLimitRecoveryPresentation({ ...input, operationStatus: 'checking' })?.banner.temporaryThrottle?.nextCheckAtMs)
+            .toBe(12_001);
+        expect(scheduled?.banner.primaryAction.kind).toBe('cancel');
+        expect(scheduled?.banner.secondaryActions.map((action) => action.kind)).toEqual(['retry_temporary_throttle']);
+        expect(scheduled?.banner.temporaryThrottle).toEqual({ nextCheckAtMs: 12_001, attemptCount: 2 });
+        const awaiting = buildSessionUsageLimitRecoveryPresentation({ ...input, latestTurnStatus: 'in_progress',
+            recovery: { ...recovery, status: 'waiting', nextCheckAtMs: null } });
+        expect(awaiting?.banner.temporaryThrottle?.nextCheckAtMs).toBeNull();
+        expect(awaiting?.banner.secondaryActions).toEqual([]);
+        expect(awaiting?.banner.primaryAction.kind).toBe('cancel');
+        expect(buildSessionUsageLimitRecoveryPresentation({ ...input, hasActivityAfterRuntimeIssue: true,
+            recovery: { ...recovery, status: 'cancelled', nextCheckAtMs: null },
+        })?.banner.primaryAction.kind).toBe('retry_temporary_throttle');
+        const offline = buildSessionUsageLimitRecoveryPresentation({ ...input, machineReachable: false });
+        expect(offline?.banner.temporaryThrottle?.nextCheckAtMs).toBeNull();
+        expect(offline?.banner.actionsDisabled).toBe(true);
+        expect(buildSessionUsageLimitRecoveryPresentation({ ...input, latestTurnStatus: 'completed' })).toBeNull();
+    });
     it('translates a waiting-for-reset status with its required reset time', () => {
         expect(translateSessionUsageLimitRecovery(
             'session.usageLimitRecovery.statusWaitingResetUntil',
@@ -365,7 +393,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
 
         expect(presentation?.banner.primaryAction.kind).toBe('retry_temporary_throttle');
         expect(presentation?.banner.primaryAction.label).toBe('session.usageLimitRecovery.retryTemporaryThrottleAction');
-        expect(badge?.label).toBe('session.usageLimitRecovery.statusTemporaryThrottle');
+        expect(badge?.label).toBe('session.usageLimitRecovery.overloadTitle');
     });
 
     it('shows cancel and checking state when a wait-resume intent is active', () => {

@@ -86,7 +86,9 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     // Snapshot to avoid Map mutation while iterating.
     const entries = Array.from(this.pendingRequests.entries());
     for (const [toolCallId, pending] of entries) {
-      const decision = this.resolveDecisionForToolCall(toolCallId, pending.toolName, pending.input);
+      const decision = pending.resolveDecisionIfPolicyChanges
+        ? pending.resolveDecisionIfPolicyChanges()
+        : this.resolveDecisionForToolCall(toolCallId, pending.toolName, pending.input, this.currentPermissionMode);
       if (!decision) continue;
 
       this.resolvePendingPermissionRequest(toolCallId, decision);
@@ -108,7 +110,12 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     });
   }
 
-  private resolveDecisionForToolCall(toolCallId: string, toolName: string, input: unknown): PermissionResult | null {
+  private resolveDecisionForToolCall(
+    toolCallId: string,
+    toolName: string,
+    input: unknown,
+    permissionMode: PermissionMode,
+  ): PermissionResult | null {
     if (this.isPermissionRequestClaimed(toolCallId)) {
       return null;
     }
@@ -123,8 +130,8 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     const isAlwaysAutoApprove =
       this.isAlwaysAutoApproveTool(toolName) || this.isHappierToolsShellBridgeToolCall(toolName, input);
 
-    if ((this.currentPermissionMode === 'read-only' || this.currentPermissionMode === 'plan') && !isAlwaysAutoApprove && this.isWriteLikeToolName(toolName)) {
-      logger.debug(`${this.getLogPrefix()} Denying tool ${toolName} (${toolCallId}) in ${this.currentPermissionMode} mode`);
+    if ((permissionMode === 'read-only' || permissionMode === 'plan') && !isAlwaysAutoApprove && this.isWriteLikeToolName(toolName)) {
+      logger.debug(`${this.getLogPrefix()} Denying tool ${toolName} (${toolCallId}) in ${permissionMode} mode`);
       return { decision: 'denied' };
     }
 
@@ -137,10 +144,10 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
       return { decision: 'approved_for_session' };
     }
 
-    if (this.shouldAutoApprove(toolName, toolCallId, input)) {
+    if (this.shouldAutoApprove(toolName, input, permissionMode)) {
       const decision: PermissionResult['decision'] =
-        this.isFullAutoApproveMode() ? 'approved_for_session' : 'approved';
-      logger.debug(`${this.getLogPrefix()} Auto-approving tool ${toolName} (${toolCallId}) in ${this.currentPermissionMode} mode`);
+        this.isFullAutoApproveMode(permissionMode) ? 'approved_for_session' : 'approved';
+      logger.debug(`${this.getLogPrefix()} Auto-approving tool ${toolName} (${toolCallId}) in ${permissionMode} mode`);
       return { decision };
     }
 
@@ -175,8 +182,8 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     return parsed.source === 'happier' && AUTO_APPROVE_HAPPIER_SHELL_BRIDGE_TOOLS.has(parsed.tool);
   }
 
-  private isFullAutoApproveMode(): boolean {
-    return this.currentPermissionMode === 'yolo' || this.currentPermissionMode === 'bypassPermissions';
+  private isFullAutoApproveMode(permissionMode: PermissionMode): boolean {
+    return permissionMode === 'yolo' || permissionMode === 'bypassPermissions';
   }
 
   private shouldSuppressForHappierActionApproval(toolName: string, input: unknown): boolean {
@@ -188,11 +195,11 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     }).suppress;
   }
 
-  private shouldAutoApprove(toolName: string, toolCallId: string, input: unknown): boolean {
+  private shouldAutoApprove(toolName: string, input: unknown, permissionMode: PermissionMode): boolean {
     if (this.isAlwaysAutoApproveTool(toolName)) return true;
     if (this.isHappierToolsShellBridgeToolCall(toolName, input)) return true;
 
-    switch (this.currentPermissionMode) {
+    switch (permissionMode) {
       case 'yolo':
       case 'bypassPermissions':
         return true;
@@ -211,21 +218,35 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
 
   getImmediateDecision(toolCallId: string, toolName: string, input: unknown): PermissionResult | null {
     this.syncPermissionModeFromMetadataSnapshotIfNewer();
-    return this.resolveDecisionForToolCall(toolCallId, toolName, input);
+    return this.resolveDecisionForToolCall(toolCallId, toolName, input, this.currentPermissionMode);
   }
 
-  async handleToolCall(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
+  async handleToolCall(
+    toolCallId: string,
+    toolName: string,
+    input: unknown,
+    context?: Readonly<{ permissionMode?: PermissionMode }>,
+  ): Promise<PermissionResult> {
     // Metadata updates can arrive mid-turn (e.g. UI toggles "read-only" while a tool request is in flight).
     // Sync on each tool call so the decision reflects the latest persisted intent without requiring a user message.
-    this.syncPermissionModeFromMetadataSnapshotIfNewer();
+    if (!context?.permissionMode) this.syncPermissionModeFromMetadataSnapshotIfNewer();
+    const permissionMode = context?.permissionMode ?? this.currentPermissionMode;
+    const resolveAdmittedDecision = context?.permissionMode
+      ? () => this.resolveDecisionForToolCall(toolCallId, toolName, input, permissionMode)
+      : undefined;
     if (this.isPermissionRequestClaimed(toolCallId)) {
-      return await this.requestPermissionDecision(toolCallId, toolName, input);
+      return await this.requestPermissionDecision(
+        toolCallId,
+        toolName,
+        input,
+        resolveAdmittedDecision,
+      );
     }
     logger.debug(`${this.getLogPrefix()} handleToolCall`, {
       toolCallId,
       toolName,
       requestKind: resolveAgentRequestKind(toolName),
-      permissionMode: this.currentPermissionMode,
+      permissionMode,
     });
 
     if (resolveAgentRequestKind(toolName) === 'user_action') {
@@ -243,8 +264,8 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     const isAlwaysAutoApprove =
       this.isAlwaysAutoApproveTool(toolName) || this.isHappierToolsShellBridgeToolCall(toolName, input);
 
-    if ((this.currentPermissionMode === 'read-only' || this.currentPermissionMode === 'plan') && !isAlwaysAutoApprove && this.isWriteLikeToolName(toolName)) {
-      logger.debug(`${this.getLogPrefix()} Denying tool ${toolName} (${toolCallId}) in ${this.currentPermissionMode} mode`);
+    if ((permissionMode === 'read-only' || permissionMode === 'plan') && !isAlwaysAutoApprove && this.isWriteLikeToolName(toolName)) {
+      logger.debug(`${this.getLogPrefix()} Denying tool ${toolName} (${toolCallId}) in ${permissionMode} mode`);
       this.recordAutoDecision(toolCallId, toolName, input, 'denied');
       return { decision: 'denied' };
     }
@@ -262,16 +283,21 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
       return { decision: 'approved_for_session' };
     }
 
-    if (this.shouldAutoApprove(toolName, toolCallId, input)) {
+    if (this.shouldAutoApprove(toolName, input, permissionMode)) {
       const decision: PermissionResult['decision'] =
-        this.isFullAutoApproveMode() ? 'approved_for_session' : 'approved';
-      logger.debug(`${this.getLogPrefix()} Auto-approving tool ${toolName} (${toolCallId}) in ${this.currentPermissionMode} mode`);
+        this.isFullAutoApproveMode(permissionMode) ? 'approved_for_session' : 'approved';
+      logger.debug(`${this.getLogPrefix()} Auto-approving tool ${toolName} (${toolCallId}) in ${permissionMode} mode`);
       this.recordAutoDecision(toolCallId, toolName, input, decision);
       return { decision };
     }
 
-    const pending = this.requestPermissionDecision(toolCallId, toolName, input);
-    logger.debug(`${this.getLogPrefix()} Permission request sent for tool: ${toolName} (${toolCallId}) in ${this.currentPermissionMode} mode`);
+    const pending = this.requestPermissionDecision(
+      toolCallId,
+      toolName,
+      input,
+      resolveAdmittedDecision,
+    );
+    logger.debug(`${this.getLogPrefix()} Permission request sent for tool: ${toolName} (${toolCallId}) in ${permissionMode} mode`);
     return pending;
   }
 }

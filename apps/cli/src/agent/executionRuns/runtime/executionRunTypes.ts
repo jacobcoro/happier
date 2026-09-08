@@ -11,6 +11,7 @@ export type ExecutionRunManagerStartParams = Readonly<{
   intent: ExecutionRunIntent;
   backendTarget: BackendTargetRefV1;
   accountSettings?: Readonly<Record<string, unknown>> | null;
+  notifyParentOnCompletion?: boolean;
   instructions?: string;
   /**
    * Optional model selection for the run's backend — SAME canonical shape as session spawn's
@@ -93,6 +94,7 @@ export type ExecutionRunState = Readonly<{
   retentionPolicy: ExecutionRunManagerStartParams['retentionPolicy'];
   runClass: ExecutionRunManagerStartParams['runClass'];
   ioMode: ExecutionRunManagerStartParams['ioMode'];
+  notifyParentOnCompletion?: boolean;
   /**
    * Cumulative backend turn count for long-lived runs.
    * Persisted in run state so resuming cannot reset enforcement (for example maxTurns).

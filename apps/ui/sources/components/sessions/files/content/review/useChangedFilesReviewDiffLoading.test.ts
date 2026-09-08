@@ -242,7 +242,8 @@ describe('useChangedFilesReviewDiffLoading', () => {
 
         const reviewFiles = [file('a.ts')];
         const diffCache = new ScmDiffCache({ maxEntries: 10, maxTotalBytes: 10_000, now: () => 1_000 });
-        diffCache.set({ sessionId: 's1', snapshotSignature: 'sig1', diffArea: 'pending', path: 'a.ts' }, 'cached-diff');
+        const { resolveSessionScmDiffCacheScope } = await import('@/scm/diffCache/scmDiffCacheKey');
+        diffCache.set({ sessionId: resolveSessionScmDiffCacheScope('s1'), snapshotSignature: 'sig1', diffArea: 'pending', path: 'a.ts' }, 'cached-diff');
 
         const hook = await renderHook(() => useChangedFilesReviewDiffLoading({
             sessionId: 's1',

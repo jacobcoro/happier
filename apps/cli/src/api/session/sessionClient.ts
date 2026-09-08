@@ -39,6 +39,8 @@ import {
     upsertSessionSystemRecord as upsertSessionSystemRecordHttp,
 } from '@/session/transport/http/sessionSystemRecordsHttp';
 import { createExecutionRunBackend } from '@/agent/executionRuns/runtime/createExecutionRunBackend';
+import { CodexLikePermissionHandler } from '@/agent/permissions/CodexLikePermissionHandler';
+import { SessionPermissionRpcRouter } from '@/agent/permissions/sessionPermissionRpcRouter';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { readCredentials, readAccountChangesCursor } from '@/persistence';
 import {
@@ -559,6 +561,8 @@ export class ApiSessionClient extends EventEmitter {
     private readonly bufferedPendingMessageDeliveryInfoByLocalId = new Map<string, SessionUserMessageDeliveryInfo>();
     private pendingMessageCallback: ((message: UserMessage, info?: SessionUserMessageDeliveryInfo) => unknown | Promise<unknown>) | null = null;
     readonly rpcHandlerManager: RpcHandlerManager;
+    private sessionPermissionRpcRouter: SessionPermissionRpcRouter | null = null;
+    private executionRunPermissionHandler: CodexLikePermissionHandler | null = null;
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
     private agentStateLock = new AsyncLock();
     private metadataLock = new AsyncLock();
@@ -603,9 +607,6 @@ export class ApiSessionClient extends EventEmitter {
     // ambiguity. Serialize those writes per exact claim so a later weaker report observes the
     // already-settled claim instead of overwriting the durable reason.
     private readonly canonicalPendingDeliveryBlockWritesByLocalId = new Map<string, Promise<boolean>>();
-    // A source-cutover deferral has proven no Provider effect. Preserve the server's delivering
-    // claim through predecessor shutdown so the successor can rejoin its ordinary first delivery.
-    private readonly sourceCutoverDeferredPendingLocalIds = new Set<string>();
     private readonly agentQueueEchoSuppressedLocalIds = new Set<string>();
     private readonly agentQueueDeliveredLocalIds = new Set<string>();
     private readonly explicitUserRecoveryDecisionsByLocalId = new Map<string, Promise<ExplicitUserRecoveryDecision>>();
@@ -655,6 +656,7 @@ export class ApiSessionClient extends EventEmitter {
     });
     private userSocketDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private closed = false;
+    private readonly metadataWaitAbortController = new AbortController();
     private runtimeTerminationStarted = false;
     private snapshotSyncInFlight: Promise<boolean> | null = null;
     private readonly toolCallCanonicalNameByProviderAndId = new Map<string, { rawToolName: string; canonicalToolName: string }>();
@@ -674,6 +676,7 @@ export class ApiSessionClient extends EventEmitter {
     private sessionConnectionEpoch = 0;
     private sessionSyncPendingInputServerContract: SessionSyncPendingInputServerContractResult | null = null;
     private pendingInputReadinessAbortController: AbortController | null = null;
+    private convergePendingInputReadiness: ((onContractPrepared?: () => void) => Promise<boolean>) | null = null;
     private changesSyncInFlight: Promise<void> | null = null;
     private readonly sessionChangesCursorByAccountId = new Map<string, number>();
     private accountIdPromise: Promise<string> | null = null;
@@ -981,6 +984,10 @@ export class ApiSessionClient extends EventEmitter {
                 }
             },
         });
+        this.executionRunPermissionHandler = new CodexLikePermissionHandler({
+            session: this,
+            logPrefix: '[ExecutionRun]',
+        });
         const parentProvider = resolveSessionCatalogAgentId(this.metadata);
 
         this.rebuildSessionRuntimeControls();
@@ -1085,11 +1092,19 @@ export class ApiSessionClient extends EventEmitter {
                     start,
                     ...(connectedServicesEnv ? { connectedServicesEnv } : {}),
                     ...(connectedServicesCleanup ? { connectedServicesCleanup } : {}),
+                    interactivePermissionHandler: this.executionRunPermissionHandler ?? undefined,
                 }),
             sendAcp: (provider, body, opts) => this.sendAgentMessage(provider as any, body as any, opts),
             streamedTranscriptSession,
             transcriptWriter,
             runtimeActivityContributionHandle: runtimeActivity?.executionRunContributionHandle ?? null,
+            enqueueParentSessionInput: async (input) => {
+                await this.enqueueSessionUserMessage({
+                    ...input,
+                    requestedAction: { v: 1, kind: 'steer_if_active' },
+                    inputOrigin: 'session_generated',
+                });
+            },
             budgetRegistry: executionBudgetRegistry,
             onExecutionRunPublicStateUpdated: (run) => {
                 try {
@@ -1126,6 +1141,7 @@ export class ApiSessionClient extends EventEmitter {
               backendId,
               permissionMode,
               ...(backendTarget ? { backendTarget } : {}),
+              interactivePermissionHandler: this.executionRunPermissionHandler ?? undefined,
             }),
           budgetRegistry: executionBudgetRegistry,
         });
@@ -1172,6 +1188,103 @@ export class ApiSessionClient extends EventEmitter {
             this.sessionSyncPendingInputServerContract = invalidatedContract;
             await this.sessionMutationOutbox.setSessionSyncPendingInputServerContract(invalidatedContract);
         };
+        let readinessConvergence: {
+            epoch: number;
+            socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+            promise: Promise<boolean>;
+        } | null = null;
+        this.convergePendingInputReadiness = (onContractPrepared) => {
+            const socket = currentTransportSocket;
+            const epoch = this.sessionConnectionEpoch;
+            if (!socket || socket.connected !== true || this.closed || this.runtimeTerminationStarted) {
+                return Promise.resolve(false);
+            }
+            if (readinessConvergence?.epoch === epoch && readinessConvergence.socket === socket) {
+                return readinessConvergence.promise;
+            }
+            const converge = async () => {
+                const serverContract = await serverContractController.resolve({
+                    sessionConnectionEpoch: epoch,
+                    socket,
+                    machineId: currentTransportMachineId,
+                });
+                const isResolvedContractCurrent = () => (
+                    serverContract.sessionConnectionEpoch === this.sessionConnectionEpoch
+                    && serverContract.socket === this.socket
+                    && this.socket === currentTransportSocket
+                    && this.socket.connected === true
+                    && !this.closed
+                    && !this.runtimeTerminationStarted
+                );
+                if (!isResolvedContractCurrent()) return false;
+                this.pendingInputReadinessAbortController?.abort();
+                const pendingInputReadinessAbortController = new AbortController();
+                this.pendingInputReadinessAbortController = pendingInputReadinessAbortController;
+                const clearPendingInputReadiness = () => {
+                    if (this.pendingInputReadinessAbortController === pendingInputReadinessAbortController) {
+                        this.pendingInputReadinessAbortController = null;
+                    }
+                };
+                await this.sessionMutationOutbox.setSessionSyncPendingInputServerContract(serverContract);
+                if (!isResolvedContractCurrent() || pendingInputReadinessAbortController.signal.aborted) return false;
+                if (serverContract.mode === 'auth_failed') {
+                    this.sessionSyncPendingInputServerContract = serverContract;
+                    clearPendingInputReadiness();
+                    this.sessionConnectionSupervisor?.reportProbeResult?.({
+                        status: 'auth_failed',
+                        statusCode: 401,
+                        errorMessage: 'Authentication failed while resolving session compatibility',
+                    });
+                    return false;
+                }
+
+                const requiresRuntimeActivityPublisherReadiness = (
+                    supportsRuntimeActivityV2(serverContract)
+                    && supportsPendingInputV1(serverContract)
+                );
+                if (!requiresRuntimeActivityPublisherReadiness) {
+                    this.sessionSyncPendingInputServerContract = serverContract;
+                    clearPendingInputReadiness();
+                }
+                onContractPrepared?.();
+                if (supportsRuntimeActivityV2(serverContract)) {
+                    await this.runtimeActivitySnapshotPublisher[RUNTIME_ACTIVITY_DESIRED_REOFFER_REQUEST]().catch((error) => {
+                        logger.debug('[API] Failed to reoffer Runtime Activity snapshot on connection convergence', {
+                            error: serializeAxiosErrorForLog(error),
+                        });
+                    });
+                }
+                await this.sessionMutationOutbox.flush('connect').catch((error) => {
+                    logger.debug('[API] Failed to flush durable session mutations on connection convergence', {
+                        error: serializeAxiosErrorForLog(error),
+                    });
+                });
+                if (requiresRuntimeActivityPublisherReadiness) {
+                    while (
+                        isResolvedContractCurrent()
+                        && this.pendingInputReadinessAbortController === pendingInputReadinessAbortController
+                    ) {
+                        const tail = this.sessionMutationOutbox.readRuntimeActivitySnapshotTail();
+                        if (tail.custody === null && tail.settlement !== null) {
+                            this.sessionSyncPendingInputServerContract = serverContract;
+                            clearPendingInputReadiness();
+                            break;
+                        }
+                        const changed = await this.sessionMutationOutbox.waitForRuntimeActivitySnapshotTailChange(
+                            tail.sequence,
+                            pendingInputReadinessAbortController.signal,
+                        );
+                        if (!changed) return false;
+                    }
+                }
+                return isResolvedContractCurrent() && !pendingInputReadinessAbortController.signal.aborted;
+            };
+            const promise = converge().finally(() => {
+                if (readinessConvergence?.promise === promise) readinessConvergence = null;
+            });
+            readinessConvergence = { epoch, socket, promise };
+            return promise;
+        };
         this.sessionConnectionSupervisor = createManagedConnectionSupervisor({
             ...DEFAULT_MANAGED_CONNECTION_POLICY,
             createTransport: () => {
@@ -1210,96 +1323,14 @@ export class ApiSessionClient extends EventEmitter {
                 const isReconnect = this.hasConnectedOnce;
                 this.hasConnectedOnce = true;
                 this.sessionConnectionEpoch += 1;
-                const serverContract = await serverContractController.resolve({
-                    sessionConnectionEpoch: this.sessionConnectionEpoch,
-                    socket: this.socket,
-                    machineId: currentTransportMachineId,
-                });
-                if (
-                    serverContract.sessionConnectionEpoch !== this.sessionConnectionEpoch
-                    || serverContract.socket !== this.socket
-                    || this.socket !== currentTransportSocket
-                    || this.socket.connected !== true
-                ) {
-                    return;
-                }
-                this.pendingInputReadinessAbortController?.abort();
-                const pendingInputReadinessAbortController = new AbortController();
-                this.pendingInputReadinessAbortController = pendingInputReadinessAbortController;
-                const isResolvedContractCurrent = () => (
-                    serverContract.sessionConnectionEpoch === this.sessionConnectionEpoch
-                    && serverContract.socket === this.socket
-                    && this.socket === currentTransportSocket
-                    && this.socket.connected === true
-                    && !this.closed
-                    && !this.runtimeTerminationStarted
-                );
-                const clearPendingInputReadiness = () => {
-                    if (this.pendingInputReadinessAbortController === pendingInputReadinessAbortController) {
-                        this.pendingInputReadinessAbortController = null;
+                if (!await this.convergePendingInputReadiness?.(() => {
+                    if (this.shouldKeepUserSocketConnected()) {
+                        this.kickUserSocketConnect();
                     }
-                };
-                await this.sessionMutationOutbox.setSessionSyncPendingInputServerContract(serverContract);
-                if (serverContract.mode === 'auth_failed') {
-                    this.sessionSyncPendingInputServerContract = serverContract;
-                    clearPendingInputReadiness();
-                    this.sessionConnectionSupervisor?.reportProbeResult?.({
-                        status: 'auth_failed',
-                        statusCode: 401,
-                        errorMessage: 'Authentication failed while resolving session compatibility',
-                    });
-                    return;
-                }
-
-                const requiresRuntimeActivityPublisherReadiness = (
-                    supportsRuntimeActivityV2(serverContract)
-                    && supportsPendingInputV1(serverContract)
-                );
-                if (!requiresRuntimeActivityPublisherReadiness) {
-                    this.sessionSyncPendingInputServerContract = serverContract;
-                    clearPendingInputReadiness();
-                }
-
-                if (this.shouldKeepUserSocketConnected()) {
-                    this.kickUserSocketConnect();
-                }
-
-                if (isReconnect) {
-                    this.reassertSessionPresenceAfterReconnect();
-                }
-                if (supportsRuntimeActivityV2(serverContract)) {
-                    await this.runtimeActivitySnapshotPublisher[RUNTIME_ACTIVITY_DESIRED_REOFFER_REQUEST]().catch((error) => {
-                        logger.debug('[API] Failed to reoffer Runtime Activity snapshot on reconnect', {
-                            error: serializeAxiosErrorForLog(error),
-                        });
-                    });
-                }
-
-                await this.sessionMutationOutbox.flush('connect').catch((error) => {
-                    logger.debug('[API] Failed to flush durable session mutations on reconnect', {
-                        error: serializeAxiosErrorForLog(error),
-                    });
-                });
-                if (requiresRuntimeActivityPublisherReadiness) {
-                    while (
-                        isResolvedContractCurrent()
-                        && this.pendingInputReadinessAbortController === pendingInputReadinessAbortController
-                    ) {
-                        const tail = this.sessionMutationOutbox.readRuntimeActivitySnapshotTail();
-                        if (tail.custody === null && tail.settlement !== null) {
-                            this.sessionSyncPendingInputServerContract = serverContract;
-                            clearPendingInputReadiness();
-                            break;
-                        }
-                        const changed = await this.sessionMutationOutbox.waitForRuntimeActivitySnapshotTailChange(
-                            tail.sequence,
-                            pendingInputReadinessAbortController.signal,
-                        );
-                        if (!changed) return;
+                    if (isReconnect) {
+                        this.reassertSessionPresenceAfterReconnect();
                     }
-                    if (!isResolvedContractCurrent()) return;
-                }
-
+                })) return;
                 this.reofferAcceptedCanonicalPendingDeliveriesAfterConnection();
 
                 await this.syncChangesOnConnect({ reason: isReconnect ? 'reconnect' : 'connect' }).catch((error) => {
@@ -1500,7 +1531,6 @@ export class ApiSessionClient extends EventEmitter {
         let didClear = false;
         if (this.canonicalPendingDeliveryByLocalId.delete(localId)) didClear = true;
         if (this.serverBlockedCanonicalPendingDeliveryLocalIds.delete(localId)) didClear = true;
-        if (this.sourceCutoverDeferredPendingLocalIds.delete(localId)) didClear = true;
         if (this.providerInputTerminalOutcomeByLocalId.delete(localId)) didClear = true;
         if (this.providerInputUncertainLocalIds.delete(localId)) didClear = true;
         const hadMaterializedLocalId = this.hasMaterializedLocalId(localId);
@@ -3319,7 +3349,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     waitForPendingEligibilityUpdate(abortSignal?: AbortSignal): Promise<boolean> {
-        if (abortSignal?.aborted) return Promise.resolve(false);
+        if (this.closed || abortSignal?.aborted) return Promise.resolve(false);
         const startPendingWakeSeq = this.pendingWakeSeq;
         return new Promise((resolve) => {
             let cleanedUp = false;
@@ -3331,29 +3361,39 @@ export class ApiSessionClient extends EventEmitter {
             const onAbort = () => finish(false);
             let connectConvergenceStarted = false;
             const onConnect = () => {
-                if (connectConvergenceStarted) return;
+                if (cleanedUp || connectConvergenceStarted) return;
                 connectConvergenceStarted = true;
+                const connectionEpoch = this.userSocketSettingsConnectionEpoch;
                 void this.convergeAccountSettingsForUserSocketConnection().then(
                     () => finish(true),
-                    () => finish(false),
+                    () => {
+                        // A failed connection attempt is not the end of this input wait.
+                        // Keep observing eligibility, and converge a newer connection if one
+                        // arrived while the previous connection's settings request was pending.
+                        connectConvergenceStarted = false;
+                        if (
+                            !cleanedUp
+                            && this.userSocket.connected
+                            && this.userSocketSettingsConnectionEpoch !== connectionEpoch
+                        ) onConnect();
+                    },
                 );
             };
-            const onDisconnect = () => finish(false);
             const cleanup = () => {
                 if (cleanedUp) return;
                 cleanedUp = true;
                 this.off('pending-eligibility-updated', onUpdate);
                 abortSignal?.removeEventListener('abort', onAbort);
+                this.metadataWaitAbortController.signal.removeEventListener('abort', onAbort);
                 this.userSocket.off('connect', onConnect);
-                this.userSocket.off('disconnect', onDisconnect);
                 this.maybeScheduleUserSocketDisconnect();
             };
             this.on('pending-eligibility-updated', onUpdate);
             abortSignal?.addEventListener('abort', onAbort, { once: true });
+            this.metadataWaitAbortController.signal.addEventListener('abort', onAbort, { once: true });
             this.userSocket.on('connect', onConnect);
-            this.userSocket.on('disconnect', onDisconnect);
             this.kickUserSocketConnect();
-            if (abortSignal?.aborted) {
+            if (this.closed || abortSignal?.aborted) {
                 onAbort();
             } else if (
                 this.userSocket.connected
@@ -3367,7 +3407,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     waitForMetadataUpdate(abortSignal?: AbortSignal): Promise<boolean> {
-        if (abortSignal?.aborted) {
+        if (this.closed || abortSignal?.aborted) {
             return Promise.resolve(false);
         }
 
@@ -3395,25 +3435,21 @@ export class ApiSessionClient extends EventEmitter {
                 cleanup();
                 resolve(true);
             };
-            const onDisconnect = () => {
-                cleanup();
-                resolve(false);
-            };
             const cleanup = () => {
                 if (cleanedUp) return;
                 cleanedUp = true;
                 this.off('metadata-updated', onUpdate);
                 abortSignal?.removeEventListener('abort', onAbort);
+                this.metadataWaitAbortController.signal.removeEventListener('abort', onAbort);
                 this.userSocket.off('connect', onConnect);
-                this.userSocket.off('disconnect', onDisconnect);
                 unsubscribeAccountSettings();
                 this.maybeScheduleUserSocketDisconnect();
             };
 
             this.on('metadata-updated', onUpdate);
             abortSignal?.addEventListener('abort', onAbort, { once: true });
+            this.metadataWaitAbortController.signal.addEventListener('abort', onAbort, { once: true });
             this.userSocket.on('connect', onConnect);
-            this.userSocket.on('disconnect', onDisconnect);
             unsubscribeAccountSettings = subscribeActiveAccountSettingsSnapshot((previous, next) => {
                 if (
                     this.accountSettingsSyncBarrier === null
@@ -3429,7 +3465,7 @@ export class ApiSessionClient extends EventEmitter {
             // This keeps idle agents wakeable without requiring server changes.
             this.kickUserSocketConnect();
 
-            if (abortSignal?.aborted) {
+            if (this.closed || abortSignal?.aborted) {
                 onAbort();
                 return;
             }
@@ -4624,6 +4660,7 @@ export class ApiSessionClient extends EventEmitter {
         localId?: string;
         meta?: Record<string, unknown>;
         requestedAction?: PendingRequestedActionV1;
+        inputOrigin?: 'explicit_user' | 'session_generated';
     }>): Promise<Readonly<{
         providerAcceptancePending?: boolean;
         recoveryBlocked?: Exclude<ExplicitUserRecoveryDecision, Readonly<{ status: 'ready' }>>;
@@ -4647,9 +4684,11 @@ export class ApiSessionClient extends EventEmitter {
             meta.sentFrom = 'ui';
         }
 
-        const recoveryDecision = await this.revalidateUsageLimitRecoveryForExplicitUserPrompt(localId);
-        if (recoveryDecision.status !== 'ready') {
-            return { recoveryBlocked: recoveryDecision };
+        if (params.inputOrigin !== 'session_generated') {
+            const recoveryDecision = await this.revalidateUsageLimitRecoveryForExplicitUserPrompt(localId);
+            if (recoveryDecision.status !== 'ready') {
+                return { recoveryBlocked: recoveryDecision };
+            }
         }
 
         const providerAcceptancePending = this.isCurrentPendingInputServerContract();
@@ -5673,6 +5712,13 @@ export class ApiSessionClient extends EventEmitter {
         return this.lastObservedMessageSeq;
     }
 
+    getOrCreatePermissionRpcRouter(): SessionPermissionRpcRouter {
+        if (!this.sessionPermissionRpcRouter) {
+            this.sessionPermissionRpcRouter = new SessionPermissionRpcRouter(this.rpcHandlerManager);
+        }
+        return this.sessionPermissionRpcRouter;
+    }
+
     getLastObservedUserMessageSeq(): number {
         return this.lastObservedUserMessageSeq;
     }
@@ -5690,6 +5736,8 @@ export class ApiSessionClient extends EventEmitter {
 
     async close() {
         logger.debug('[API] socket.close() called');
+        this.executionRunPermissionHandler?.reset();
+        this.executionRunPermissionHandler = null;
         this.pendingInputReadinessAbortController?.abort();
         this.pendingInputReadinessAbortController = null;
         this.acceptedCanonicalPendingDeliveryOperationAbortController.abort();
@@ -5717,13 +5765,13 @@ export class ApiSessionClient extends EventEmitter {
             });
         });
         this.closed = true;
+        this.metadataWaitAbortController.abort();
         this.pendingMaterializedLocalIds.clear();
         this.committedLocalIdsAwaitingEcho.clear();
         this.pendingQueueMaterializedLocalIds.clear();
         this.canonicalPendingDeliveryByLocalId.clear();
         this.serverBlockedCanonicalPendingDeliveryLocalIds.clear();
         this.canonicalPendingDeliveryBlockWritesByLocalId.clear();
-        this.sourceCutoverDeferredPendingLocalIds.clear();
         this.committedUserMessageSeqTracker.clear();
         this.agentQueueEchoSuppressedLocalIds.clear();
         this.agentQueueDeliveredLocalIds.clear();
@@ -5774,13 +5822,6 @@ export class ApiSessionClient extends EventEmitter {
     private async blockUnresolvedCanonicalPendingDeliveriesBeforeClose(): Promise<void> {
         const localIds = [...this.canonicalPendingDeliveryByLocalId.keys()];
         for (const localId of localIds) {
-            if (this.sourceCutoverDeferredPendingLocalIds.has(localId)) {
-                logger.debug('[pendingQueue] preserving source-cutover delivery for successor custody during close', {
-                    sessionId: this.sessionId,
-                    localId,
-                });
-                continue;
-            }
             if (this.providerInputUncertainLocalIds.has(localId)) {
                 await this.blockPendingQueueDeliveryLocalId(localId, 'delivery_outcome_uncertain', {
                     canonicalOnly: true,
@@ -5828,13 +5869,6 @@ export class ApiSessionClient extends EventEmitter {
         }
 
         for (const localId of localIds) {
-            if (this.sourceCutoverDeferredPendingLocalIds.has(localId)) {
-                logger.debug('[pendingQueue] preserving durable source-cutover delivery for successor custody during close', {
-                    sessionId: this.sessionId,
-                    localId,
-                });
-                continue;
-            }
             if (this.providerInputUncertainLocalIds.has(localId)) {
                 await this.blockPendingQueueDeliveryLocalId(localId, 'delivery_outcome_uncertain', {
                     canonicalOnly: false,
@@ -6057,12 +6091,21 @@ export class ApiSessionClient extends EventEmitter {
         if (this.closed || this.runtimeTerminationStarted) {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
         }
-        if (this.closed || this.runtimeTerminationStarted) {
-            return { didMaterialize: false, result: { type: 'retryable_transport' } };
-        }
         const supervisor = this.sessionConnectionSupervisor;
         if (!supervisor) {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
+        }
+        const previousContract = this.sessionSyncPendingInputServerContract;
+        if (
+            previousContract?.pendingInput === 'indeterminate'
+            && previousContract.mode !== 'auth_failed'
+            && previousContract.sessionConnectionEpoch === this.sessionConnectionEpoch
+            && previousContract.socket === this.socket
+            && this.socket.connected === true
+        ) {
+            // Pending wakes can follow a transient feature-probe failure without a
+            // disconnect. Reuse connection readiness, including publisher settlement.
+            await this.convergePendingInputReadiness?.();
         }
         const serverContract = this.sessionSyncPendingInputServerContract;
         if (!serverContract) {
@@ -6349,75 +6392,16 @@ export class ApiSessionClient extends EventEmitter {
             && materializedMessage?.messageRole === 'user'
         ) {
             const requestedAction = materializedMessage.requestedAction;
-            // The daemon owns turn custody for every prompt this runner delivers, including on a
-            // server contract that carries no requested action at all (released-server v0.2.1,
-            // whose materialize ack is exactly id/seq/localId). Notify unconditionally; the
-            // wrapper attaches the action and the active-turn witness only when there is one.
+            // Prompt admission belongs to Pending and the runner. The daemon observes lifecycle
+            // for recovery and switching, but its response is not provider-input authorization.
+            // Keep notifications serialized without holding an admitted prompt behind local IPC.
             reportPendingMaterializationDiagnosticPhase(opts.onDiagnosticPhase, 'materialize.daemon_lifecycle');
-            const lifecycleResult = await this.notifyDaemonConnectedServiceTurnLifecycle(
+            void this.notifyDaemonConnectedServiceTurnLifecycle(
                 'prompt_or_steer',
                 undefined,
                 undefined,
                 requestedAction,
             );
-            if (requestedAction && lifecycleResult === null) {
-                // The daemon did not answer at all (control channel down, or an unparsable reply).
-                // That is NOT a source cutover: no successor runner is coming to inherit the claim,
-                // and nothing was handed to the Provider. Resolve the durable claim as a visible,
-                // reversible pre-acceptance block. Clearing only process-local custody cannot wake
-                // the Pending consumer and can strand the server row in `delivering`; a durable
-                // block also preserves the existing explicit Retry path without a blind retry loop.
-                logger.debug('[pendingQueue] blocking materialized claim after an unanswered connected-service turn lifecycle', {
-                    sessionId: this.sessionId,
-                    localId: materializedLocalId,
-                });
-                let didBlock = false;
-                if (materializedLocalId) {
-                    reportPendingMaterializationDiagnosticPhase(opts.onDiagnosticPhase, 'materialize.delivery_settlement');
-                    didBlock = await this.blockPendingQueueDeliveryLocalId(
-                        materializedLocalId,
-                        'provider_unavailable_before_acceptance',
-                        { canonicalOnly: false },
-                    );
-                }
-                // Only the durable block proves the server row is retryable again. Retire every
-                // process-local claim then so an explicit reopen of this exact localId can be
-                // materialized; a failed block keeps custody and therefore fails closed.
-                if (didBlock && materializedLocalId) {
-                    this.clearCanonicalPendingDeliveryLocalState(materializedLocalId);
-                    logger.debug('[pendingQueue] retired unanswered pre-provider local custody after durable block', {
-                        sessionId: this.sessionId,
-                        localId: materializedLocalId,
-                    });
-                }
-                return {
-                    didMaterialize: false,
-                    result: { type: didBlock ? 'no_pending' : 'retryable_transport' },
-                };
-            }
-            if (lifecycleResult?.status === 'input_blocked') {
-                // Retention is correct only on the daemon's explicit cutover promise: a successor
-                // runner is coming and will inherit this claim. Test that positively, never as
-                // "anything that is not continue" — an unanswered daemon (handled above) and a
-                // materialization whose server contract has no action to authorize both have no
-                // successor, so parking the row there starves it and everything behind it for the
-                // life of this runner, with no server-side exit but publisher replacement.
-                logger.debug('[pendingQueue] retained materialized delivery for connected-service source cutover', {
-                    sessionId: this.sessionId,
-                    localId: materializedLocalId,
-                    lifecycleStatus: lifecycleResult.status,
-                });
-                if (materializedLocalId) {
-                    this.sourceCutoverDeferredPendingLocalIds.add(materializedLocalId);
-                }
-                return {
-                    didMaterialize: false,
-                    result: {
-                        type: 'deferred',
-                        reason: 'request_auth_source_cutover',
-                    },
-                };
-            }
         }
 
         const shouldClearResolvedCanonicalDelivery = (

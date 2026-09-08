@@ -5,6 +5,7 @@ import {
   type ConnectedServiceAuthGroupMember,
   type ConnectedServiceAuthGroupMemberRuntimeState,
   type ConnectedServiceAuthGroupPolicyV1,
+  type ConnectedServiceAuthGroupQuotaSnapshot,
 } from '../../selection/selectConnectedServiceAuthGroupCandidate';
 import { resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds } from '../../selection/resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds';
 import {
@@ -12,7 +13,10 @@ import {
   type ConnectedServiceAuthGenerationApplyFailure,
 } from '../../../runtimeAuth/connectedServiceAuthGenerationApplyFailure';
 import type { AcceptedConnectedServiceAccountVerificationByServiceId } from '../../../accountTransitions/acceptedConnectedServiceAccountVerification';
-import type { ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol';
+import type {
+  ConnectedServiceCredentialRevisionV1,
+  ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1,
+} from '@happier-dev/protocol';
 import { evaluatePredictiveSoftSwitchSessionApplyPolicy } from '../predictiveSoftSwitchPolicy';
 
 export type ConnectedServiceAuthGroupSwitchState = Readonly<{
@@ -204,6 +208,11 @@ export type ConnectedServiceAuthGroupSwitchResult =
       activeProfileId: string | null;
       generation: number;
       credentialRevision?: ConnectedServiceCredentialRevisionV1 | null;
+      /** Producer attaches only after canonical selection proves fresh usable quota on this profile. */
+      quotaRecovery?: Readonly<{
+        receipt?: ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1;
+        quotaSnapshot: Pick<ConnectedServiceAuthGroupQuotaSnapshot, 'capturedAtMs' | 'effectiveRemainingPercent'>;
+      }>;
       mode?: ConnectedServiceAuthGroupSwitchApplyMode;
       providerApplication?: ConnectedServiceAuthGroupProviderApplication;
       verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId;

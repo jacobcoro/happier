@@ -32,9 +32,11 @@ export function resolvePendingActivationBanner(input: Readonly<{
     active: boolean;
     machineReachable: boolean;
     canWrite: boolean;
+    resumingAt?: number | null;
     pendingMessages: readonly PendingMessage[];
 }>): PendingActivationBannerPresentation | null {
     if (!input.canWrite) return null;
+    if (input.resumingAt != null) return null;
     if (input.active && input.machineReachable) return null;
     const rows = input.pendingMessages.filter(isEligiblePendingUserRow).sort(comparePendingRows);
     const authorization = input.authorization && input.authorization.requestedAt > input.activeAt

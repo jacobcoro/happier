@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
@@ -78,6 +79,28 @@ describe('HappierUnifiedDiffViewer (folding)', () => {
         expect(texts).toContain('line10');
         expect(texts).not.toContain('line3');
         expect(texts).not.toContain('line8');
+    });
+
+    it.each([false, true])('preserves expanded passages through patch shifts and resets for another file (repeated: %s)', async (repeated) => {
+        foldingEnabled = true;
+        const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
+        const demo = buildDemoUnifiedDiff().replace('15 +1,15', '25 +1,25')
+            + Array.from({ length: 10 }, (_, index) => ` line${index + 16}\n`).join('');
+        const patch = repeated ? demo.replace(/ line[3-8]\n/g, ' repeated\n') : demo;
+        const passage = repeated ? 'repeated' : 'line5';
+        const screen = await renderScreen(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={patch} filePath="src/demo.ts" />);
+        const props = lastCodeLinesViewProps!;
+        const line = (lastLines as CodeLine[]).find((line) => line.renderCodeText === 'line2')!;
+        const toggle = props.renderAfterLine(line) as React.ReactElement<{ onPressExpand: () => void }>;
+        await act(async () => { toggle.props.onPressExpand(); });
+        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(true);
+
+        const shifted = patch.replace('@@ -1,25 +1,25 @@', '@@ -1,25 +1,28 @@\n+insertedA\n+insertedB') + '+new ending\n';
+        await act(async () => { screen.tree.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/demo.ts" />); });
+        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(true);
+        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === 'line20')).toBe(false);
+        await act(async () => { screen.tree.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/other.ts" />); });
+        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(false);
     });
 
     it('reuses precomputed unified diff lines instead of reparsing the diff', async () => {

@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 import { AIBackendProfileSchema } from '@/sync/domains/profiles/profileCompatibility';
 import { settingsDefaults as testSettingsDefaults } from '@/sync/domains/settings/settings';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, resetBrowserSessionDraftPersistenceForTest } from '@/dev/testkit';
 import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 
@@ -103,6 +103,8 @@ const saveNewSessionDraftMock = vi.hoisted(() => vi.fn());
 const storeTempDataMock = vi.hoisted(() => vi.fn(() => 'temp-recovery-1'));
 const updateSessionPermissionModeMock = vi.hoisted(() => vi.fn());
 const updateSessionModelModeMock = vi.hoisted(() => vi.fn());
+const markSessionOptimisticThinkingMock = vi.hoisted(() => vi.fn());
+const upsertPendingMessageMock = vi.hoisted(() => vi.fn());
 const storedSessionsState = vi.hoisted(() => ({ sessions: {} as Record<string, Session> }));
 const ensureSessionVisibleForMessageRouteMock = vi.hoisted(() => vi.fn(async (sessionId?: unknown) => {
     const hydratedSessionId = String(sessionId ?? '').trim();
@@ -169,6 +171,8 @@ installNewSessionScreenModelCommonModuleMocks({
                 sessions: storedSessionsState.sessions,
                 updateSessionPermissionMode: updateSessionPermissionModeMock,
                 updateSessionModelMode: updateSessionModelModeMock,
+                markSessionOptimisticThinking: markSessionOptimisticThinkingMock,
+                upsertPendingMessage: upsertPendingMessageMock,
             }),
         });
     },
@@ -315,6 +319,10 @@ vi.mock('@/utils/sessions/tempDataStore', () => ({
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+// Compile the large hook graph once during collection instead of charging every dynamic import
+// to an individual test's timeout. The installed mocks are already active at this point.
+await import('./useCreateNewSession');
+
 async function renderHook<T>(useValue: () => T): Promise<T> {
     let current: T | null = null;
 
@@ -328,6 +336,10 @@ async function renderHook<T>(useValue: () => T): Promise<T> {
     if (!current) throw new Error('Hook did not render');
     return current;
 }
+
+beforeEach(async () => {
+    await resetBrowserSessionDraftPersistenceForTest();
+});
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -363,11 +375,12 @@ afterEach(() => {
     storeTempDataMock.mockClear();
     updateSessionPermissionModeMock.mockClear();
     updateSessionModelModeMock.mockClear();
+    markSessionOptimisticThinkingMock.mockClear();
+    upsertPendingMessageMock.mockClear();
     ensureSessionVisibleForMessageRouteMock.mockClear();
     for (const key of Object.keys(storedSessionsState.sessions)) {
         delete storedSessionsState.sessions[key];
     }
-    vi.resetModules();
 });
 
 describe('useCreateNewSession (worktree gating)', () => {

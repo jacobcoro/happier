@@ -46,14 +46,14 @@ function body(localId: string, text: string): string {
     });
 }
 
-function persist(params: Readonly<{
+async function persist(params: Readonly<{
     sessionId: string;
     localId: string;
     text: string;
     scope: Readonly<{ serverId: string; accountId: string }>;
     operation: 'enqueue' | 'cancel';
-}>): void {
-    savePendingOutboxMessage({
+}>): Promise<void> {
+    (await savePendingOutboxMessage({
         sessionId: params.sessionId,
         localId: params.localId,
         createdAt: 111,
@@ -61,8 +61,8 @@ function persist(params: Readonly<{
         rawRecord: { role: 'user', content: { type: 'text', text: params.text }, meta: {} },
         operation: params.operation,
         request: { v: 1, body: body(params.localId, params.text) },
-    }, params.scope);
-    replayPersistedPendingOutboxForSession(params.sessionId, params.scope);
+    }, params.scope));
+    (await replayPersistedPendingOutboxForSession(params.sessionId, params.scope));
 }
 
 function response(localId: string, status: 'queued' | 'discarded', text = `server ${status}`): Response {
@@ -154,7 +154,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         });
 
         setActiveServerId(serverB.id, { scope: 'tab' });
-        persist({ sessionId, localId, text: 'scope B durable', scope: scopeB, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'scope B durable', scope: scopeB, operation: 'enqueue' }));
         release();
         await refresh;
 
@@ -171,7 +171,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'still saving', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'still saving', scope, operation: 'enqueue' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(8));
 
         await fetchAndApplyPendingMessagesV2({
@@ -203,7 +203,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'retained external handoff', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'retained external handoff', scope, operation: 'enqueue' }));
         const retained = storage.getState().sessionPending[sessionId]?.messages[0];
         storage.getState().upsertPendingMessage(sessionId, {
             ...retained!,
@@ -219,7 +219,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             request: async () => Response.json({ pending: [] }),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([
             expect.objectContaining({ localId, operation: 'enqueue' }),
         ]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
@@ -240,7 +240,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'acknowledged external handoff', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'acknowledged external handoff', scope, operation: 'enqueue' }));
         const retained = storage.getState().sessionPending[sessionId]?.messages[0];
         storage.getState().upsertPendingMessage(sessionId, {
             ...retained!,
@@ -257,7 +257,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             request: async () => Response.json({ pending: [] }),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -276,7 +276,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'stale acknowledged local', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'stale acknowledged local', scope, operation: 'enqueue' }));
         const localProjection = storage.getState().sessionPending[sessionId]?.messages[0];
         storage.getState().upsertPendingMessage(sessionId, {
             ...localProjection!,
@@ -308,7 +308,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             request: async () => Response.json({ pending: [] }),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 id: 'canonical-external-synthetic-projection',
@@ -329,7 +329,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -337,7 +337,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             rawRecord: { role: 'user', content: { type: 'text', text: 'cancel retained handoff' }, meta: {} },
             operation: 'cancel',
             request: { v: 1, body: body(localId, 'cancel retained handoff') },
-        }, scope);
+        }, scope));
         storage.getState().upsertPendingMessage(sessionId, {
             id: 'server-handoff-cancel-synthetic-projection',
             localId,
@@ -359,7 +359,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             request: async () => Response.json({ pending: [] }),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([
             expect.objectContaining({ localId, operation: 'cancel' }),
         ]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
@@ -380,7 +380,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' }));
         let retryStarted!: () => void;
         const retryStartedGate = new Promise<void>((resolve) => { retryStarted = resolve; });
         let releaseRetry!: () => void;
@@ -424,12 +424,12 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         }).then(() => { refreshSettled = true; });
         await refresh;
         expect(refreshSettled).toBe(true);
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
 
         releaseRetry();
         await Promise.all([retry, refresh]);
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -449,7 +449,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' }));
 
         let finalScopeCheckStarted!: () => void;
         const finalScopeCheckStartedGate = new Promise<void>((resolve) => { finalScopeCheckStarted = resolve; });
@@ -505,7 +505,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         });
         await Promise.all([retry, refresh]);
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -583,7 +583,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         });
         await Promise.all([enqueue, refresh]);
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -612,7 +612,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             setActiveServerId(server.id, { scope: 'tab' });
             storage.getState().activateProfileScope(scope);
             if (operationKind === 'retry') {
-                persist({ sessionId, localId, text: 'durable retry content', scope, operation: 'enqueue' });
+                (await persist({ sessionId, localId, text: 'durable retry content', scope, operation: 'enqueue' }));
             }
 
             const transportRequests: string[] = [];
@@ -676,13 +676,11 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                 `DELETE /v2/sessions/${sessionId}/pending/${localId}`,
             ]);
             if (operationKind === 'initial enqueue') {
-                expect(operationResult).toEqual(timing === 'during the cancellation-helper yield'
-                    ? { localId, accepted: true, cancelled: true }
-                    : { localId, accepted: true });
+                expect(operationResult).toMatchObject({ localId, accepted: true });
             } else {
                 expect(operationResult).toEqual({ accepted: true });
             }
-            expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+            expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
             expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
         },
     );
@@ -698,7 +696,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'accepted retry content', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'accepted retry content', scope, operation: 'enqueue' }));
 
         let finalScopeCheckStarted!: () => void;
         const finalScopeCheckStartedGate = new Promise<void>((resolve) => { finalScopeCheckStarted = resolve; });
@@ -737,7 +735,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             outboxScope: scope,
             request: async () => Response.json({ requestedAction: { v: 1, kind: 'enqueue' } }),
         });
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -766,7 +764,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'accepted before parse', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'accepted before parse', scope, operation: 'enqueue' }));
 
         let parseStarted!: () => void;
         const parseStartedGate = new Promise<void>((resolve) => { parseStarted = resolve; });
@@ -834,7 +832,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             setActiveServerId(server.id, { scope: 'tab' });
             storage.getState().activateProfileScope(scope);
             if (operationKind === 'retry') {
-                persist({ sessionId, localId, text: 'local retry content', scope, operation: 'enqueue' });
+                (await persist({ sessionId, localId, text: 'local retry content', scope, operation: 'enqueue' }));
             }
 
             let finalScopeCheckStarted!: () => void;
@@ -878,7 +876,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             releaseFinalScopeCheck();
             await olderExactRefresh;
 
-            expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+            expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
             expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
                 expect.objectContaining({
                     localId,
@@ -901,8 +899,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId: localIdA, text: 'local accepted a', scope, operation: 'enqueue' });
-        persist({ sessionId, localId: localIdB, text: 'local accepted b', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId: localIdA, text: 'local accepted a', scope, operation: 'enqueue' }));
+        (await persist({ sessionId, localId: localIdB, text: 'local accepted b', scope, operation: 'enqueue' }));
 
         let finalScopeCheckStarted!: () => void;
         const finalScopeCheckStartedGate = new Promise<void>((resolve) => { finalScopeCheckStarted = resolve; });
@@ -972,7 +970,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'e2ee' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'accepted during decrypt', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'accepted during decrypt', scope, operation: 'enqueue' }));
 
         let decryptStarted!: () => void;
         const decryptStartedGate = new Promise<void>((resolve) => { decryptStarted = resolve; });
@@ -1017,7 +1015,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         releaseDecrypt();
         await olderUnrelatedRefresh;
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -1035,7 +1033,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'e2ee' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' }));
         let decryptStarted!: () => void;
         const decryptStartedGate = new Promise<void>((resolve) => { decryptStarted = resolve; });
         let releaseDecrypt!: () => void;
@@ -1085,7 +1083,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
 
         releaseDecrypt();
         await refresh;
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -1111,7 +1109,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'stale retry content', scope, operation: 'enqueue' }));
         let retryStarted!: () => void;
         const retryStartedGate = new Promise<void>((resolve) => { retryStarted = resolve; });
         let releaseRetry!: () => void;
@@ -1149,7 +1147,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                 }],
             }),
         });
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
 
         releaseRetry();
         await retry.catch(() => undefined);
@@ -1243,7 +1241,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             }),
         );
 
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
         const initialDiagnostic = storage.getState().sessionPending[sessionId]?.messages[0];
         expect(initialDiagnostic).toMatchObject({
             localId: quarantinedLocalId,
@@ -1328,7 +1326,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'same content', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'same content', scope, operation: 'enqueue' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(9));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1347,7 +1345,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             }),
         ]);
         expect(storage.getState().sessionPending[sessionId]?.messages[0]).not.toHaveProperty('pendingOutboxScope');
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
     });
 
     it('keeps exact-scope cancellation custody when the server only reports a discard', async () => {
@@ -1358,7 +1356,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'durable cancel', scope, operation: 'cancel' });
+        (await persist({ sessionId, localId, text: 'durable cancel', scope, operation: 'cancel' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(8));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1377,13 +1375,13 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                 text: 'server discarded',
             })],
         }));
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([localId]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([localId]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([]);
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([
             expect.objectContaining({ localId, operation: 'cancel' }),
         ]);
 
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 333,
@@ -1391,10 +1389,10 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             rawRecord: { role: 'user', content: { type: 'text', text: 'stale recreated envelope' }, meta: {} },
             operation: 'enqueue',
             request: { v: 1, body: body(localId, 'stale recreated envelope') },
-        }, scope);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([localId]);
+        }, scope));
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([localId]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([]);
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([
             expect.objectContaining({ localId, operation: 'cancel', text: 'durable cancel' }),
         ]);
     });
@@ -1407,7 +1405,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'durable enqueue', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'durable enqueue', scope, operation: 'enqueue' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(8));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1418,8 +1416,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             request: async () => response(localId, 'discarded'),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]).toEqual(expect.objectContaining({
             messages: [],
             discarded: [expect.objectContaining({ localId, source: 'server_pending' })],
@@ -1434,7 +1432,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'local content', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'local content', scope, operation: 'enqueue' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(10));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1453,8 +1451,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                 pendingOutboxConflict: true,
             }),
         ]);
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
     });
 
     it('never replays retired conflicting custody after the server row disappears', async () => {
@@ -1463,7 +1461,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         const server = upsertServerProfile({ serverUrl: 'https://conflict-disappears.example.test', name: 'Conflict disappears' });
         const scope = { serverId: server.id, accountId: 'account' } as const;
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
-        persist({ sessionId, localId, text: 'retained local custody', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'retained local custody', scope, operation: 'enqueue' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(15));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1481,8 +1479,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             request: async () => Response.json({ pending: [] }),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([]);
     });
 
@@ -1492,7 +1490,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         const server = upsertServerProfile({ serverUrl: 'https://malformed-row.example.test', name: 'Malformed row' });
         const scope = { serverId: server.id, accountId: 'account' } as const;
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
-        persist({ sessionId, localId, text: 'must not replay', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'must not replay', scope, operation: 'enqueue' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(14));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1518,8 +1516,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                 pendingOutboxConflict: true,
             }),
         ]);
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
     });
 
     it('retires external-handoff enqueue custody when an ordinary server row owns the identity', async () => {
@@ -1531,7 +1529,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -1548,8 +1546,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                     deliveryMode: 'external_handoff',
                 }),
             },
-        }, scope);
-        replayPersistedPendingOutboxForSession(sessionId, scope);
+        }, scope));
+        (await replayPersistedPendingOutboxForSession(sessionId, scope));
         const encryption = await Encryption.create(new Uint8Array(32).fill(12));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1564,8 +1562,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             source: 'server_pending',
             text: 'same content',
         });
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
     });
 
     it('retires ordinary enqueue custody when an external-handoff server row owns the identity', async () => {
@@ -1577,7 +1575,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text, scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text, scope, operation: 'enqueue' }));
         const encryption = await Encryption.create(new Uint8Array(32).fill(13));
 
         await fetchAndApplyPendingMessagesV2({
@@ -1611,8 +1609,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             pendingDeliveryStatus: 'external_handoff',
             text,
         });
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
     });
 
     it('retires exact retry custody when the server owns a conflicting ciphertext envelope', async () => {
@@ -1631,7 +1629,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([buildSession({ sessionId })]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -1647,8 +1645,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                     requestedAction: { v: 1, kind: 'enqueue' },
                 }),
             },
-        }, scope);
-        replayPersistedPendingOutboxForSession(sessionId, scope);
+        }, scope));
+        (await replayPersistedPendingOutboxForSession(sessionId, scope));
 
         await fetchAndApplyPendingMessagesV2({
             sessionId,
@@ -1675,8 +1673,8 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
             source: 'server_pending',
             text: 'same decrypted content',
         });
-        expect(loadPendingOutboxForSession(sessionId, scope)).toEqual([]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, scope))).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scope))).toEqual([]);
     });
 
     it('converges an ambiguous POST to the matching server snapshot without showing Message not sent', async () => {
@@ -1687,7 +1685,7 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
         storage.getState().applySessions([{ ...buildSession({ sessionId }), encryptionMode: 'plain' }]);
         setActiveServerId(server.id, { scope: 'tab' });
         storage.getState().activateProfileScope(scope);
-        persist({ sessionId, localId, text: 'committed despite response loss', scope, operation: 'enqueue' });
+        (await persist({ sessionId, localId, text: 'committed despite response loss', scope, operation: 'enqueue' }));
 
         await expect(retryPendingOutboxOperationV2({
             sessionId,

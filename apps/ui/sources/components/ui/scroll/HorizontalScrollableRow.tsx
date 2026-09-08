@@ -203,6 +203,12 @@ export function HorizontalScrollableRow(props: HorizontalScrollableRowProps) {
                 <View testID={props.contentTestID} style={props.contentStyle}>
                     {props.children}
                 </View>
+                <View
+                    testID={props.testID ? `${props.testID}-end-gutter` : undefined}
+                    pointerEvents="none"
+                    accessible={false}
+                    style={{ width: HORIZONTAL_SCROLL_END_GUTTER_WIDTH, flexShrink: 0 }}
+                />
             </ScrollViewWithWheel>
             <ScrollEdgeFades
                 color={props.fadeColor}

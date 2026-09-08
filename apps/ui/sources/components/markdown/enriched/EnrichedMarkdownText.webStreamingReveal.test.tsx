@@ -45,6 +45,7 @@ type WebEnrichedMarkdownTextModule = Readonly<{
         markdown: string;
         renderRawFallback?: boolean | 'hidden';
         streamingAnimation?: boolean;
+        md4cFlags?: { latexMath?: boolean };
     }>;
 }>;
 
@@ -515,6 +516,7 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
 
     it('can hide the raw markdown fallback while the web parser is cold', async () => {
         const { EnrichedMarkdownText } = await loadPatchedWebEnrichedMarkdownText();
+        const parser = await loadPatchedWebSourceParseMarkdown();
         const globalWithReact = globalThis as typeof globalThis & { React?: typeof React };
         globalWithReact.React = React;
         const rendererHolder: { current: TestRenderer.ReactTestRenderer | null } = { current: null };
@@ -535,6 +537,9 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
         const fallbackParagraph = findFirstJsonNodeByType(renderer.toJSON(), 'p');
         expect(fallbackParagraph?.props.style.visibility).toBe('hidden');
         expect(JSON.stringify(renderer.toJSON())).toContain('## Forensics');
+        await TestRenderer.act(async () => { await parser.preloadMarkdownRuntime(); });
+        expect(countJsonNodesByType(renderer.toJSON(), 'h2')).toBe(1);
+        expect(JSON.stringify(renderer.toJSON())).not.toContain('## Forensics');
         TestRenderer.act(() => {
             renderer.unmount();
         });
@@ -605,6 +610,77 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
         await TestRenderer.act(async () => {
             renderer.unmount();
         });
+    });
+
+    it('does not hide a visible partial word when its suffix arrives', async () => {
+        const parser = await loadPatchedWebSourceParseMarkdown();
+        await parser.preloadMarkdownRuntime();
+        const { EnrichedMarkdownText } = await loadPatchedWebEnrichedMarkdownText();
+        Object.assign(globalThis, { React });
+        let renderer!: TestRenderer.ReactTestRenderer;
+        try {
+            await TestRenderer.act(async () => {
+                renderer = TestRenderer.create(<EnrichedMarkdownText markdown="Stable electro" streamingAnimation md4cFlags={{ latexMath: false }} />);
+            });
+            await TestRenderer.act(async () => {
+                renderer.update(<EnrichedMarkdownText markdown="Stable electromagnetic waves" streamingAnimation md4cFlags={{ latexMath: false }} />);
+            });
+            expect(revealSpanTextsFromJson(renderer.toJSON())).toEqual(['waves']);
+            expect(JSON.stringify(renderer.toJSON())).toContain('electromagnetic');
+        } finally {
+            await TestRenderer.act(async () => renderer?.unmount());
+        }
+    });
+
+    it('commits a warm long-document append once without an unused asynchronous AST publication', async () => {
+        const parser = await loadPatchedWebSourceParseMarkdown();
+        await parser.preloadMarkdownRuntime();
+        const { EnrichedMarkdownText } = await loadPatchedWebEnrichedMarkdownText();
+        Object.assign(globalThis, { React });
+        // Exceeds the parser's result-cache ceiling: duplicate work cannot hide behind a cache hit.
+        const markdown = 'A settled paragraph with **formatted** content.\n\n'.repeat(700);
+        const commits: string[] = [];
+        const paint = (text: string) => (
+            <React.Profiler id="enriched" onRender={(_, phase) => commits.push(phase)}>
+                <EnrichedMarkdownText markdown={text} md4cFlags={{ latexMath: false }} />
+            </React.Profiler>
+        );
+        let renderer!: TestRenderer.ReactTestRenderer;
+        try {
+            await TestRenderer.act(async () => { renderer = TestRenderer.create(paint(markdown)); });
+            expect(commits).toEqual(['mount']);
+            commits.length = 0;
+            await TestRenderer.act(async () => { renderer.update(paint(`${markdown}New tail.`)); });
+            expect(commits).toEqual(['update']);
+            expect(JSON.stringify(renderer.toJSON())).toContain('New tail.');
+        } finally {
+            await TestRenderer.act(async () => renderer?.unmount());
+        }
+    });
+
+    it('loads optional math independently when a warm document enables math rendering', async () => {
+        const parser = await loadPatchedWebSourceParseMarkdown();
+        await parser.preloadMarkdownRuntime();
+        const { EnrichedMarkdownText } = await loadPatchedWebEnrichedMarkdownText();
+        Object.assign(globalThis, { React });
+        let renderer!: TestRenderer.ReactTestRenderer;
+        try {
+            await TestRenderer.act(async () => {
+                renderer = TestRenderer.create(<EnrichedMarkdownText markdown="Formula $x^2$." md4cFlags={{ latexMath: false }} />);
+            });
+            expect(renderer.root.findAllByProps({ role: 'math' })).toHaveLength(0);
+            await TestRenderer.act(async () => {
+                renderer.update(<EnrichedMarkdownText markdown="Formula $x^2$." md4cFlags={{ latexMath: true }} />);
+            });
+            const math = renderer.root.findByProps({ role: 'math' });
+            expect(math.props.dangerouslySetInnerHTML.__html).toContain('<math');
+            await TestRenderer.act(async () => {
+                renderer.update(<EnrichedMarkdownText markdown="Formula $x^2$. More prose." md4cFlags={{ latexMath: true }} />);
+            });
+            expect(renderer.root.findByProps({ role: 'math' }).props.dangerouslySetInnerHTML.__html).toContain('<math');
+        } finally {
+            await TestRenderer.act(async () => renderer?.unmount());
+        }
     });
 
     it('preserves paragraph block boundaries inside loose ordered list items', async () => {
@@ -747,7 +823,7 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
 
     it('uses themed paragraph fallback for web parse errors', () => {
         const componentSource = readPatchedPackageFile('src/web/EnrichedMarkdownText.tsx');
-        const parseErrorFallbackStart = componentSource.indexOf('if (parseError)');
+        const parseErrorFallbackStart = componentSource.indexOf('if (parseError && !syncAst)');
         const parseErrorFallbackEnd = componentSource.indexOf('if (!ast)', parseErrorFallbackStart);
         const parseErrorFallback = componentSource.slice(parseErrorFallbackStart, parseErrorFallbackEnd);
 

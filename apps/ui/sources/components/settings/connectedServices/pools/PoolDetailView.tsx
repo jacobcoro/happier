@@ -219,6 +219,7 @@ export const PoolDetailView = React.memo(function PoolDetailView() {
     const connectedServicesEnabled = useFeatureEnabled('connectedServices');
     const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
     const accountFallbackEnabled = useFeatureEnabled('connectedServices.accountFallback');
+    const autoQuotaResetEnabled = useFeatureEnabled('connectedServices.autoQuotaReset');
     const [groupsState, setGroupsState] = React.useState<PoolDetailGroupsState>(EMPTY_GROUPS_STATE);
     const [strategyOpen, setStrategyOpen] = React.useState(false);
     const [recoveryModeOpen, setRecoveryModeOpen] = React.useState(false);
@@ -244,6 +245,7 @@ export const PoolDetailView = React.memo(function PoolDetailView() {
             : {
                 groupConfigurationSupported: false,
                 runtimeFallbackSupported: false,
+                quotaResetSupported: false,
                 groupConfigurationSupportingAgentIds: [],
                 runtimeFallbackSupportingAgentIds: [],
             },
@@ -409,6 +411,11 @@ export const PoolDetailView = React.memo(function PoolDetailView() {
     };
 
     const handleSetAutoSwitch = (autoSwitch: boolean) => void patchPolicy({ autoSwitch });
+    const handleSetAutoQuotaReset = (autoUseQuotaResetsWhenExhausted: boolean) => {
+        if (autoQuotaResetEnabled && runtimeGroupCapability.quotaResetSupported) {
+            void patchPolicy({ autoUseQuotaResetsWhenExhausted });
+        }
+    };
 
     const handleSetStrategy = (strategy: string) => {
         if (!isGroupStrategy(strategy)) return;
@@ -1005,6 +1012,23 @@ export const PoolDetailView = React.memo(function PoolDetailView() {
                     )}
                     showChevron={false}
                 />
+                {autoQuotaResetEnabled && runtimeGroupCapability.quotaResetSupported ? (
+                    <Item
+                        testID="connected-services-pool-detail:auto-quota-reset"
+                        title={t('connectedServices.detail.groupDetail.autoQuotaResetTitle')}
+                        subtitle={t('connectedServices.detail.groupDetail.autoQuotaResetSubtitle')}
+                        rightElement={(
+                            <Switch
+                                testID="connected-services-pool-detail:auto-quota-reset:toggle"
+                                value={group.policy.autoUseQuotaResetsWhenExhausted === true}
+                                onValueChange={handleSetAutoQuotaReset}
+                                accessibilityLabel={t('connectedServices.detail.groupDetail.autoQuotaResetTitle')}
+                                compact
+                            />
+                        )}
+                        showChevron={false}
+                    />
+                ) : null}
                 <DropdownMenu
                     open={strategyOpen}
                     onOpenChange={setStrategyOpen}

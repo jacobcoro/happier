@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { readReactNativeMmkvStubValues } from '@/dev/testkit/mocks/mmkv';
 import { installTerminalRouteCommonModuleMocks } from './terminalRouteTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const replaceMock = vi.fn();
-const setPendingMock = vi.fn((_pending: { publicKeyB64Url: string; serverUrl: string }) => {});
 const upsertActivateAndSwitchServerMock = vi.fn(async (_params: { serverUrl: string; source: string; scope: string; refreshAuth?: unknown }) => true);
 const getCredentialsMock = vi.fn(async () => null as null | { token: string; secret: string });
 const refreshFromActiveServerMock = vi.fn(async () => {});
@@ -40,12 +40,6 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
     },
 }));
 
-vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    setPendingTerminalConnect: setPendingMock,
-    clearPendingTerminalConnect: vi.fn(),
-    getPendingTerminalConnect: () => null,
-}));
-
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     getActiveServerUrl: () => activeServerUrl,
     getActiveServerSnapshot: () => ({
@@ -72,7 +66,6 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         vi.unmock('@/utils/path/terminalConnectUrl');
         authState.isAuthenticated = false;
         replaceMock.mockClear();
-        setPendingMock.mockClear();
         upsertActivateAndSwitchServerMock.mockClear();
         getCredentialsMock.mockReset();
         getCredentialsMock.mockResolvedValue(null);
@@ -95,10 +88,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         await renderScreen(<Screen />);
         await act(async () => {});
 
-        expect(setPendingMock).toHaveBeenCalledWith({
-            publicKeyB64Url: 'abc123',
-            serverUrl: 'https://company.example.test',
-        });
+        expect(readReactNativeMmkvStubValues()).toContainEqual(expect.stringContaining('abc123'));
         expect(upsertActivateAndSwitchServerMock).toHaveBeenCalledWith({
             serverUrl: 'https://company.example.test',
             source: 'url',
@@ -117,10 +107,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
 
         expect(screen.findByTestId('unauth-shell-route-terminal-connect')).not.toBeNull();
         expect(screen.findByTestId('terminal-connect-route-content')).not.toBeNull();
-        expect(setPendingMock).toHaveBeenCalledWith({
-            publicKeyB64Url: 'abc123',
-            serverUrl: 'https://company.example.test',
-        });
+        expect(readReactNativeMmkvStubValues()).toContainEqual(expect.stringContaining('abc123'));
         expect(replaceMock).not.toHaveBeenCalled();
     });
 
@@ -167,10 +154,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         await renderScreen(<Screen />);
         await act(async () => {});
 
-        expect(setPendingMock).toHaveBeenCalledWith({
-            publicKeyB64Url: 'abc123',
-            serverUrl: 'http://127.0.0.1:3005',
-        });
+        expect(readReactNativeMmkvStubValues()).toContainEqual(expect.stringContaining('abc123'));
         expect(upsertActivateAndSwitchServerMock).toHaveBeenCalledWith({
             serverUrl: 'http://127.0.0.1:3005',
             source: 'url',

@@ -4,7 +4,6 @@ import {
     splitMarkdownIntoBlockSources,
     type MarkdownBlockSource,
 } from '../streaming/splitMarkdownIntoBlockSources';
-import type { MarkdownBlock } from '../parseMarkdown';
 import type { MarkdownSourceRange } from '../parseMarkdown';
 import type { MarkdownRenderSegment } from './markdownRenderSegmentTypes';
 import {
@@ -18,6 +17,7 @@ type LocatedMarkdownBlockSource = MarkdownBlockSource & Readonly<{
     sourceStart: number;
     sourceLength: number;
     sourceHash: string;
+    sourceRange: MarkdownSourceRange;
 }>;
 
 type PendingEnrichedGroup = Readonly<{
@@ -33,12 +33,6 @@ type DraftMarkdownRenderSegment =
     | Omit<Extract<MarkdownRenderSegment, { type: 'enriched-markdown' }>, 'first' | 'last'>
     | Omit<Extract<MarkdownRenderSegment, { type: 'special-block' }>, 'first' | 'last'>;
 
-const SPECIAL_BLOCK_TYPES: ReadonlySet<MarkdownBlock['type']> = new Set([
-    'code-block',
-    'mermaid',
-    'options',
-    'table',
-]);
 function hashMarkdownSource(source: string): string {
     let hash = 2166136261;
     for (let index = 0; index < source.length; index++) {
@@ -50,23 +44,29 @@ function hashMarkdownSource(source: string): string {
 
 function locateSources(markdown: string, sources: readonly MarkdownBlockSource[]): LocatedMarkdownBlockSource[] {
     let cursor = 0;
+    let line = 1;
     return sources.map((source) => {
-        const foundIndex = markdown.indexOf(source.source, cursor);
-        const sourceStart = foundIndex >= 0 ? foundIndex : cursor;
-        const sourceLength = source.source.length;
-        cursor = sourceStart + sourceLength;
+        while (cursor < source.sourceStart) if (markdown.charCodeAt(cursor++) === 10) line++;
+        const startLine = line;
+        const end = source.sourceStart + source.source.length;
+        while (cursor < end) if (markdown.charCodeAt(cursor++) === 10) line++;
         return {
             ...source,
-            sourceStart,
-            sourceLength,
+            sourceLength: source.source.length,
             sourceHash: hashMarkdownSource(source.source),
+            sourceRange: { startLine, endLine: line },
         };
     });
 }
 
-function isSpecialSource(source: LocatedMarkdownBlockSource, blocks: readonly MarkdownBlock[]): boolean {
+function isSpecialSource(source: LocatedMarkdownBlockSource): boolean {
     if (source.incompleteKind) return true;
-    return blocks.some((block) => SPECIAL_BLOCK_TYPES.has(block.type));
+    return source.blockType === 'FencedCode'
+        || source.blockType === 'Table' || source.source.trimStart().startsWith('<options>');
+}
+
+function withReferenceDefinitions(markdown: string, definitions: string): string {
+    return definitions ? `${definitions}\n\n${markdown}` : markdown;
 }
 
 function buildGroupMarkdown(markdown: string, sources: readonly LocatedMarkdownBlockSource[]): string {
@@ -94,20 +94,8 @@ function buildGroup(markdown: string, sources: readonly LocatedMarkdownBlockSour
         sourceStart,
         sourceLength,
         sourceHash: hashMarkdownSource(groupMarkdown),
-        sourceRange: resolveSourceRange(markdown, sourceStart, sourceLength),
+        sourceRange: { startLine: firstSource.sourceRange.startLine, endLine: lastSource.sourceRange.endLine },
     };
-}
-
-function countNewlines(value: string): number {
-    return (value.match(/\n/g) ?? []).length;
-}
-
-function resolveSourceRange(markdown: string, sourceStart: number, sourceLength: number): MarkdownSourceRange {
-    const before = markdown.slice(0, Math.max(0, sourceStart));
-    const source = markdown.slice(sourceStart, sourceStart + Math.max(0, sourceLength));
-    const startLine = countNewlines(before) + 1;
-    const endLine = startLine + countNewlines(source);
-    return { startLine, endLine };
 }
 
 function applyFirstLast(segments: readonly DraftMarkdownRenderSegment[]): MarkdownRenderSegment[] {
@@ -126,15 +114,16 @@ function writeStaticSegmentCache(markdown: string, segments: MarkdownRenderSegme
     writeMarkdownRenderSegmentsCache(buildMarkdownContentCacheSlot(markdown), markdown, segments);
 }
 
-function buildEnrichedSegment(markdown: string, source: LocatedMarkdownBlockSource, nextSegmentKey: () => string): DraftMarkdownRenderSegment {
+function buildEnrichedSegment(source: LocatedMarkdownBlockSource, nextSegmentKey: () => string): DraftMarkdownRenderSegment {
     return {
         type: 'enriched-markdown',
         key: nextSegmentKey(),
         sourceStart: source.sourceStart,
         sourceLength: source.sourceLength,
         sourceHash: source.sourceHash,
-        sourceRange: resolveSourceRange(markdown, source.sourceStart, source.sourceLength),
+        sourceRange: source.sourceRange,
         markdown: source.source,
+        renderMarkdown: withReferenceDefinitions(source.source, source.referenceDefinitions),
     };
 }
 
@@ -176,15 +165,15 @@ export function splitMarkdownRenderSegments(params: Readonly<{
             sourceHash: group.sourceHash,
             sourceRange: group.sourceRange,
             markdown: group.markdown,
+            renderMarkdown: withReferenceDefinitions(group.markdown, group.sources[0]?.referenceDefinitions ?? ''),
         });
     };
 
     for (const source of locatedSources) {
-        const blocks = parseMarkdownBlockSource(source);
-        if (!isSpecialSource(source, blocks)) {
+        if (!isSpecialSource(source)) {
             if (params.splitEnrichedSourceRanges === true) {
                 flushPendingEnrichedSources();
-                segments.push(buildEnrichedSegment(renderMarkdown, source, nextSegmentKey));
+                segments.push(buildEnrichedSegment(source, nextSegmentKey));
                 continue;
             }
             pendingEnrichedSources.push(source);
@@ -198,9 +187,9 @@ export function splitMarkdownRenderSegments(params: Readonly<{
             sourceStart: source.sourceStart,
             sourceLength: source.sourceLength,
             sourceHash: source.sourceHash,
-            sourceRange: resolveSourceRange(renderMarkdown, source.sourceStart, source.sourceLength),
+            sourceRange: source.sourceRange,
             markdown: source.source,
-            blocks,
+            blocks: parseMarkdownBlockSource(source),
         });
     }
 

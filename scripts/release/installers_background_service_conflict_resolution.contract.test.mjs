@@ -114,13 +114,13 @@ test('installers prefer doctor repair --report-only for interactive post-install
   );
 });
 
-test('PowerShell installer attempts doctor repair --report-only even before any background service exists', async () => {
+test('PowerShell installer suppresses only guided-setup bootstrap findings from doctor repair output', async () => {
   const powershellSource = await readFile(join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1'), 'utf8');
 
   assert.match(
     powershellSource,
-    /\$shouldInspectBackgroundServices[\s\S]*\$backgroundServiceInventory = Get-InstalledBackgroundServiceInventory[\s\S]*\$backgroundServiceInventory\.RepairSupported[\s\S]*@\(\"doctor\",\s*\"repair\",\s*\"--report-only\"\)/,
-    'expected PowerShell installer to try doctor repair --report-only for interactive installs even when no background service is installed yet',
+    /Test-DoctorRepairReportIsExpectedGuidedSetupState[\s\S]*no_servers_configured[\s\S]*automatic_startup_missing[\s\S]*\$expectedKinds\s+-notcontains[\s\S]*-not \(Test-DoctorRepairReportIsExpectedGuidedSetupState[\s\S]*@\(\"doctor\",\s*\"repair\",\s*\"--report-only\"\)/,
+    'expected PowerShell to suppress only the canonical guided-setup finding allowlist and fail open for other doctor findings',
   );
 });
 

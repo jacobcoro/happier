@@ -1244,6 +1244,52 @@ describe('ChatList (FlashList v2)', () => {
         );
     });
 
+    it('installs web scroll-intent handlers only on the canonical list owner', async () => {
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+        const scrollEl = createFlashListChatListWebScroller({
+            clientHeight: 400,
+            scrollHeight: 800,
+            scrollTop: 400,
+        });
+
+        await withFlashListChatListWebScrollerDom(
+            scrollEl,
+            async () => {
+                const { ChatList } = await import('./ChatList');
+                const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+                const nativeScrollIntentNodes = screen.tree.root.findAll(
+                    (node) => (node.type as unknown as string) === 'FlashList'
+                        && typeof node.props?.onWheel === 'function'
+                        && typeof node.props?.onPointerDown === 'function'
+                        && typeof node.props?.onMouseDown === 'function',
+                );
+                const wrapperScrollIntentNodes = screen.tree.root.findAll(
+                    (node) => (node.type as unknown as string) === 'View'
+                        && (typeof node.props?.onWheel === 'function'
+                            || typeof node.props?.onPointerDown === 'function'
+                            || typeof node.props?.onMouseDown === 'function'),
+                );
+
+                expect(nativeScrollIntentNodes).toHaveLength(1);
+                expect(wrapperScrollIntentNodes).toHaveLength(0);
+            },
+            {
+                HTMLElement: FlashListChatListWebElement,
+                document: { getElementById: vi.fn(() => scrollEl) },
+                window: {
+                    getComputedStyle: vi.fn(() => ({
+                        overflowY: 'auto',
+                        overflowX: 'hidden',
+                        overflow: 'auto',
+                    })),
+                },
+            },
+        );
+    });
+
     it('updates transcript navigation visibility from the renderer visible index window', async () => {
         sessionMessagesState = {
             isLoaded: true,

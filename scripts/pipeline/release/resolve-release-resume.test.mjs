@@ -115,6 +115,25 @@ function standardOptionalSurfaces(requested) {
   }));
 }
 
+test('combined release resume selects the channel-specific status artifact from the combined workflow run', () => {
+  const combinedRun = originRun({ path: '.github/workflows/release-preview-and-production.yml' });
+  const inspected = inspectReleaseResumeOrigin({
+    originRun: combinedRun,
+    artifacts: [
+      statusArtifact(),
+      statusArtifact({ id: 5678, name: 'happier-release-status-preview' }),
+    ],
+    expected: {
+      repository: REPOSITORY,
+      workflowPath: '.github/workflows/release-preview-and-production.yml',
+      channel: 'preview',
+      statusArtifactName: 'happier-release-status-preview',
+    },
+  });
+
+  assert.equal(inspected.artifactId, 5678);
+});
+
 const expected = {
   repository: REPOSITORY,
   workflowPath: '.github/workflows/nightly-dev.yml',

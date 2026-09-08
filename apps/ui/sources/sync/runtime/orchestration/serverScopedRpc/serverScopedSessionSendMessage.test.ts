@@ -485,7 +485,7 @@ describe('sendSessionMessageWithServerScope', () => {
 
     expect(runtimeFetchWithServerReachabilityMock).not.toHaveBeenCalled();
     expect(harness.schedulePendingOutboxRetry).not.toHaveBeenCalled();
-    expect(loadPendingOutboxForSession('s1', { serverId: 'server-b', accountId: 'account-b' }))
+    expect((await loadPendingOutboxForSession('s1', { serverId: 'server-b', accountId: 'account-b' })))
       .toEqual([expect.objectContaining({ localId: 'scoped-indeterminate', operation: 'enqueue' })]);
   });
 
@@ -501,10 +501,10 @@ describe('sendSessionMessageWithServerScope', () => {
       providerDeliveryIntent: 'first_turn',
     })).resolves.toMatchObject({ ok: true });
 
-    const [persisted] = loadPendingOutboxForSession(
+    const [persisted] = (await loadPendingOutboxForSession(
       's1',
       { serverId: 'server-b', accountId: 'account-b' },
-    );
+    ));
     expect(JSON.parse(persisted!.request.body)).toEqual(expect.objectContaining({
       localId: 'scoped-indeterminate-first-turn',
       requestedAction: { v: 1, kind: 'enqueue' },

@@ -3,21 +3,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { toTestIdSafeValue } from './testIdSafeValue';
 import { gotoDomContentLoadedWithPathFallback } from './pageNavigation';
 
-export function collectBrowserDiagnostics(params: Readonly<{ page: Page }>): () => string {
-  const browserErrors: string[] = [];
-  params.page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`));
-  params.page.on('console', (message) => {
-    if (message.type() === 'error') {
-      browserErrors.push(`console.error: ${message.text()}`);
-    }
-  });
-
-  return () => (
-    browserErrors.length > 0
-      ? `Browser diagnostics:\n${browserErrors.slice(-20).join('\n')}`
-      : 'Browser diagnostics: none'
-  );
-}
+export { collectBrowserDiagnostics } from './browserDiagnostics';
 
 export function rightPaneLocator(page: Page): Locator {
   return page.getByTestId('multi-pane-right-docked').or(page.getByTestId('multi-pane-right-overlay'));

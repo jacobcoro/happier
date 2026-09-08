@@ -6,7 +6,7 @@ import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
 import type { ToolViewProps } from '../core/_registry';
-import { maybeParseJson } from '../../normalization/parse/parseJson';
+import { maybeParseJson } from '@happier-dev/protocol';
 import { ToolSectionView } from '../../shell/presentation/ToolSectionView';
 
 /**

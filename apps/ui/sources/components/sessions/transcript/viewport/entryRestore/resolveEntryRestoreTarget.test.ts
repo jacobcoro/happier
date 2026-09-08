@@ -255,6 +255,7 @@ describe('resolve entry restore target', () => {
 
         expect(resolveEntryRestoreTarget(buildParams({
             contentMeasured: underFilled,
+            canMaterializeOlder: true,
             snapshot: {
                 shouldFollowBottom: false,
                 offsetY: 120,

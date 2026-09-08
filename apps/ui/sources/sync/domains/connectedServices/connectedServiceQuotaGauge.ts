@@ -17,6 +17,7 @@ import {
 } from './connectedServiceQuotaRecoveryCreditSummary';
 import { formatResetCountdown, isResetCountdownOutdated } from './formatResetCountdown';
 import { resolveQuotaTone } from './resolveQuotaTone';
+import { resolveSubscriptionEndTime } from './resolveSubscriptionEndTime';
 
 export type ConnectedServiceQuotaGaugeWindowMode =
     | 'most_constrained'
@@ -51,9 +52,23 @@ export type ConnectedServiceQuotaGaugeLabelFormatter = Readonly<{
     durationHoursMinutes: (params: Readonly<{ hours: number; minutes: number }>) => string;
     durationHours: (params: Readonly<{ hours: number }>) => string;
     durationMinutes: (params: Readonly<{ minutes: number }>) => string;
+    subscriptionEnds: (params: Readonly<{ date: string }>) => string;
+    subscriptionEndsInDays: (params: Readonly<{ days: number }>) => string;
+    subscriptionRenews: (params: Readonly<{ date: string }>) => string;
+    subscriptionRenewsInDays: (params: Readonly<{ days: number }>) => string;
 }>;
 
 export type ConnectedServiceQuotaGaugeViewModel = Readonly<{
+    subscription?: Readonly<{
+        summary: string;
+        period: string | null;
+        renewal: 'on' | 'off' | 'unknown';
+        renewalLabel: string;
+        checkedLabel: string;
+        notice: string | null;
+        accessUntilLabel: string | null;
+        isLastKnown: boolean;
+    }>;
     serviceId: string;
     providerDisplayName: string | null;
     activeAccountDisplayLabel: string | null;
@@ -326,7 +341,37 @@ export function computeConnectedServiceQuotaGaugeViewModel(_params: Readonly<{
     const remainingValueLabel = params.formatter.remaining({ percent: `${roundedRemaining}%` });
     const staleAt = params.snapshot.fetchedAt + params.snapshot.staleAfterMs;
     const isStale = params.nowMs > staleAt;
+    const sourceSubscription = params.snapshot.subscription;
+    const subscriptionEndTime = sourceSubscription && typeof sourceSubscription.currentPeriodEndAtMs === 'number'
+        ? resolveSubscriptionEndTime({
+            nowMs: params.nowMs,
+            endAtMs: sourceSubscription.currentPeriodEndAtMs,
+            formatDate: (endAtMs) => new Date(endAtMs).toLocaleDateString(),
+        })
+        : null;
+    const subscription = sourceSubscription ? {
+        summary: sourceSubscription.status === 'none' ? 'No subscription'
+            : sourceSubscription.status === 'unavailable' ? 'Subscription details unavailable'
+                : subscriptionEndTime
+                    ? sourceSubscription.renewal === 'on'
+                        ? subscriptionEndTime.kind === 'relativeDays'
+                            ? params.formatter.subscriptionRenewsInDays({ days: subscriptionEndTime.days })
+                            : params.formatter.subscriptionRenews({ date: subscriptionEndTime.date })
+                        : subscriptionEndTime.kind === 'relativeDays'
+                            ? params.formatter.subscriptionEndsInDays({ days: subscriptionEndTime.days })
+                            : params.formatter.subscriptionEnds({ date: subscriptionEndTime.date })
+                    : 'Subscription active',
+        period: sourceSubscription.currentPeriodStartAtMs && sourceSubscription.currentPeriodEndAtMs
+            ? `${new Date(sourceSubscription.currentPeriodStartAtMs).toLocaleDateString()} – ${new Date(sourceSubscription.currentPeriodEndAtMs).toLocaleDateString()}` : null,
+        renewal: sourceSubscription.renewal,
+        renewalLabel: sourceSubscription.renewal === 'on' ? 'On' : sourceSubscription.renewal === 'off' ? 'Off' : 'Unknown',
+        checkedLabel: `Checked ${new Date(sourceSubscription.observedAtMs).toLocaleString()}`,
+        notice: sourceSubscription.lastRefreshError ? 'Subscription details may be out of date.' : null,
+        accessUntilLabel: sourceSubscription.currentPeriodEndAtMs ? `Access continues until ${new Date(sourceSubscription.currentPeriodEndAtMs).toLocaleDateString()}` : null,
+        isLastKnown: sourceSubscription.status === 'unavailable',
+    } : undefined;
     return {
+        subscription,
         serviceId: params.snapshot.serviceId,
         providerDisplayName: params.providerDisplayName ?? null,
         activeAccountDisplayLabel: params.activeAccountDisplayLabel ?? params.snapshot.accountLabel ?? null,

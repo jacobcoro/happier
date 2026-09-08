@@ -146,6 +146,7 @@ export interface SessionSubmitPort {
             localId?: string | null;
             onLocalPendingProjectionCreated?: (event: SessionMessageLocalPendingProjection) => void;
             requestedAction: PendingRequestedActionV1;
+            resumeWhenAvailable?: true;
         }>,
     ): Promise<PendingMessageSubmitResult>;
     sendMessage(
@@ -174,6 +175,7 @@ export interface SessionSubmitPort {
         sessionId: string,
         localId: string,
         requestedAction: PendingRequestedActionV1,
+        options?: Readonly<{ resumeWhenAvailable?: boolean }>,
     ): Promise<void> | void;
     switchSessionControlToRemote?(sessionId: string): Promise<void>;
     canWakeMachineId?(machineId: string): boolean;

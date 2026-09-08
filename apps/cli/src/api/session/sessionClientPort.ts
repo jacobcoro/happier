@@ -31,6 +31,7 @@ import type {
 } from '@happier-dev/protocol';
 import type { EphemeralSendResult } from './ephemeralSendOutcome';
 import type { RuntimeActivitySnapshotTail } from './mutations/createSessionMutationOutbox';
+import type { SessionPermissionRpcRouter } from '@/agent/permissions/sessionPermissionRpcRouter';
 
 export type MaterializeNextPendingResult =
   | {
@@ -79,6 +80,7 @@ export type SessionUserMessageDeliveryInfo = Readonly<{
 export interface SessionClientPort {
   sessionId: string;
   rpcHandlerManager: RpcHandlerManagerLike;
+  getOrCreatePermissionRpcRouter?(): SessionPermissionRpcRouter;
 
   /** Synchronously reject new provider input before runner termination cleanup begins. */
   beginRuntimeTermination?(): void;

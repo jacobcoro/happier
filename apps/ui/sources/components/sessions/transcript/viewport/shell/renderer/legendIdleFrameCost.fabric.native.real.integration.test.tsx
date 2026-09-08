@@ -20,29 +20,30 @@ import type { TranscriptListShellRef } from './types';
  *
  * The transcript's `end` hold is DURABLE by design: `finishHeldIntentSettle` closes the polling
  * window but deliberately does not clear the intent, so a reader parked at the tail keeps a live
- * held intent for the whole session. Every call to `requestHeldIntentSettle` therefore re-opens a
- * `LEGEND_HELD_INTENT_SETTLE_MS` (1500 ms) window that re-arms `requestAnimationFrame` once per
- * frame until its deadline - roughly 90 frames at 60 Hz.
+ * held intent for the whole session. Previously every new geometry signal re-opened a full
+ * 1500ms polling window even after end maintenance had already handed off to Legend. End
+ * verification now quiesces at that handoff; later geometry rechecks through the same owner.
  *
  * MEASURED HERE (shipped native Legend 3.3.3, New Architecture, `Platform.OS === 'ios'`):
  *
  *   - at true rest, with no commit, the mounted transcript schedules ZERO animation frames. The
  *     list's own tickers (`ensureBootstrapInitialScrollFrameTicker`, the imperative-scroll
  *     readiness poll, `queuedMVCPRecalculate`) are all mount- or command-scoped and do not idle.
- *   - ONE content-free React commit costs 94 `requestAnimationFrame` calls - a whole settle window.
+ *   - Before the regression fix, ONE content-free React commit cost 94 `requestAnimationFrame`
+ *     calls - a whole settle window. The contract below prevents that cost from returning.
+ *   - After a real row append, the old end loop scheduled 89 more verification frames after
+ *     the initial 64ms. The geometry test prevents that redundant post-handoff polling.
  *
- * So idle animation-frame cost in this app is a function of transcript COMMIT rate, not of any
- * resting loop: ~94 frames per commit, capped at the frame rate once commits are closer together
- * than the settle window.
+ * So idle animation-frame cost in this app must not be a function of transcript COMMIT rate. A
+ * content-free commit is not geometry evidence and must not reopen the settle transaction; only
+ * a real data/measurement/layout signal may do that.
  *
  * `LayoutCommitObserver`'s `onCommitLayoutEffect` is a `useLayoutEffect` with no dependency array
  * (`@shopify/flash-list/dist/recyclerview/LayoutCommitObserver.js`), so it fires on EVERY commit of
- * the renderer subtree and unconditionally requests a settle. Gating that on real content-height
- * news was tried and reverted: `handleLegendScroll` reads an open settle window
- * (`heldIntentSettleInFlight`) to distinguish a renderer/layout offset rollback from a reader
- * detach, so closing those windows made a bare touch plus content growth drop the tail hold. The
- * ceiling below is therefore what this lane enforces - one commit may never cost MORE than one
- * settle window - rather than a floor that would forbid a future cheaper design.
+ * the renderer subtree. The renderer must use that callback only for the shell's layout
+ * observation and synthesized content-size publication; settle requests belong to the existing
+ * data/measurement/viewport signals, which already preserve the classifier's programmatic-write
+ * evidence without turning unrelated React commits into polling windows.
  *
  * The second test pins the caller-identity class that DID get fixed: a caller rendering an inline
  * `keyExtractor` used to churn `resolveHeldIntentIndex` -> `readHeldIntentLanding` ->
@@ -69,6 +70,7 @@ const SETTLE_WINDOW_OBSERVATION_MS = 1600;
 const SESSION_ID = 'idle-frame-cost';
 
 let rafCallCount = 0;
+let heldIntentRafCallCount = 0;
 /**
  * `advanceMovementEpoch` -> `webDomObservation.invalidateUserMovementAuthority()`. The renderer
  * advances a movement epoch for a DATASET or geometry epoch, never for a bare re-render, so this
@@ -180,10 +182,12 @@ describe('Legend transcript renderer idle frame cost', () => {
 
     beforeEach(() => {
         rafCallCount = 0;
+        heldIntentRafCallCount = 0;
         movementAuthorityInvalidationCount = 0;
         vi.useFakeTimers();
         vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
             rafCallCount += 1;
+            if (callback.name === 'monitorHeldIntentThroughLayoutSettle') heldIntentRafCallCount += 1;
             return setTimeout(() => callback(Date.now()), FRAME_MS) as unknown as number;
         });
         vi.stubGlobal('cancelAnimationFrame', (handle: number) => clearTimeout(handle));
@@ -243,7 +247,7 @@ describe('Legend transcript renderer idle frame cost', () => {
         return { controller, screen: mounted };
     }
 
-    it('schedules no animation frames at rest and at most one settle window per commit', async () => {
+    it('schedules no animation frames at rest or for a content-free commit', async () => {
         const { controller } = await mountIdleTranscript();
 
         rafCallCount = 0;
@@ -259,10 +263,7 @@ describe('Legend transcript renderer idle frame cost', () => {
         const framesAfterContentFreeCommit = rafCallCount;
 
         expect(framesWhileUntouched).toBe(0);
-        // Observed: 94 - exactly one LEGEND_HELD_INTENT_SETTLE_MS window at the harness frame
-        // interval. A one-sided ceiling: stacking windows or a poll that outlives its deadline
-        // fails here, a cheaper design does not.
-        expect(framesAfterContentFreeCommit).toBeLessThanOrEqual(100);
+        expect(framesAfterContentFreeCommit).toBe(0);
     });
 
     it('does not advance a movement epoch on a content-free commit, whatever identity the caller gives keyExtractor', async () => {
@@ -321,16 +322,17 @@ describe('Legend transcript renderer idle frame cost', () => {
             .isMaintainingScrollAtEnd()).toBe(true);
     });
 
-    it('still opens the settle window when a commit carries new rows', async () => {
+    it('quiesces end verification after handoff and rechecks later geometry without another polling window', async () => {
         const { controller } = await mountIdleTranscript();
-
-        rafCallCount = 0;
-        await act(async () => {
-            controller.appendRow();
-            await Promise.resolve();
-        });
-        await advance(SETTLE_WINDOW_OBSERVATION_MS);
-
-        expect(rafCallCount).toBeGreaterThan(1);
+        for (let append = 0; append < 2; append += 1) {
+            await act(async () => {
+                controller.appendRow();
+                await Promise.resolve();
+            });
+            await advance(64);
+            heldIntentRafCallCount = 0;
+            await advance(SETTLE_WINDOW_OBSERVATION_MS);
+            expect(heldIntentRafCallCount).toBe(0);
+        }
     });
 });

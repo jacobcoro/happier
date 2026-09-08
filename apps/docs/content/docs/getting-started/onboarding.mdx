@@ -5,7 +5,7 @@ description: Pick hosted vs self-hosted, choose your Relay, then use the app to 
 
 Happier always follows the same high-level flow:
 
-1. **Choose a Relay** (Happier Cloud by default; self-hosting is optional).
+1. **Choose a Relay** (Happier Cloud is recommended to start; self-hosting is optional).
 2. **Sign in / create an account** on that Relay.
 3. **Use the desktop app as your control panel** (recommended; the web UI is best for status/management).
 4. **Get a machine ready**:
@@ -19,7 +19,8 @@ Happier always follows the same high-level flow:
 You use Happier Cloud as your Relay.
 
 1. Open the desktop app (recommended) or web app (status/management only).
-2. Choose **Happier Cloud** when the app asks you which Relay to use.
+2. Choose **Happier Cloud** when the app asks you which Relay to use. It is a
+   deliberate choice, not a migration of an account from another Relay.
 3. Sign in.
 4. In the desktop app, open `/setup` and choose **Set up this computer**.
    - This configures the local background service against the Relay you just selected.
@@ -30,10 +31,13 @@ Optional CLI path:
 ```bash
 # Node-free (recommended): install the CLI binary via the official installer
 curl -fsSL https://happier.dev/install | bash
-happier auth login
+happier setup
 ```
 
-The CLI login flow still works, but the app-first setup is the recommended control-panel flow.
+`happier setup` chooses the relay before authentication, then signs in,
+registers this machine, and reconciles automatic startup. The lower-level
+`happier auth login` command remains available when the relay profile and
+machine lifecycle are already configured.
 
 Notes:
 - The desktop app and the installer-installed CLI are self-contained; you do not need system Node/Yarn installed.
@@ -50,6 +54,13 @@ You run your own Relay (remote machine, LAN box, or even your own computer), but
 2. Open the desktop app (recommended) or web UI (status/management only) and choose that Relay.
    - Some installers print one-click links/QRs that prefill the Relay URL.
    - Otherwise, open the app and add/select it in **Relay settings**.
+
+   Use an address every device can actually reach. For Tailscale, each device
+   must be on the same tailnet and the Relay must be published with Tailscale
+   Serve or listen on a reachable Tailscale address; merely installing
+   Tailscale is not enough. For LAN access, bind the Relay to a non-loopback
+   address and allow its port through the host firewall. A Relay bound to
+   `localhost` inside a VM is local to that VM, not to the Mac or PC hosting it.
 
 3. Create an account / sign in on that Relay.
 
@@ -93,6 +104,7 @@ Recommended for first setup:
 - The app and CLI support **multiple saved Relay profiles**.
 - Credentials/state are **scoped per Relay**, so switching does not overwrite other accounts.
 - Accounts are per Relay. Using the same login provider on two Relays still creates two independent server-side account contexts.
+- Switching profiles selects another Relay and its account; it does not migrate an account, sessions, or settings between Relays.
 - Web: you can switch the Relay **for this tab** or **make it the device default**.
 
 ### CLI: target a server per invocation

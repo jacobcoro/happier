@@ -208,6 +208,7 @@ describe('C-1 · installed Legend places a giant row\'s successor', () => {
     function renderList(
         data: readonly ProbeRow[],
         listRef: React.RefObject<LegendListRef | null>,
+        header?: React.ReactElement,
     ): React.ReactElement {
         return (
             <div id="giant-row-host" style={{ height: viewportPx }}>
@@ -218,6 +219,7 @@ describe('C-1 · installed Legend places a giant row\'s successor', () => {
                     getEstimatedItemSize={(item) => item.estimatedHeight}
                     getItemSizeVersion={(item) => item.sizeVersion}
                     keyExtractor={(item) => item.id}
+                    ListHeaderComponent={header}
                     recycleItems={false}
                     ref={listRef}
                     renderItem={renderProbeRow}
@@ -225,6 +227,32 @@ describe('C-1 · installed Legend places a giant row\'s successor', () => {
             </div>
         );
     }
+
+    it('keeps keyed measurement identity when a moved row reports before data reconciliation', async () => {
+        viewportPx = 6000;
+        const listRef = React.createRef<LegendListRef>();
+        const base: ProbeRow[] = Array.from({ length: 60 }, (_, index) => ({
+            id: `move-${index}`, estimatedHeight: 56, height: 56, sizeVersion: `move-${index}`,
+        }));
+        let measured: number | undefined;
+        let armed = false;
+        function MeasurementBoundary() {
+            React.useLayoutEffect(() => {
+                if (!armed) return;
+                armed = false;
+                listRef.current!.setItemSize('move-40', { height: 100, width: 800 });
+                measured = listRef.current!.getState().sizeAtIndex(41);
+            });
+            return null;
+        }
+        await act(async () => { root.render(renderList(base, listRef, <MeasurementBoundary />)); });
+        await flushLegendWork();
+        armed = true;
+        const next = [{ id: 'inserted', estimatedHeight: 56, height: 56, sizeVersion: 'inserted' }, ...base];
+        await act(async () => { root.render(renderList(next, listRef, <MeasurementBoundary />)); });
+        expect(measured).toBe(100);
+    });
+
 
     /**
      * Q1/Q2 — a MEASURED row governs its successor's position, and the estimate is not consulted

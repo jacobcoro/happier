@@ -210,8 +210,8 @@ export const FAQ_ITEMS: ReadonlyArray<FaqItem> = [
         id: 'server',
         q: 'Do I need a server?',
         a: [
-            'No. Install the CLI on the computer that runs your code, pair a device by QR, and you are done — Happier’s hosted relay does the rest at no cost.',
-            'Running your own relay is an option, not a requirement. `happier relay host install` sets it up as a managed service; there is also a Docker image and a runner. Bind it to localhost, your LAN, or the open internet, and reach it over Tailscale, an SSH tunnel or direct HTTPS.',
+            'You need a relay, but you do not need to operate one yourself. Happier Cloud is the recommended first choice in `happier setup`, or you can deliberately choose an existing relay you control. The relay hosts your account and synchronises encrypted conversation and session state; the coding agent still runs beside your repository on your own computer.',
+            'Self-hosting is optional. `happier relay host install` sets up the generic relay runtime, and Docker and runner paths are available too. Every client must be able to reach it: Tailscale requires both devices on the same tailnet plus an actually published listener, LAN access requires a non-loopback bind and firewall access, and `localhost` inside a VM is local to that VM. Switching relay profiles selects another relay account; it does not migrate your account or data.',
         ],
     },
     {

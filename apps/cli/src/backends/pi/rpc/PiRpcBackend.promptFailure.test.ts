@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { logger } from '@/ui/logger';
 import type { AgentMessage } from '@/agent/core';
+import { CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 
 import { PiRpcBackend } from './PiRpcBackend';
 
@@ -2115,7 +2116,7 @@ describe('PiRpcBackend prompt error handling', () => {
       // Fail-closed escalation: a genuinely-unfinished usage-limit turn MUST report the
       // classified runtime-auth failure to the daemon. We assert the escalation body's
       // stable contract via objectContaining (kind/service/profile/group + reset hints)
-      // and that the report is bounded by a timeout, without pinning every diagnostic field.
+      // and the canonical delivery-timeout policy, without pinning every diagnostic field.
       await vi.waitFor(() => {
         expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -2129,7 +2130,7 @@ describe('PiRpcBackend prompt error handling', () => {
               retryAfterMs: 150_000,
             }),
           }),
-          expect.objectContaining({ timeoutMs: expect.any(Number) }),
+          expect.objectContaining({ timeoutMs: CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS }),
         );
       });
     } finally {
@@ -2189,7 +2190,7 @@ describe('PiRpcBackend prompt error handling', () => {
               groupId: 'codex-main',
             }),
           }),
-          expect.objectContaining({ timeoutMs: expect.any(Number) }),
+          expect.objectContaining({ timeoutMs: CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS }),
         );
       });
     } finally {
@@ -2490,10 +2491,10 @@ describe('PiRpcBackend prompt error handling', () => {
       const session = await backend.startSession();
       await backend.sendPrompt(session.sessionId, 'hello');
 
-      expect(messages).toContainEqual({
+      expect(messages).toContainEqual(expect.objectContaining({
         type: 'model-output',
         fullText: 'alpha\u2028beta',
-      });
+      }));
     } finally {
       await backend.dispose();
     }

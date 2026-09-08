@@ -1,104 +1,82 @@
-import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { serverAccountScopedStorageKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
-import { fromRecord, toRecord, type PendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect.shared';
-import { isPendingServerUrlActive, normalizePendingServerUrl } from './pendingServerScopedKeys';
+import { createPendingTerminalConnectOwner } from './pendingTerminalConnectOwner';
 
 const STORAGE_KEY = scopedStorageId('pending-terminal-connect-record', readStorageScopeFromEnv());
 const STORAGE_KEY_PREFIX = scopedStorageId('pending-terminal-connect-record:v2', readStorageScopeFromEnv());
+const PRE_AUTH_STORAGE_KEY = scopedStorageId('pending-terminal-connect-record:pre-auth:v1', readStorageScopeFromEnv());
+const CLEARED_RECORD = '{"state":"cleared"}';
 
 function getStorage(): Storage | null {
-    const storage = (globalThis as { localStorage?: Storage }).localStorage;
-    return storage ?? null;
-}
-
-function readScopedRecord(storage: Storage, key: string): PendingTerminalConnect | null {
     try {
-        const raw = storage.getItem(key);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw) as unknown;
-        const record = fromRecord(parsed);
-        if (!record) {
-            storage.removeItem(key);
-            return null;
-        }
-        return record;
+        return (globalThis as { localStorage?: Storage }).localStorage ?? null;
     } catch {
-        storage.removeItem(key);
         return null;
     }
 }
 
-export function setPendingTerminalConnect(value: PendingTerminalConnect): void {
-    const storage = getStorage();
-    if (!storage) return;
-    const activeScope = getActiveServerAccountScope();
-    const serverUrl = normalizePendingServerUrl(value.serverUrl);
-    if (!serverUrl || !activeScope || !isPendingServerUrlActive(serverUrl)) return;
-    const record = toRecord({ ...value, serverUrl });
-    if (!record) return;
+function getPreAuthStorage(): Storage | null {
     try {
-        storage.setItem(serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, activeScope), JSON.stringify(record));
+        return (globalThis as { sessionStorage?: Storage }).sessionStorage ?? null;
     } catch {
-        // ignore storage failures
+        return null;
     }
 }
 
-export function getPendingTerminalConnect(): PendingTerminalConnect | null {
-    const storage = getStorage();
-    if (!storage) return null;
-    const activeScope = getActiveServerAccountScope();
-    if (!activeScope) return null;
-    const key = serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, activeScope);
-    return readScopedRecord(storage, key);
-}
-
-export function clearPendingTerminalConnect(): void {
-    const storage = getStorage();
-    if (!storage) return;
+function readStorageItem(storage: Storage | null, key: string): string | null {
     try {
-        const activeScope = getActiveServerAccountScope();
-        if (activeScope) {
-            storage.removeItem(serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, activeScope));
-        }
-        const raw = storage.getItem(STORAGE_KEY);
-        if (!raw) return;
-        const record = fromRecord(JSON.parse(raw) as unknown);
-        if (!record || isPendingServerUrlActive(record.serverUrl)) {
-            storage.removeItem(STORAGE_KEY);
-        }
+        return storage?.getItem(key) ?? null;
     } catch {
-        // ignore storage failures
+        return null;
     }
 }
 
-export function migratePendingTerminalConnectScopes(
-    scope: ServerAccountScope,
-    legacyScopes: readonly ServerAccountScope[],
-): void {
-    const storage = getStorage();
-    if (!storage) return;
-    const canonicalKey = serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, scope);
-    let hasCanonicalRecord = readScopedRecord(storage, canonicalKey) !== null;
-    for (const legacyScope of legacyScopes) {
-        if (legacyScope.serverId === scope.serverId && legacyScope.accountId === scope.accountId) continue;
-        const legacyKey = serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, legacyScope);
-        const legacyRecord = readScopedRecord(storage, legacyKey);
-        if (!hasCanonicalRecord && legacyRecord) {
-            const record = toRecord(legacyRecord);
-            if (record) {
-                try {
-                    storage.setItem(canonicalKey, JSON.stringify(record));
-                    hasCanonicalRecord = true;
-                } catch {
-                    // ignore storage failures
-                }
-            }
-        }
-        try {
-            storage.removeItem(legacyKey);
-        } catch {
-            // ignore storage failures
-        }
+function writeStorageItem(storage: Storage | null, key: string, raw: string): boolean {
+    try {
+        if (!storage) return false;
+        storage.setItem(key, raw);
+        return true;
+    } catch {
+        return false;
     }
 }
+
+function clearStorageItem(storage: Storage | null, key: string): void {
+    try {
+        storage?.setItem(key, CLEARED_RECORD);
+    } catch {
+        // If overwrite is unavailable, deletion below remains the best effort cleanup.
+    }
+    try {
+        storage?.removeItem(key);
+    } catch {
+        // A successful invalid overwrite still prevents a cleared request from resurfacing.
+    }
+}
+
+const owner = createPendingTerminalConnectOwner({
+    readPreAuth: () => readStorageItem(getPreAuthStorage(), PRE_AUTH_STORAGE_KEY),
+    writePreAuth: (raw) => writeStorageItem(getPreAuthStorage(), PRE_AUTH_STORAGE_KEY, raw),
+    clearPreAuth: () => clearStorageItem(getPreAuthStorage(), PRE_AUTH_STORAGE_KEY),
+    readScoped: (scope) => readStorageItem(
+        getStorage(),
+        serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, scope),
+    ),
+    writeScoped: (scope, raw) => writeStorageItem(
+        getStorage(),
+        serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, scope),
+        raw,
+    ),
+    clearScoped: (scope) => clearStorageItem(
+        getStorage(),
+        serverAccountScopedStorageKey(STORAGE_KEY_PREFIX, scope),
+    ),
+    readLegacy: () => readStorageItem(getStorage(), STORAGE_KEY),
+    clearLegacy: () => clearStorageItem(getStorage(), STORAGE_KEY),
+});
+
+export const setPendingTerminalConnect = owner.setPendingTerminalConnect;
+export const getPendingTerminalConnect = owner.getPendingTerminalConnect;
+export const retargetPendingTerminalConnectToServerUrl = owner.retargetPendingTerminalConnectToServerUrl;
+export const clearPendingTerminalConnect = owner.clearPendingTerminalConnect;
+export const migratePendingTerminalConnectScopes = owner.migratePendingTerminalConnectScopes;

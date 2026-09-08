@@ -170,6 +170,46 @@ describe("providerAccountUsage storage", () => {
         await db.account.deleteMany().catch(() => {});
     });
 
+    it("merges sealed subscription observations independently of quota clocks and preserves them for older writers", async () => {
+        const user = await db.account.create({ data: { publicKey: "sealed-subscription", encryptionMode: "e2ee" }, select: { id: true } });
+        const snapshot = createUsageSnapshot({ fetchedAt: 1000 });
+        const first = { ciphertext: "first-subscription", observedAtMs: 2000 };
+        const latest = { ciphertext: "latest-subscription", observedAtMs: 4000 };
+        const write = (fetchedAt: number, subscription?: typeof first) => writeProviderAccountUsageRecordWithPolicy({
+            accountId: user.id, recordId: snapshot.recordId, recordKey: snapshot.recordKey,
+            payloadMode: "sealed_account_scoped_v1", status: "ok", fetchedAt, staleAfterMs: 60000,
+            sealedPayload: { format: "account_scoped_v1", ciphertext: `quota-${fetchedAt}`, ...(subscription ? { subscription } : {}) },
+        });
+        await write(1000, first);
+        await write(3000);
+        expect((await readProviderAccountUsageRecord({ accountId: user.id, recordId: snapshot.recordId }))?.sealedPayload)
+            .toEqual({ format: "account_scoped_v1", ciphertext: "quota-3000", subscription: first });
+        await write(1000, latest);
+        await write(5000, first);
+        expect((await readProviderAccountUsageRecord({ accountId: user.id, recordId: snapshot.recordId }))?.sealedPayload)
+            .toEqual({ format: "account_scoped_v1", ciphertext: "quota-5000", subscription: latest });
+    });
+
+    it("stores plaintext subscription outside the released strict snapshot and preserves it across quota-only writes", async () => {
+        const user = await db.account.create({ data: { publicKey: null, encryptionMode: "plain" }, select: { id: true } });
+        const base = createUsageSnapshot({ fetchedAt: 1000 });
+        const subscription = { status: "subscribed", renewal: "off", observedAtMs: 2000, staleAfterMs: 60000, currentPeriodEndAtMs: 8000 } as const;
+        await writeProviderAccountUsageRecordWithPolicy({
+            accountId: user.id, recordId: base.recordId, recordKey: base.recordKey,
+            payloadMode: "plain_json_v1", status: "ok", fetchedAt: 1000, staleAfterMs: 60000,
+            snapshot: { ...base, subscription },
+        });
+        const row = await db.providerAccountUsageRecord.findUniqueOrThrow({ where: { accountId_recordId: { accountId: user.id, recordId: base.recordId } } });
+        expect(row.snapshot).not.toHaveProperty("subscription");
+        expect(row.metadata).toHaveProperty("subscription", subscription);
+        await writeProviderAccountUsageRecordWithPolicy({
+            accountId: user.id, recordId: base.recordId, recordKey: base.recordKey,
+            payloadMode: "plain_json_v1", status: "ok", fetchedAt: 3000, staleAfterMs: 60000,
+            snapshot: createUsageSnapshot({ fetchedAt: 3000 }),
+        });
+        expect((await readProviderAccountUsageRecord({ accountId: user.id, recordId: base.recordId }))?.snapshot?.subscription).toEqual(subscription);
+    });
+
     it("persists refresh-requested provider usage records without requiring a payload", async () => {
         const user = await db.account.create({ data: { publicKey: null, encryptionMode: "plain" }, select: { id: true } });
         const recordKey = createProviderAccountUsageRecordKey();

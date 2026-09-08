@@ -132,6 +132,8 @@ export const ScmPathStatsSchema = z.object({
   pendingAdded: z.number().int().nonnegative(),
   pendingRemoved: z.number().int().nonnegative(),
   isBinary: z.boolean(),
+  // False means bounded enrichment could not measure all line counts.
+  isComplete: z.boolean().optional(),
 });
 export type ScmPathStats = z.infer<typeof ScmPathStatsSchema>;
 
@@ -214,6 +216,7 @@ export const ScmWorkingSnapshotSchema = z.object({
     includedRemoved: z.number().int().nonnegative(),
     pendingAdded: z.number().int().nonnegative(),
     pendingRemoved: z.number().int().nonnegative(),
+    isComplete: z.boolean().optional(),
   }),
 });
 export type ScmWorkingSnapshot = z.infer<typeof ScmWorkingSnapshotSchema>;

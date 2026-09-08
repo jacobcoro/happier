@@ -103,6 +103,11 @@ export interface ItemProps {
     onContextMenu?: (event: unknown) => void;
     accessibilityRole?: AccessibilityRole;
     webRole?: React.AriaRole;
+    webTabIndex?: 0 | -1;
+    accessibilityLevel?: number;
+    webKeyShortcuts?: string;
+    onFocus?: () => void;
+    onKeyDown?: (event: { key?: string; nativeEvent?: { key?: string }; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; preventDefault?: () => void; target?: unknown; currentTarget?: unknown }) => void;
     /**
      * Optional disclosure/pass-through a11y props forwarded to the inner
      * Pressable. `accessibilityState` (e.g. `{ expanded }`) also drives a
@@ -328,6 +333,11 @@ export const Item = React.memo<ItemProps>((props) => {
         onContextMenu,
         accessibilityRole,
         webRole,
+        webTabIndex,
+        accessibilityLevel,
+        webKeyShortcuts,
+        onFocus,
+        onKeyDown,
         accessibilityState,
         accessibilityLabel,
         accessibilityHint,
@@ -567,7 +577,7 @@ export const Item = React.memo<ItemProps>((props) => {
     // it would flash on every tap.
     const [isFocused, setIsFocused] = React.useState(false);
     const isKeyboardModality = useIsKeyboardModality();
-    const handleFocus = React.useCallback(() => setIsFocused(true), []);
+    const handleFocus = React.useCallback(() => { setIsFocused(true); onFocus?.(); }, [onFocus]);
     const handleBlur = React.useCallback(() => setIsFocused(false), []);
     const focusRingCornerRadii = React.useMemo(() => getItemGroupRowCornerRadii({
         hasBackground: true,
@@ -833,6 +843,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 onMouseDownCapture={isWeb ? (onMouseDownCapture as any) : undefined}
                 onContextMenu={isWeb ? (onContextMenu as any) : undefined}
                 {...(isWeb && webRole ? { role: webRole } : undefined)}
+                {...(isWeb ? { tabIndex: webTabIndex, 'aria-level': accessibilityLevel, 'aria-keyshortcuts': webKeyShortcuts, onKeyDown } : undefined)}
                 accessibilityRole={accessibilityRole ?? 'button'}
                 accessibilityState={resolvedAccessibilityState}
                 accessibilityLabel={accessibilityLabel}

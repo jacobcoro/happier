@@ -163,7 +163,7 @@ async function loadCockpitHarness(): Promise<React.ComponentType<Readonly<{ even
         return (
             <AppPaneProvider>
                 <SessionCockpitChromeRegistryProvider>
-                    <SessionCockpitSurfaceNavigationProvider value={{ switchSurface }}>
+                    <SessionCockpitSurfaceNavigationProvider value={{ switchSurface, returnToPreviousSurface: () => switchSurface('chat') }}>
                         <SessionCockpitSurfaceScreen
                             sessionId="session-1"
                             scopeId="session:session-1"

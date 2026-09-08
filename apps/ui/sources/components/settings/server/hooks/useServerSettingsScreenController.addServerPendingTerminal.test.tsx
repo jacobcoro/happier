@@ -20,9 +20,7 @@ const activeServerSnapshot = {
 };
 const pendingTerminalConnectMock = vi.hoisted(() => ({
     current: null as { publicKeyB64Url: string; serverUrl: string } | null,
-    set: vi.fn((value: { publicKeyB64Url: string; serverUrl: string }) => {
-        pendingTerminalConnectMock.current = value;
-    }),
+    retarget: vi.fn(),
 }));
 
 const settingsState = {
@@ -78,7 +76,7 @@ vi.mock('@/components/settings/server/modals/ServerSwitchAuthPrompt', () => ({
 
 vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
     getPendingTerminalConnect: () => pendingTerminalConnectMock.current,
-    setPendingTerminalConnect: pendingTerminalConnectMock.set,
+    retargetPendingTerminalConnectToServerUrl: pendingTerminalConnectMock.retarget,
 }));
 
 vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
@@ -168,7 +166,7 @@ describe('useServerSettingsScreenController (add server pending terminal)', () =
         refreshFromActiveServerMock.mockClear();
         promptSignedOutServerSwitchConfirmationMock.mockClear();
         pendingTerminalConnectMock.current = null;
-        pendingTerminalConnectMock.set.mockClear();
+        pendingTerminalConnectMock.retarget.mockClear();
         storageState.serverSelectionGroups = [];
         storageState.serverSelectionActiveTargetKind = null;
         storageState.serverSelectionActiveTargetId = null;
@@ -201,10 +199,7 @@ describe('useServerSettingsScreenController (add server pending terminal)', () =
         });
 
         expect(promptSignedOutServerSwitchConfirmationMock).toHaveBeenCalledTimes(1);
-        expect(pendingTerminalConnectMock.set).toHaveBeenCalledWith({
-            publicKeyB64Url: 'abc123',
-            serverUrl: 'https://correct.example.test',
-        });
+        expect(pendingTerminalConnectMock.retarget).toHaveBeenCalledWith('https://correct.example.test');
         expect(setActiveServerIdMock).toHaveBeenCalledWith('server-correct', { scope: 'device' });
         expect(storageState.serverSelectionActiveTargetKind).toBe('server');
         expect(storageState.serverSelectionActiveTargetId).toBe('server-correct');

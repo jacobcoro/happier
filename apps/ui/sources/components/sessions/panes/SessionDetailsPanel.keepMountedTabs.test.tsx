@@ -177,7 +177,7 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
         expect(screen.findAllByType('SessionScmReviewDetailsView')).toHaveLength(1);
     });
 
-    it('does not hide inactive tab surfaces via accessibility props on web (preserve scroll state)', async () => {
+    it('keeps inactive web tab contents mounted but removes their controls from layout and accessibility', async () => {
         const screen = await renderSessionDetailsPanel();
 
         const surfaces = screen.findAll((node) => {
@@ -185,10 +185,14 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
             return props.pointerEvents === 'none' || props.pointerEvents === 'auto';
         });
 
-        // Find an inactive surface (pointerEvents="none") and ensure we aren't using props that can map to `hidden`
-        // on react-native-web, which would drop scroll/editing state when switching tabs.
-        const inactiveSurface = surfaces.find((s) => (s.props as any).pointerEvents === 'none');
+        // The subtree stays mounted so its local state and explicit scroll snapshot survive, but an
+        // inactive web surface must not remain discoverable as another visible/control surface.
+        const inactiveSurface = surfaces.find((surface) => (
+            (surface.props as any).pointerEvents === 'none'
+            && getStyleValue(surface.props.style, 'opacity') === 0
+        ));
         expect(inactiveSurface).toBeTruthy();
+        expect(getStyleValue(inactiveSurface!.props.style, 'display')).toBe('none');
         expect((inactiveSurface!.props as any).accessibilityElementsHidden).toBeUndefined();
         expect((inactiveSurface!.props as any).importantForAccessibility).toBeUndefined();
     });

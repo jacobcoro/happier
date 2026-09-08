@@ -259,11 +259,10 @@ export function useSessionFileEditorState(input: Readonly<{
 
     const startEditingFile = React.useCallback(() => {
         if (!editorSurfaceEnabled) return;
-        if (input.displayMode !== 'file') {
+        if (input.displayMode !== 'file' || typeof input.fileText !== 'string') {
             setPendingStartEditing(true);
             return;
         }
-        if (typeof input.fileText !== 'string') return;
         const fileText = input.fileText;
         setIsEditingFile(true);
         setEditorOriginalText(fileText);

@@ -1342,6 +1342,48 @@ describe('createDaemonConnectedServiceAuthGroupSwitchCoordinator', () => {
     });
   });
 
+  it('persists plan-incompatible permission failures as a plan-unavailable cooldown', async () => {
+    const loadedGroup = {
+      ...group('primary', 1),
+      policy: {
+        ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+        cooldownMs: 45_000,
+      },
+    };
+    const api = {
+      getConnectedServiceAuthGroup: vi.fn(async () => loadedGroup),
+      updateConnectedServiceAuthGroupRuntimeState: vi.fn(async () => loadedGroup),
+      updateConnectedServiceAuthGroupActiveProfile: vi.fn(async () => group('backup', 2)),
+    };
+    const coordinator = createTestDaemonConnectedServiceAuthGroupSwitchCoordinator({
+      api,
+      runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000,
+      restartSession: async () => {},
+    });
+
+    await coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'permission_denied',
+      limitCategory: 'plan_invalid',
+      observedProfileId: 'primary',
+      planType: null,
+    });
+
+    expect(api.updateConnectedServiceAuthGroupRuntimeState).toHaveBeenCalledWith(expect.objectContaining({
+      memberStates: [{
+        profileId: 'primary',
+        state: expect.objectContaining({
+          lastFailureKind: 'permission_denied',
+          lastObservedAtMs: 1_000,
+          planUnavailableUntilMs: 46_000,
+        }),
+      }],
+    }));
+  });
+
   it('records only short herd-backoff evidence when usage-limit provider timing is missing', async () => {
     const api = {
       getConnectedServiceAuthGroup: vi.fn(async () => ({

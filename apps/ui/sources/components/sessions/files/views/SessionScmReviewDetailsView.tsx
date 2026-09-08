@@ -5,6 +5,8 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { Text } from '@/components/ui/text/Text';
+import { ReviewDraftSummary } from '@/components/sessions/reviews/comments/ReviewDraftSummary';
+import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { ChangedFilesReview } from '@/components/sessions/files/content/ChangedFilesReview';
 import { ChangedFilesViewModeMenu } from '@/components/sessions/files/ChangedFilesViewModeMenu';
 import { useChangedFilesData } from '@/hooks/session/files/useChangedFilesData';
@@ -92,6 +94,7 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
     const { theme } = useUnistyles();
     const pane = useAppPaneScope(props.scopeId);
     const openDetailsTab = pane.openDetailsTab;
+    const goToComposer = useReviewComposerHandoff(props.scopeId);
     const setDetailsTabState = pane.setDetailsTabState;
     const reviewTabKey = 'scmReview:working';
     const persistedReviewTabState = pane.scopeState?.details?.tabState?.[reviewTabKey] as any as
@@ -356,6 +359,17 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
         sessionPath,
     ]);
 
+    const reviewViewMenu = React.useMemo(() => changed.showTurnViewToggle || changed.showSessionViewToggle ? (
+        <ChangedFilesViewModeMenu
+            testID="scm-review-view-menu"
+            theme={theme}
+            changedFilesViewMode={changedFilesViewMode}
+            showTurnViewToggle={changed.showTurnViewToggle}
+            showSessionViewToggle={changed.showSessionViewToggle}
+            onChangedFilesViewMode={setChangedFilesViewMode}
+        />
+    ) : null, [changed.showTurnViewToggle, changed.showSessionViewToggle, changedFilesViewMode, theme]);
+
     if (!effectiveSnapshot && !snapshotError) {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 24 }}>
@@ -388,31 +402,13 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
 
     return (
         <View style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-            {changed.showTurnViewToggle || changed.showSessionViewToggle ? (
-                <View
-                    style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: 8,
-                        flexWrap: 'wrap',
-                        paddingHorizontal: 12,
-                        paddingTop: 10,
-                        paddingBottom: 8,
-                        borderBottomWidth: 1,
-                        borderBottomColor: theme.colors.border.default,
-                        backgroundColor: theme.colors.surface.inset,
-                    }}
-                >
-                    <ChangedFilesViewModeMenu
-                        theme={theme}
-                        changedFilesViewMode={changedFilesViewMode}
-                        showTurnViewToggle={changed.showTurnViewToggle}
-                        showSessionViewToggle={changed.showSessionViewToggle}
-                        onChangedFilesViewMode={setChangedFilesViewMode}
-                    />
-                </View>
-            ) : null}
+            <ReviewDraftSummary
+                enabled={reviewCommentsEnabled}
+                drafts={reviewCommentDrafts}
+                onGoToComposer={goToComposer}
+            />
             <ChangedFilesReview
+                toolbarLeading={reviewViewMenu}
                 theme={theme}
                 sessionId={props.sessionId}
                 snapshot={effectiveSnapshot ?? null}

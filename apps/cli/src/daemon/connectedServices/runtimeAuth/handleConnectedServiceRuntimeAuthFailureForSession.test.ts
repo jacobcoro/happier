@@ -356,6 +356,72 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(resolveCurrentRuntimeAuthFailureSource).not.toHaveBeenCalled();
   });
 
+  it('continues a scheduled recovery on the refreshed revision of the same profile without attributing the old failure to it', async () => {
+    const tracked = {
+      startedBy: 'daemon' as const,
+      happySessionId: 'sess_scheduled_same_profile_refresh',
+      pid: 123,
+      spawnOptions: { directory: '/tmp/project' },
+    } satisfies TrackedSession;
+    const switchAfterClassifiedFailure = vi.fn();
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [tracked],
+      sessionId: tracked.happySessionId,
+      switchesThisTurn: 0,
+      recoveryInvocationSource: 'scheduler_retry',
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'work',
+        groupId: 'main',
+        groupGeneration: 7,
+        credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
+        resetsAtMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+        recoveryAction: { kind: 'quota_recovery_required' },
+      },
+      resolveRegisteredRuntimeAuthFailureSource: () => ({
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        profileId: 'work',
+        generation: 8,
+        credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
+      }),
+      runtimeAuthApply: exactLiveRuntimeIdentityCapability,
+      switchCoordinator: { switchAfterClassifiedFailure },
+      continueAfterRuntimeAuthSwitch,
+    })).resolves.toMatchObject({
+      status: 'credential_refreshed',
+      restartRequested: false,
+      pendingProviderOutcome: true,
+      activeProfileId: 'work',
+      generation: 8,
+      credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
+    });
+
+    expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledOnce();
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: tracked.happySessionId,
+      action: 'hot_applied',
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'main',
+            profileId: 'work',
+          },
+        },
+      },
+    }));
+  });
+
   it('authorizes a complete hot-applied Codex credential failure from the exact live binding', async () => {
     const tracked = {
       startedBy: 'daemon' as const,
@@ -2253,6 +2319,91 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
   });
 
+  it('switches group members without refreshing credentials for a plan-incompatible permission failure', async () => {
+    const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'refreshed' as const,
+      credential: buildConnectedServiceCredentialRecord({
+        now: 1,
+        serviceId: 'openai-codex',
+        profileId: 'free-account',
+        kind: 'oauth',
+        expiresAt: 3_600_000,
+        oauth: {
+          accessToken: 'fresh-access',
+          refreshToken: 'refresh',
+          idToken: null,
+          scope: null,
+          tokenType: null,
+          providerAccountId: 'acct-free',
+          providerEmail: null,
+        },
+      }),
+      diagnostic: {
+        serviceId: 'openai-codex' as const,
+        profileId: 'free-account',
+        reason: 'runtime_auth_failure' as const,
+        status: 'refreshed' as const,
+        expiresAt: 3_600_000,
+        expiryAgeMs: -3_599_000,
+        refreshWindowMs: 60_000,
+      },
+    }));
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'backup',
+      generation: 2,
+    }));
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_plan_incompatible',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'free-account',
+                groupId: 'main',
+              },
+            },
+          },
+        },
+      }],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      credentialRefreshService: { refreshConnectedServiceCredentialForRuntimeAuthFailure },
+      sessionId: 'sess_plan_incompatible',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'permission_denied',
+        limitCategory: 'plan_invalid',
+        serviceId: 'openai-codex',
+        profileId: 'free-account',
+        groupId: 'main',
+        resetsAtMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        activeProfileId: 'backup',
+      },
+    });
+    expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).not.toHaveBeenCalled();
+    expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'permission_denied',
+      limitCategory: 'plan_invalid',
+      observedProfileId: 'free-account',
+    }));
+  });
+
   it('consumes authoritative group truth when a successful old-member refresh was superseded', async () => {
     const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
       status: 'refreshed' as const,
@@ -3681,6 +3832,9 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
 
     expect(enable).toHaveBeenCalledWith({
       sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
       issueFingerprint: 'temporary-throttle:openai-codex:main:primary',
       retryAfterMs: 45_000,
       resetAtMs: 90_000,
@@ -4589,13 +4743,29 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     });
   });
 
-  it('does not continue when observed generation still names the failed account', async () => {
+  it.each([
+    [null, 'reset-1', 80, 1_000, false],
+    ['no_receipt', 'reset-1', 80, 1_000, true],
+    ['not_available', 'reset-1', 80, 1_000, true],
+    ['unknown_after_timeout', 'reset-1', 80, 1_000, false],
+    ['consumed', 'reset-1', 80, 1_000, true],
+    ['consumed', 'reset-2', 80, 1_000, true],
+    ['already_consumed', 'reset-1', 80, 1_000, true],
+    ['nothing_to_reset', 'reset-1', 80, 1_000, true],
+    ['consumed', 'reset-1', 0, 1_000, false],
+    ['consumed', 'reset-1', NaN, 1_000, false],
+    ['consumed', 'reset-1', 80, NaN, false],
+  ] as const)('continues the failed account only with usable quota reset evidence (%s, %s, %s, %s)', async (resetStatus, resetKey, remainingPercent, capturedAtMs, shouldContinue) => {
     const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
     const switchAfterClassifiedFailure = vi.fn(async () => ({
       status: 'observed_generation' as const,
       activeProfileId: 'primary',
       generation: 2,
       credentialRevision: 'csr_7123456789ABCDEFGHJKMNPQRS',
+      ...(resetStatus ? { quotaRecovery: {
+        ...(resetStatus === 'no_receipt' ? {} : { receipt: { idempotencyKey: resetKey, status: resetStatus } }),
+        quotaSnapshot: { effectiveRemainingPercent: remainingPercent, capturedAtMs },
+      } } : {}),
     }));
     const tracked = {
       startedBy: 'daemon' as const,
@@ -4650,7 +4820,15 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       },
     });
 
-    expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
+    if (shouldContinue) {
+      expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
+        attemptId: `connected-service-auth-switch|hot_applied|openai-codex:group:main:primary:2|quota-recovery:${JSON.stringify(resetStatus === 'no_receipt' ? `quota-snapshot:${capturedAtMs}` : resetKey)}`,
+        action: 'hot_applied',
+        target: { serviceId: 'openai-codex', groupId: 'main', profileId: 'primary', generation: 2 },
+      }));
+    } else {
+      expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
+    }
   });
 
   it('settles a superseding generation before continuing the interrupted turn', async () => {

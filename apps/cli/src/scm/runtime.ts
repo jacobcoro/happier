@@ -10,6 +10,8 @@ import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/
 import { validatePath } from '@/rpc/handlers/pathSecurity';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
+import { toRepoRootLiteralPathspec } from './backends/git/literalPathspec';
+
 export type ScmExecResult = {
     success: boolean;
     stdout: string;
@@ -229,33 +231,33 @@ export function normalizePathspec(rawPath: string, cwd: string): { ok: true; pat
 export function normalizeRepoRootRelativePath(
     rawPath: string
 ): { ok: true; relativePath: string; pathspec: string } | { ok: false; error: string } {
-    const trimmed = String(rawPath ?? '').trim();
-    if (!trimmed) {
+    const requestedPath = String(rawPath ?? '');
+    if (!requestedPath.trim()) {
         return { ok: false, error: 'Path cannot be empty' };
     }
-    if (trimmed.includes('\0')) {
+    if (requestedPath.includes('\0')) {
         return { ok: false, error: 'Path contains null bytes' };
     }
-    if (trimmed.startsWith('-')) {
+    if (requestedPath.startsWith('-')) {
         return { ok: false, error: 'Path cannot start with "-"' };
     }
-    if (trimmed.startsWith(':')) {
+    if (requestedPath.startsWith(':')) {
         // Prevent injecting git pathspec magic like :(icase) or :(exclude)
         return { ok: false, error: 'Path contains unsupported syntax' };
     }
-    if (isAbsolute(trimmed)) {
+    if (isAbsolute(requestedPath)) {
         return { ok: false, error: 'Absolute paths are not supported' };
     }
 
-    const normalized = trimmed.split(sep).join('/').replace(/^\.\/+/, '').replace(/^\/+/, '');
+    const normalized = requestedPath.split(sep).join('/').replace(/^\.\/+/, '').replace(/^\/+/, '');
     const parts = normalized.split('/');
     if (parts.some((part) => part === '..')) {
         return { ok: false, error: `Path contains unsupported ".." segment: ${rawPath}` };
     }
     if (!normalized || normalized === '.') {
-        return { ok: true, relativePath: '.', pathspec: ':(top).' };
+        return { ok: true, relativePath: '.', pathspec: toRepoRootLiteralPathspec('.') };
     }
-    return { ok: true, relativePath: normalized, pathspec: `:(top)${normalized}` };
+    return { ok: true, relativePath: normalized, pathspec: toRepoRootLiteralPathspec(normalized) };
 }
 
 // The UI sends repo-root-relative paths (from status snapshots), but sessions can run from subdirectories.

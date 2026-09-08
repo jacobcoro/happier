@@ -291,18 +291,19 @@ describe('web held-end placement is one transaction per entry, never a frozen in
             configurable: true,
             value(options: ScrollToOptions | number, y?: number) {
                 const top = typeof options === 'number' ? (y ?? 0) : (options.top ?? this.scrollTop);
-                physicalScrollWrites.push({
-                    maxScroll: Math.max(0, this.scrollHeight - this.clientHeight),
-                    stack: new Error('physical scroll write').stack ?? '',
-                    target: this,
-                    top,
-                });
+                const stack = new Error('physical scroll write').stack ?? '';
                 scrollMethodActive = true;
                 try {
                     this.scrollTop = top;
                 } finally {
                     scrollMethodActive = false;
                 }
+                physicalScrollWrites.push({
+                    maxScroll: Math.max(0, this.scrollHeight - this.clientHeight),
+                    stack,
+                    target: this,
+                    top: this.scrollTop,
+                });
                 this.dispatchEvent(new Event('scroll'));
             },
         });

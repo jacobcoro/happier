@@ -121,10 +121,12 @@ export function useChangedFilesReviewPrefetch(input: Readonly<{
     if (!prefetchSchedulerRef.current) {
         prefetchSchedulerRef.current = new ScmDiffPrefetchScheduler({
             cache: scmDiffCache,
-            fetchDiff: async ({ sessionId, diffArea, path }) => {
+            fetchDiff: async ({ sessionId, diffArea, path, snapshotSignature }) => {
                 const file = fileStatusByPathRef.current.get(path) ?? null;
                 const response = await fetchSessionUnifiedDiffForPath({
                     sessionId,
+                    snapshotSignature,
+                    diffCache: scmDiffCache,
                     diffArea,
                     path,
                     file,

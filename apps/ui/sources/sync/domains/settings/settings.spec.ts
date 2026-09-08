@@ -1309,6 +1309,7 @@ describe('settings', () => {
                 pushEnabled: true,
                 ready: true,
                 readyIncludeMessageText: true,
+                requestIncludeMessageText: true,
                 foregroundBehavior: 'full',
                 permissionRequest: true,
                 userActionRequest: true,
@@ -1331,6 +1332,7 @@ describe('settings', () => {
                         connectedServiceQuotaRecovered: true,
                     },
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: true,
                 },
             ]);
             expect((settingsDefaults as any).attachmentsUploadsUploadLocation).toBe('workspace');

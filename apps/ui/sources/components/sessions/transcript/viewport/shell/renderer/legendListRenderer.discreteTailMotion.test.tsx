@@ -60,7 +60,7 @@ vi.mock('@legendapp/list/react-native', () => ({
         capturedLegendListProps = props;
         const data = Array.isArray(props.data) ? props.data : [];
         const instance = React.useMemo(() => ({
-            cancelInitialScrollPreservation: vi.fn(),
+            cancelScroll: vi.fn(),
             clearCaches: vi.fn(),
             getNativeScrollRef: vi.fn(),
             getScrollableNode: vi.fn(() => null),

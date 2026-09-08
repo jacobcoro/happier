@@ -35,7 +35,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         // Mark this device as one where the user has authenticated at least once.
         // We persist this through the store (not raw saveLocalSettings) so the
         // in-memory Zustand `localSettings` slice — which survives logout because
-        // clearPersistence only wipes MMKV — also reflects the flag. The welcome
+        // clearPersistence only wipes persisted values — also reflects the flag. The welcome
         // screen reads it via useLocalSetting('hasCompletedAuthOnce') to swap to
         // the warmer "Good to have you back" copy on subsequent visits.
         if (!loadLocalSettings().hasCompletedAuthOnce) {
@@ -61,7 +61,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         // still has prior auth experience. Clearing these would force returning
         // users back into the first-time welcome copy after every logout.
         const { brandHeroSeenAt, hasCompletedAuthOnce } = loadLocalSettings();
-        clearPersistence();
+        await clearPersistence();
         if (brandHeroSeenAt != null || hasCompletedAuthOnce) {
             saveLocalSettings({
                 ...localSettingsDefaults,

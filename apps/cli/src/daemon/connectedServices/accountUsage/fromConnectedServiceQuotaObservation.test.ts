@@ -41,6 +41,17 @@ function createSnapshot(
 }
 
 describe('buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation', () => {
+  it('preserves subscription observation freshness separately from runtime usage evidence', () => {
+    const subscription = { status: 'subscribed', renewal: 'off', observedAtMs: 500, staleAfterMs: 60_000,
+      currentPeriodEndAtMs: 50_000 } as const;
+    const snapshot = buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation({
+      snapshot: createSnapshot({ subscription }), observedAtMs: 1_234,
+    });
+    expect(snapshot.subscription).toEqual(subscription);
+    expect(snapshot.fetchedAtMs).toBe(1_000);
+    expect(snapshot.observedAtMs).toBe(1_234);
+  });
+
   it('builds a canonical provider-account usage snapshot from exact runtime quota evidence', () => {
     const snapshot = buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation({
       snapshot: createSnapshot(),

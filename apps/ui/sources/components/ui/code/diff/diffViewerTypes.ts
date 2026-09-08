@@ -18,6 +18,8 @@ export type DiffViewerBaseProps = Readonly<{
      */
     presentationStyleOverride?: 'unified' | 'split';
     scrollToLineId?: string;
+    onScrollToLine?: CodeLinesViewProps['onScrollToLine'];
+    externalScrollView?: CodeLinesViewProps['externalScrollView'];
     highlightLineId?: string;
     highlightLineIds?: ReadonlySet<string>;
     selectedLineIds?: ReadonlySet<string>;

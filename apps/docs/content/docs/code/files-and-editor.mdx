@@ -83,6 +83,15 @@ The **Files** tab is the in-session file manager for the current workspace.
 
 Opening a file uses the same details surface whether you start from the file tree, a changed-file row, a review diff, a transcript file link, a review-comment jump, or a linked-file chip in the composer.
 
+<Callout type="info">
+  In the current development build (unreleased), **Project** view hides Git-ignored
+  files and repository metadata while keeping tracked files, changed files, and
+  files you reveal in the tree reachable. Dotfiles remain visible unless Git
+  ignores them. Choose **All files** to include the hidden entries. When ignore
+  information is unavailable, including with older Happier versions on the machine
+  or outside Git repositories, the tree shows all files with an availability hint.
+</Callout>
+
 ### Tree rows and status badges
 
 The file tree is repository-aware.
@@ -97,9 +106,24 @@ This gives you a lightweight “what changed here?” signal without leaving the
 
 Long paths are formatted so the filename stays readable. On web, deeply nested directories use start-side ellipsis behavior, so the left side of a long path is shortened before the filename gets squeezed.
 
+<Callout type="info">
+  In the current development build (unreleased), the web file tree supports
+  keyboard navigation: Up/Down move between visible rows, Home/End jump to the
+  first/last row, Right expands a folder or enters it, and Left collapses it or
+  moves to its parent. Enter opens a file preview; P pins the focused file.
+</Callout>
+
 ### Search and modified-only filtering
 
 Use the Files search field when you already know roughly what you want.
+
+<Callout type="info">
+  In the current development build (unreleased), exact filenames and paths rank
+  ahead of broader matches. Searching without an extension favors that file's
+  name before variants such as test files. While you refine a search, the previous
+  results stay visible and are identified as previous results until the new
+  results arrive.
+</Callout>
 
 Use the modified-only filter when you want the tree to behave more like a focused “changed files” explorer.
 
@@ -245,6 +269,15 @@ Depending on the file and repository state, it can include:
 - a revert action when the file can be reverted safely
 
 On wide layouts, the path and actions share one horizontal row. On narrow layouts, Happier wraps the actions into a compact second row so the path, filename, and important actions stay readable.
+
+<Callout type="info">
+  In the current development build (unreleased), **Select entire file for commit**
+  selects the whole file immediately. When using Git staging, the corresponding
+  action is **Stage file**. Use the separate **Select lines** action for a partial
+  selection, then apply the selected-line action. **Cancel** lets you leave line
+  selection even before choosing a line. **Reveal in Files** locates the open file
+  in the tree; **Open Changes** returns to source control.
+</Callout>
 
 ## Link project files from the session composer
 

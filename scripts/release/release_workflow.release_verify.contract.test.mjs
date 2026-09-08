@@ -212,7 +212,11 @@ test('release workflow derives validation, notes, and terminal status from the e
   assert.match(releaseStatus, /CLI_RESUME_VERIFIED:\s*\$\{\{\s*needs\.verify_resume_candidates\.outputs\.cli_verified\s*\}\}/);
   assert.match(releaseStatus, /project-release-status\.mjs/);
   assert.match(releaseStatus, /GITHUB_STEP_SUMMARY/);
-  assert.match(releaseStatus, /actions\/upload-artifact@[\s\S]*?name:\s*happier-release-status/);
+  assert.match(raw, /combined_preview_production:[\s\S]*?default:\s*false/);
+  assert.match(
+    releaseStatus,
+    /actions\/upload-artifact@[\s\S]*?name:\s*\$\{\{[\s\S]*?happier-release-status-preview[\s\S]*?happier-release-status[\s\S]*?\}\}/,
+  );
 });
 
 test('server releases admit the focused MySQL contract and stable platform evidence before branch mutation', async () => {

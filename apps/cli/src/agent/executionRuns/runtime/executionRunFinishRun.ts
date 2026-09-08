@@ -26,4 +26,4 @@ export type FinishExecutionRun = (
   },
   toolResult: { output: any; isError?: boolean; meta?: Record<string, unknown> },
   structuredMeta?: ExecutionRunStructuredMeta,
-) => void;
+) => void | Promise<void>;

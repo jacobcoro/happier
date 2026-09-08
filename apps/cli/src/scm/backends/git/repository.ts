@@ -8,68 +8,17 @@ import type {
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
 
 import { runScmCommand } from '../../runtime';
-import { normalizeRepoRootRelativePath } from '../../runtime';
 import { buildGitSnapshot, resolveGitHostingProviderFromOutputs } from './statusSnapshot';
 import { inspectGitCheckoutIdentity } from './checkoutIdentity';
 import { readGitBranchOperationState } from './operations/branchOperationState';
 import { defaultPrStatusCache } from '../../hostingProviders/prStatusCache';
 import { resolveHostingAuthProfileKey } from './operations/pullRequestOperationHelpers';
 import { enrichGitWorktreesWithStatus, readWorktreeStatusEnrichmentForPaths } from './worktreeStatusEnricher';
+import { parseGitStatusPorcelainV2Z } from './statusParser';
 import { parseGitWorktreeListPorcelain } from './worktreeListParser';
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-
-const UNTRACKED_STATS_MAX_FILES = 512;
-const UNTRACKED_STATS_MAX_BYTES = 5_000_000;
-
-function countTextLines(buffer: Buffer): number {
-    if (buffer.length === 0) return 0;
-    let lines = 1;
-    for (let i = 0; i < buffer.length; i += 1) {
-        if (buffer[i] === 10) lines += 1;
-    }
-    return lines;
-}
-
-async function computeUntrackedStatsByPath(repoRoot: string): Promise<Record<string, { pendingAdded: number; isBinary: boolean }>> {
-    const result = await runScmCommand({
-        bin: 'git',
-        cwd: repoRoot,
-        args: ['ls-files', '--others', '--exclude-standard', '-z'],
-        timeoutMs: 10_000,
-    });
-    if (!result.success || typeof result.stdout !== 'string') return {};
-
-    const paths = result.stdout.split('\0').filter((p) => p.trim().length > 0).slice(0, UNTRACKED_STATS_MAX_FILES);
-    const statsByPath: Record<string, { pendingAdded: number; isBinary: boolean }> = {};
-
-    for (const rawPath of paths) {
-        const normalized = normalizeRepoRootRelativePath(rawPath);
-        if (!normalized.ok) continue;
-        if (normalized.relativePath === '.' || normalized.relativePath.trim() === '') continue;
-
-        const absPath = join(repoRoot, normalized.relativePath);
-        try {
-            const info = await stat(absPath);
-            if (!info.isFile()) continue;
-            if (info.size > UNTRACKED_STATS_MAX_BYTES) {
-                statsByPath[normalized.relativePath] = { pendingAdded: 0, isBinary: true };
-                continue;
-            }
-
-            const buf = await readFile(absPath);
-            const isBinary = buf.includes(0);
-            statsByPath[normalized.relativePath] = {
-                pendingAdded: isBinary ? 0 : countTextLines(buf),
-                isBinary,
-            };
-        } catch {
-            // Ignore unreadable files (permissions/races).
-        }
-    }
-
-    return statsByPath;
-}
+import { realpath } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { readUntrackedFileStats } from '../../readUntrackedFileStats';
 
 function resolveMainWorktreePathFromCheckoutIdentity(
     checkoutIdentity: Awaited<ReturnType<typeof inspectGitCheckoutIdentity>>,
@@ -169,8 +118,8 @@ export async function getGitSnapshot(input: {
     const operationState = await readGitBranchOperationState(context);
 
     const statusRaw = statusResult.stdout ?? '';
-    const hasUntrackedHint = /(?:^|\0)\?\s/.test(statusRaw);
-    const untrackedStatsByPath = repoRoot && hasUntrackedHint ? await computeUntrackedStatsByPath(repoRoot) : {};
+    const untrackedPaths = parseGitStatusPorcelainV2Z(statusRaw).notAdded;
+    const untrackedStatsByPath = repoRoot && untrackedPaths.length > 0 ? await readUntrackedFileStats(repoRoot, untrackedPaths) : {};
     const remotesOutput = remotesResult.success ? (remotesResult.stdout ?? '') : '';
     const hostingProvider = resolveGitHostingProviderFromOutputs({
         statusOutput: statusRaw,
@@ -190,6 +139,8 @@ export async function getGitSnapshot(input: {
         statusOutput: statusResult.stdout ?? '',
         includedNumStatOutput: includedResult.success ? (includedResult.stdout ?? '') : '',
         pendingNumStatOutput: pendingResult.success ? (pendingResult.stdout ?? '') : '',
+        includedNumStatSuccess: includedResult.success,
+        pendingNumStatSuccess: pendingResult.success,
         untrackedStatsByPath,
         worktreesOutput: worktreesResult.success ? (worktreesResult.stdout ?? '') : '',
         remotesOutput,

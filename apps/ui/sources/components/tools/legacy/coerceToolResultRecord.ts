@@ -1,4 +1,4 @@
-import { maybeParseJson } from '../normalization/parse/parseJson';
+import { maybeParseJson } from '@happier-dev/protocol';
 
 export function coerceToolResultRecord(value: unknown): Record<string, unknown> | null {
     const parsed = maybeParseJson(value);

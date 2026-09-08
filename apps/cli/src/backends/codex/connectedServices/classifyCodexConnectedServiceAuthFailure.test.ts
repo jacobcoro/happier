@@ -7,6 +7,34 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
     const result = classifyCodexConnectedServiceAuthFailure({
       providerErrorPath: true,
       error: {
+        turn: {
+          status: 'failed',
+          error: {
+            type: 'error',
+            status: 400,
+            error: {
+              type: 'invalid_request_error',
+              message: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+            },
+          },
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'free-account',
+      groupId: 'happier',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'permission_denied',
+      limitCategory: 'plan_invalid',
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('keeps classifying the direct provider error shape for ChatGPT model incompatibility', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
         error: {
           type: 'invalid_request_error',
           message: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",

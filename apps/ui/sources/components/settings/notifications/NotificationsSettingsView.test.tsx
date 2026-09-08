@@ -53,6 +53,7 @@ const settingsState: {
             enabled: true,
             topics: createNotificationTopics(),
             readyIncludeMessageText: true,
+            requestIncludeMessageText: true,
         },
     ],
 };
@@ -205,6 +206,7 @@ describe('NotificationsSettingsView', () => {
                 enabled: true,
                 topics: createNotificationTopics(),
                 readyIncludeMessageText: true,
+                requestIncludeMessageText: true,
             },
         ];
     });
@@ -376,6 +378,19 @@ describe('NotificationsSettingsView', () => {
         expect(applyLocalSettingsMock).toHaveBeenCalledWith({ localNotificationsShowReadyMessageText: false });
     });
 
+    it('writes device-local request preview settings through the local settings writer', async () => {
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+        const previewItem = requireRowByTitle(screen, 'settingsNotifications.local.requestPreviewTitle');
+
+        await act(async () => {
+            previewItem.props.rightElement.props.onValueChange(false);
+        });
+
+        expect(applyLocalSettingsMock).toHaveBeenCalledWith({ localNotificationsShowRequestMessageText: false });
+    });
+
     it('writes remote push settings through the synced account settings writer', async () => {
         const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
 
@@ -398,6 +413,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: false,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: true,
                 },
             ],
         });
@@ -429,9 +445,24 @@ describe('NotificationsSettingsView', () => {
                         connectedServiceQuotaRecovered: false,
                     }),
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: true,
                 },
             ],
         });
+    });
+
+    it('disables synced request previews without changing notification topics', async () => {
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+        const previewItem = requireRowByTitle(screen, 'settingsNotifications.types.requestPreview.title');
+        expect(previewItem.props.rightElement.props.value).toBe(true);
+        await act(async () => { previewItem.props.rightElement.props.onValueChange(false); });
+        expect(applySettingsMock).toHaveBeenCalledWith(expect.objectContaining({
+            notificationsSettingsV1: createNotificationsSettings({ requestIncludeMessageText: false }),
+            notificationChannelsV1: [expect.objectContaining({
+                kind: 'expo_push', requestIncludeMessageText: false, topics: createNotificationTopics(),
+            })],
+        }));
     });
 
     it('writes synced ready preview settings through the account settings writer', async () => {
@@ -447,6 +478,7 @@ describe('NotificationsSettingsView', () => {
         expect(applySettingsMock).toHaveBeenCalledWith({
             notificationsSettingsV1: createNotificationsSettings({
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: true,
             }),
             notificationChannelsV1: [
                 {
@@ -456,6 +488,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: true,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: true,
                 },
             ],
         });
@@ -482,6 +515,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: true,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: true,
                 },
                 {
                     v: 1,
@@ -492,6 +526,7 @@ describe('NotificationsSettingsView', () => {
                     signingSecret: null,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: true,
                 },
             ],
         });
@@ -509,6 +544,7 @@ describe('NotificationsSettingsView', () => {
                 signingSecret: null,
                 topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
         ];
         modalConfirmMock.mockResolvedValue(true);
@@ -535,6 +571,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: true,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: true,
                 },
             ],
         });
@@ -552,6 +589,7 @@ describe('NotificationsSettingsView', () => {
                 signingSecret: null,
                 topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
         ];
         modalPromptMock.mockResolvedValue('shared-webhook-secret');
@@ -574,6 +612,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: true,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: true,
                 },
                 {
                     v: 1,
@@ -587,6 +626,7 @@ describe('NotificationsSettingsView', () => {
                     },
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: false,
                 },
             ],
         });
@@ -604,6 +644,7 @@ describe('NotificationsSettingsView', () => {
                 signingSecret: null,
                 topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
             {
                 v: 1,
@@ -614,6 +655,7 @@ describe('NotificationsSettingsView', () => {
                 signingSecret: null,
                 topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
         ];
 
@@ -651,6 +693,7 @@ describe('NotificationsSettingsView', () => {
                 signingSecret: null,
                 topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
         ];
 
@@ -678,6 +721,7 @@ describe('NotificationsSettingsView', () => {
                 },
                 topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
         ];
 
@@ -703,6 +747,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: true,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: true,
                 },
                 {
                     v: 1,
@@ -713,6 +758,7 @@ describe('NotificationsSettingsView', () => {
                     signingSecret: null,
                     topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: false,
                 },
             ],
         });

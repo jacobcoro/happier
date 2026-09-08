@@ -69,7 +69,7 @@ type FinishRun = (
   next: FinishRunNext,
   toolResult: { output: any; isError?: boolean; meta?: Record<string, unknown> },
   structuredMeta?: ExecutionRunStructuredMeta,
-) => void;
+) => void | Promise<void>;
 
 function normalizeVoiceAgentModelId(value: unknown): string {
   if (typeof value !== 'string') return '';
@@ -229,6 +229,8 @@ export async function startExecutionRun(args: Readonly<{
     retentionPolicy: args.params.retentionPolicy,
     runClass: args.params.runClass,
     ioMode: args.params.ioMode,
+    notifyParentOnCompletion: args.params.notifyParentOnCompletion
+      ?? (args.params.accountSettings?.executionRunsNotifyParentOnCompletionDefault === true),
     ...(Object.keys(launch).length > 0 ? { launch } : {}),
     status: 'running',
     startedAtMs,
@@ -265,6 +267,10 @@ export async function startExecutionRun(args: Readonly<{
     ioMode: args.params.ioMode,
     retentionPolicy: args.params.retentionPolicy,
     status: 'running',
+    ...(args.params.notifyParentOnCompletion
+      ?? (args.params.accountSettings?.executionRunsNotifyParentOnCompletionDefault === true)
+      ? { notifyParentOnCompletion: true }
+      : {}),
     startedAtMs,
     updatedAtMs: startedAtMs,
     resumeHandle: null,
@@ -539,7 +545,7 @@ export async function startExecutionRun(args: Readonly<{
         ? e.code
         : 'execution_run_failed';
           try {
-            args.finishRun(
+            await args.finishRun(
               runId,
               { status: 'failed', summary: message, finishedAtMs, error: { code, message } },
               {
@@ -638,7 +644,7 @@ export async function startExecutionRun(args: Readonly<{
         ? e.code
         : 'execution_run_failed';
     try {
-      args.finishRun(
+      await args.finishRun(
         runId,
         { status: 'failed', summary: message, finishedAtMs, error: { code, message } },
         {

@@ -62,7 +62,7 @@ describe('useScmCommitHistory integration', () => {
         mockSessionRPC.mockReset();
     });
 
-    it('paginates real git history and supports reset reload', async () => {
+    it('paginates real git history and preserves loaded depth and its oldest commit on refresh', async () => {
         const workspace = createRepoWithCommits(25);
         mockSessionRPC.mockImplementation(createGitSessionRpcHarness(workspace));
 
@@ -96,15 +96,34 @@ describe('useScmCommitHistory integration', () => {
         const uniqueShas = new Set(secondPage.historyEntries.map((entry) => entry.sha));
         expect(uniqueShas.size).toBe(secondPage.historyEntries.length);
 
+        const oldestSha = secondPage.historyEntries.at(-1)?.sha;
+        writeFileSync(join(workspace, 'new-head.txt'), 'new commit');
+        git(workspace, ['add', 'new-head.txt']);
+        git(workspace, ['commit', '-m', 'new head']);
         await act(async () => {
             await hook.getCurrent().loadCommitHistory({ reset: true });
         });
 
         const resetPage = hook.getCurrent();
-        expect(resetPage.historyEntries).toHaveLength(20);
-        expect(resetPage.historyHasMore).toBe(true);
+        expect(resetPage.historyEntries).toHaveLength(26);
+        expect(resetPage.historyEntries[0]?.subject).toBe('new head');
+        expect(resetPage.historyEntries.at(-1)?.sha).toBe(oldestSha);
+        expect(resetPage.historyHasMore).toBe(false);
 
         await hook.unmount();
+    });
+
+    it('clears the previous repository when session path changes', async () => {
+        const workspace = createRepoWithCommits(3);
+        mockSessionRPC.mockImplementation(createGitSessionRpcHarness(workspace));
+        const hook = await renderHook((props: HookProps) => useScmCommitHistory(props), {
+            initialProps: { sessionId: 'same-session', sessionPath: workspace, readLogEnabled: true },
+        });
+        await act(async () => { await hook.getCurrent().loadCommitHistory({ reset: true }); });
+        expect(hook.getCurrent().historyEntries).toHaveLength(3);
+        await hook.rerender({ sessionId: 'same-session', sessionPath: `${workspace}/another-repo`, readLogEnabled: true });
+        expect(hook.getCurrent().historyEntries).toEqual([]);
+        expect(hook.getCurrent().historyHasMore).toBe(false);
     });
 
     it('falls back to limit expansion when backend ignores skip (legacy daemon)', async () => {

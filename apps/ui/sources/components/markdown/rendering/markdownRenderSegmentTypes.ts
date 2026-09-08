@@ -3,6 +3,8 @@ import type { MarkdownSourceRange } from '../parseMarkdown';
 
 export type MarkdownRenderSegment = Readonly<{
     type: 'enriched-markdown';
+    /** Rendering includes document-wide definitions; source identity stays local. */
+    renderMarkdown?: string;
     key: string;
     sourceStart: number;
     sourceLength: number;

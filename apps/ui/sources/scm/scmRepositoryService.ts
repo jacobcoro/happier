@@ -195,6 +195,7 @@ export function snapshotToScmStatus(snapshot: UiScmWorkingSnapshot): ScmStatus {
         linesAdded,
         linesRemoved,
         linesChanged: linesAdded + linesRemoved,
+        ...(snapshot.totals.isComplete === undefined ? {} : { isComplete: snapshot.totals.isComplete }),
         upstreamBranch: snapshot.branch.upstream,
         aheadCount: snapshot.branch.ahead,
         behindCount: snapshot.branch.behind,

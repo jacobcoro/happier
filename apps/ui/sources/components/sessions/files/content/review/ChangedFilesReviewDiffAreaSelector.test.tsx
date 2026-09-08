@@ -1,41 +1,50 @@
+/** @vitest-environment jsdom */
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
-
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({ View: 'View', Pressable: 'Pressable' });
+vi.mock('react-native', async () => vi.importActual('react-native-web'));
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    const { View, Text, ScrollView } = await import('react-native');
+    const mock = createReanimatedModuleMock();
+    return { ...mock, default: { ...mock.default, View, Text, ScrollView }, View, Text, ScrollView };
 });
 
-vi.mock('@/components/ui/text/Text', () => ({ Text: 'Text' }));
-vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }));
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const theme = { colors: { border: { default: '#ddd' }, surface: { inset: '#eee', base: '#fff' }, text: { primary: '#111' } } };
 
-const theme = {
-    colors: {
-        border: { default: '#ddd' },
-        surface: { inset: '#eee', base: '#fff' },
-        text: { primary: '#111' },
-    },
-};
-
-describe('ChangedFilesReviewDiffAreaSelector', () => {
-    it('keeps a trailing contextual action visible when there is only one diff area', async () => {
-        const { ChangedFilesReviewDiffAreaSelector } = await import('./ChangedFilesReviewDiffAreaSelector');
-        const screen = await renderScreen(
-            <ChangedFilesReviewDiffAreaSelector
-                theme={theme}
-                diffArea="pending"
-                availableModes={['pending']}
-                labels={{ pending: 'Pending', included: 'Included', both: 'Both' }}
-                onChange={() => {}}
-                trailingElement={React.createElement('TrailingAction')}
-            />,
-        );
-
-        expect(screen.findAllByType('TrailingAction' as never)).toHaveLength(1);
-        expect(screen.findAllByType('Pressable' as never)).toHaveLength(0);
-    });
+it('chooses a diff area from one menu and retains trailing actions for a single area', async () => {
+    const { ChangedFilesReviewDiffAreaSelector } = await import('./ChangedFilesReviewDiffAreaSelector');
+    // jsdom has no layout; only the browser geometry boundary is supplied.
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1024);
+    vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(768);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 20, 200, 32));
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const onChange = vi.fn();
+    const labels = { pending: 'Pending', included: 'Included', both: 'Combined' };
+    try {
+        await act(async () => root.render(<ChangedFilesReviewDiffAreaSelector theme={theme} diffArea="both" availableModes={['included', 'pending', 'both']} labels={labels} onChange={onChange} />));
+        const trigger = container.querySelector<HTMLElement>('[data-testid="scm-review-diff-area-menu"]');
+        expect(trigger).not.toBeNull();
+        expect(document.querySelector('[data-testid="scm-review-diff-area-pending"]')).toBeNull();
+        await act(async () => trigger?.click());
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="scm-review-diff-area-pending"]')).not.toBeNull());
+        await act(async () => document.querySelector<HTMLElement>('[data-testid="scm-review-diff-area-pending"]')?.click());
+        expect(onChange).toHaveBeenCalledWith('pending');
+        await act(async () => root.render(<ChangedFilesReviewDiffAreaSelector theme={theme} diffArea="pending" availableModes={['pending']} labels={labels} onChange={onChange} trailingElement={<span data-testid="trailing">Action</span>} />));
+        expect(container.querySelector('[data-testid="trailing"]')).not.toBeNull();
+        expect(container.querySelector('[data-testid="scm-review-diff-area-menu"]')).toBeNull();
+    } finally {
+        await act(async () => root.unmount());
+        container.remove();
+        vi.restoreAllMocks();
+    }
 });

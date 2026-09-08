@@ -111,10 +111,10 @@ function isDeployEnvironment(v) {
 
 /**
  * @param {string} v
- * @returns {v is 'dev' | 'production' | 'preview'}
+ * @returns {v is 'dev' | 'production' | 'preview' | 'preview-and-production'}
  */
 function isReleaseDeployEnvironment(v) {
-  return v === 'dev' || v === 'production' || v === 'preview';
+  return v === 'dev' || v === 'production' || v === 'preview' || v === 'preview-and-production';
 }
 
 /**
@@ -2105,12 +2105,18 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         const scriptArgs =
           subcommand === 'release-compute-deploy-plan' ? ['--deploy-environment', deployEnvironment, ...passthrough] : passthrough;
 
-        const isHermeticInstallerProjectionCheck =
-          subcommand === 'release-sync-installers' && passthrough.includes('--check');
+        const isHermeticWrappedReleaseCommand = new Set([
+          'release-sync-installers',
+          'release-bump-version',
+          'release-compute-changed-components',
+          'release-compute-versioned-component-changes',
+          'release-resolve-bump-plan',
+          'release-compute-deploy-plan',
+        ]).has(subcommand);
         if (
           subcommand === 'release-analyze' ||
-          (subcommand === 'release-local-candidates' && dryRun) ||
-          isHermeticInstallerProjectionCheck
+          (isHermeticWrappedReleaseCommand && !dryRun) ||
+          (subcommand === 'release-local-candidates' && dryRun)
         ) {
           runReleaseWrappedScript({
             repoRoot,
@@ -4349,7 +4355,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
             action !== 'release preview to main' &&
             action !== 'reset main from preview' &&
             action !== 'release dev to main' &&
-            action !== 'reset main from dev'
+            action !== 'reset main from dev' &&
+            action !== 'release dev to preview and main'
           ) {
             fail(`Unsupported --confirm action: ${action}`);
           }
@@ -4359,7 +4366,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
 
           const deployEnvironment = String(values['deploy-environment'] ?? '').trim();
           if (!isReleaseDeployEnvironment(deployEnvironment)) {
-            fail(`--deploy-environment must be 'dev', 'production', or 'preview' (got: ${deployEnvironment || '<empty>'})`);
+            fail(`--deploy-environment must be 'dev', 'preview', 'production', or 'preview-and-production' (got: ${deployEnvironment || '<empty>'})`);
           }
           if (deployEnvironment === 'dev' && action !== 'release dev to dev') {
             fail('Confirmation mismatch for dev releases. Expected: "release dev to dev"');
@@ -4367,7 +4374,15 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           if (deployEnvironment === 'preview' && action !== 'release dev to preview') {
             fail('Confirmation mismatch for preview releases. Expected: "release dev to preview"');
           }
-          if (deployEnvironment === 'production' && (action === 'release dev to dev' || action === 'release dev to preview')) {
+          if (deployEnvironment === 'preview-and-production' && action !== 'release dev to preview and main') {
+            fail('Confirmation mismatch for combined releases. Expected: "release dev to preview and main"');
+          }
+          if (deployEnvironment === 'production' && ![
+            'release preview to main',
+            'reset main from preview',
+            'release dev to main',
+            'reset main from dev',
+          ].includes(action)) {
             fail(
               'Confirmation mismatch for production releases. Expected: "release preview to main", "reset main from preview", "release dev to main", or "reset main from dev"',
             );
@@ -4465,7 +4480,11 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           }
 
           const requestedReleaseProfileId = String(values['release-profile'] ?? '').trim();
-          const releaseProfileId = requestedReleaseProfileId || (deployEnvironment === 'production' ? 'stable' : 'integrated');
+          const releaseProfileId = requestedReleaseProfileId || (
+            deployEnvironment === 'production' || deployEnvironment === 'preview-and-production'
+              ? 'stable'
+              : 'integrated'
+          );
           const releaseProfile = resolvePublicReleaseValidationProfile(releaseProfileId);
           if (!releaseProfile) {
             fail(`--release-profile must be one of: integrated, stable, deep (got: ${releaseProfileId})`);
@@ -4532,13 +4551,13 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               fail(`Local release dispatch expects branch 'dev' or '*\\/upstream-dev' (current: ${currentBranch}).`);
             }
             const authorizedPromotionSource = await resolvePromotionSource();
+            const combinedRelease = deployEnvironment === 'preview-and-production';
             const workflowArgs = [
-              'workflow', 'run', 'release.yml',
+              'workflow', 'run', combinedRelease ? 'release-preview-and-production.yml' : 'release.yml',
               '--repo', repository,
               '--ref', 'dev',
               '-f', `validation_profile=${releaseProfile.id}`,
               '-f', 'dry_run=false',
-              '-f', `environment=${deployEnvironment}`,
               '-f', `deploy_targets=${deployTargets.join(',')}`,
               '-f', `force_deploy=${forceDeploy}`,
               '-f', `ui_expo_action=${uiExpoAction}`,
@@ -4555,7 +4574,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               ...(ciRunId ? ['-f', `ci_run_id=${ciRunId}`] : []),
               ...(operationId ? ['-f', `hmaint_operation_id=${operationId}`] : []),
               ...(operationId ? ['-f', `hmaint_attempt_id=${attemptId}`] : []),
-              '-f', `confirm=${action}`,
+              ...(combinedRelease ? [] : ['-f', `environment=${deployEnvironment}`, '-f', `confirm=${action}`]),
             ];
             execFileSync('gh', workflowArgs, {
               cwd: repoRoot,
@@ -4565,6 +4584,14 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               timeout: 30_000,
             });
             console.log(`[pipeline] dispatched hosted release workflow for ${deployEnvironment} (release profile=${releaseProfile.id}); privileged release writes run only in GitHub Actions.`);
+            return;
+          }
+
+          if (deployEnvironment === 'preview-and-production') {
+            const authorizedPromotionSource = await resolvePromotionSource();
+            console.log(`[pipeline] combined release dry-run: preview + production <= ${authorizedPromotionSource.sha}`);
+            console.log(`[pipeline] release profile=${releaseProfile.id}`);
+            console.log('[pipeline] hosted execution reuses this exact source and CI evidence while each channel builds its own embedded-policy artifacts.');
             return;
           }
 

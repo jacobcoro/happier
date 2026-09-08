@@ -14,7 +14,7 @@ const { statMock, readFileMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('node:fs/promises', () => ({
-    stat: statMock,
+    lstat: statMock,
     readFile: readFileMock,
 }));
 
@@ -53,6 +53,32 @@ describe('sapling repository snapshot', () => {
                 },
             }),
         ).rejects.toThrow('abort: status failed');
+    });
+
+    it('marks skipped untracked statistics and totals incomplete', async () => {
+        runScmCommandMock.mockReset();
+        runScmCommandMock.mockResolvedValue({ success: true, stdout: '', stderr: '', exitCode: 0 });
+        runScmCommandMock.mockResolvedValueOnce({ success: true, stdout: '? large.txt\n', stderr: '', exitCode: 0 });
+        statMock.mockResolvedValue({ isFile: () => true, isSymbolicLink: () => false, size: 5_000_001 });
+        const snapshot = await getSaplingSnapshot({ cwd: '/repo', projectKey: 'machine:/repo', detection: { isRepo: true, rootPath: '/repo', mode: '.sl' } });
+        expect.soft(snapshot.entries[0]?.stats).toMatchObject({ isBinary: false, isComplete: false });
+        expect.soft(snapshot.totals).toMatchObject({ isComplete: false });
+    });
+
+    it('marks tracked statistics incomplete when the diff command fails', async () => {
+        runScmCommandMock.mockReset();
+        runScmCommandMock.mockImplementation(async (input: { args: string[] }) => ({
+            success: input.args[0] !== 'diff',
+            stdout: input.args[0] === 'status' ? 'M mod.txt\n? new.txt\n' : '',
+            stderr: input.args[0] === 'diff' ? 'diff failed' : '',
+            exitCode: input.args[0] === 'diff' ? 1 : 0,
+        }));
+        statMock.mockResolvedValue({ isFile: () => true, isSymbolicLink: () => false, size: 4 });
+        readFileMock.mockResolvedValue(Buffer.from('new\n'));
+        const snapshot = await getSaplingSnapshot({ cwd: '/repo', projectKey: 'machine:/repo', detection: { isRepo: true, rootPath: '/repo', mode: '.sl' } });
+        expect.soft(snapshot.entries.find((entry) => entry.path === 'mod.txt')?.stats.isComplete).toBe(false);
+        expect.soft(snapshot.entries.find((entry) => entry.path === 'new.txt')?.stats.isComplete).toBeUndefined();
+        expect.soft(snapshot.totals.isComplete).toBe(false);
     });
 
     it('captures pending line stats for diffable entries and untracked files', async () => {
@@ -109,7 +135,7 @@ describe('sapling repository snapshot', () => {
                 exitCode: 0,
             });
 
-        statMock.mockResolvedValue({ isFile: () => true, size: 10 });
+        statMock.mockResolvedValue({ isFile: () => true, isSymbolicLink: () => false, size: 10 });
         readFileMock.mockResolvedValue(Buffer.from('a\nb\n'));
 
         const snapshot = await getSaplingSnapshot({
@@ -130,10 +156,10 @@ describe('sapling repository snapshot', () => {
         expect(byPath.get('added.txt')?.stats.pendingRemoved).toBe(0);
         expect(byPath.get('removed.txt')?.stats.pendingAdded).toBe(0);
         expect(byPath.get('removed.txt')?.stats.pendingRemoved).toBe(2);
-        expect(byPath.get('untracked.txt')?.stats.pendingAdded).toBe(3);
+        expect(byPath.get('untracked.txt')?.stats.pendingAdded).toBe(2);
         expect(byPath.get('untracked.txt')?.stats.pendingRemoved).toBe(0);
 
-        expect(snapshot.totals.pendingAdded).toBe(7);
+        expect(snapshot.totals.pendingAdded).toBe(6);
         expect(snapshot.totals.pendingRemoved).toBe(3);
     });
 });

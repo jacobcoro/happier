@@ -70,10 +70,10 @@ describe('createClaudePendingAwareInputConsumer', () => {
 
     await consumer.drainPending({ reason: 'test-live-steer-default' });
 
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       pendingQueueDeliveryTiming: 'after_foreground_ready',
-    });
+    }));
   });
 
   it('reads the current exact unified-terminal steerability snapshot on every pending drain', async () => {
@@ -85,19 +85,19 @@ describe('createClaudePendingAwareInputConsumer', () => {
     });
 
     await consumer.drainPending({ reason: 'test-live-steer-unavailable' });
-    expect(materializeNextPendingMessageSafely).toHaveBeenLastCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenLastCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       activeTurnSteerability: 'unsteerable',
       pendingQueueDeliveryTiming: 'after_foreground_ready',
-    });
+    }));
 
     available = true;
     await consumer.drainPending({ reason: 'test-live-steer-available' });
-    expect(materializeNextPendingMessageSafely).toHaveBeenLastCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenLastCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       activeTurnSteerability: 'steerable',
       pendingQueueDeliveryTiming: 'after_foreground_ready',
-    });
+    }));
   });
 
   it('uses one fresh provider-owned steerability proof before each active Pending claim', async () => {
@@ -115,21 +115,21 @@ describe('createClaudePendingAwareInputConsumer', () => {
     await consumer.drainPending({ reason: 'test-stale-positive-pre-claim-steer-refresh' });
 
     expect(refreshActiveTurnSteerability).toHaveBeenCalledTimes(1);
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       activeTurnSteerability: 'unsteerable',
       pendingQueueDeliveryTiming: 'after_foreground_ready',
-    });
+    }));
 
     cachedAvailability = 'unsteerable';
     await consumer.drainPending({ reason: 'test-stale-negative-pre-claim-steer-refresh' });
 
     expect(refreshActiveTurnSteerability).toHaveBeenCalledTimes(2);
-    expect(materializeNextPendingMessageSafely).toHaveBeenLastCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenLastCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       activeTurnSteerability: 'steerable',
       pendingQueueDeliveryTiming: 'after_foreground_ready',
-    });
+    }));
   });
 
   it('does not turn a steering preference into a current Claude capability proof', async () => {
@@ -141,10 +141,10 @@ describe('createClaudePendingAwareInputConsumer', () => {
 
     await consumer.drainPending({ reason: 'test-live-steer-immediate' });
 
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       pendingQueueDeliveryTiming: 'after_foreground_ready',
-    });
+    }));
   });
 
   it('keeps the active-turn block when busy steering is configured as server pending', async () => {
@@ -156,10 +156,10 @@ describe('createClaudePendingAwareInputConsumer', () => {
 
     await consumer.drainPending({ reason: 'test-server-pending' });
 
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       pendingQueueDeliveryTiming: 'after_foreground_ready',
-    });
+    }));
   });
 
   it('passes runtime-idle timing without manufacturing Claude steerability', async () => {
@@ -171,10 +171,10 @@ describe('createClaudePendingAwareInputConsumer', () => {
 
     await consumer.drainPending({ reason: 'test-runtime-idle-timing' });
 
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith(expect.objectContaining({
       reconcileWhenEmpty: 'force',
       pendingQueueDeliveryTiming: 'after_runtime_idle',
-    });
+    }));
     expect(readRuntimeActivitySnapshotTail).not.toHaveBeenCalled();
   });
 

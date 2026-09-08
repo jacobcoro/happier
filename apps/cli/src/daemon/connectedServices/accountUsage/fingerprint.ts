@@ -58,6 +58,9 @@ function buildMaterialSnapshot(snapshot: ProviderAccountUsageSnapshotV1): JsonVa
     planLabel: snapshot.planLabel ?? null,
     accountLabel: snapshot.accountLabel ?? null,
     recoveryCredits: snapshot.recoveryCredits ?? null,
+    // Subscription freshness has its own clock: a successful refresh must publish
+    // even when the quota data and billing period are unchanged.
+    subscription: snapshot.subscription ?? null,
     meters: snapshot.meters,
   });
 }

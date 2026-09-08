@@ -11,7 +11,7 @@ import {
   type ConnectedServiceRuntimeAuthFailureKind,
 } from '../runtimeAuth/types';
 
-type TemporaryThrottleStatus = 'waiting' | 'checking' | 'exhausted' | 'cancelled';
+type TemporaryThrottleStatus = 'waiting' | 'checking' | 'awaiting_outcome' | 'exhausted' | 'cancelled';
 
 export type TemporaryThrottleContinuationIntent = Readonly<{
   interruptedOriginId: string;
@@ -29,9 +29,13 @@ export type TemporaryThrottleRecoveryIntent = Readonly<{
   retryAfterMs: number | null;
   resetAtMs: number | null;
   attemptCount: number;
+  capacityFailureCount?: number;
   maxAttempts: number;
   lastError: string | null;
   continuation: TemporaryThrottleContinuationIntent | null;
+  serviceId?: string;
+  profileId?: string | null;
+  groupId?: string | null;
 }>;
 
 type TemporaryThrottleRetryResult = Readonly<{
@@ -43,6 +47,8 @@ type TemporaryThrottleRetryResult = Readonly<{
 type TemporaryThrottleRecoverySchedulerDeps = Readonly<{
   nowMs: () => number;
   jitterMs?: () => number;
+  random?: () => number;
+  onStateChange?: (sessionId: string, intent: TemporaryThrottleRecoveryIntent | null, previous: TemporaryThrottleRecoveryIntent | null) => Promise<void> | void;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
   retry?: (
@@ -66,6 +72,9 @@ type EnableTemporaryThrottleRecoveryInput = Readonly<{
   retryAfterMs?: number | null;
   resetAtMs?: number | null;
   maxAttempts?: number;
+  serviceId?: string;
+  profileId?: string | null;
+  groupId?: string | null;
   continuation?: Readonly<{
     interruptedOriginId: string;
     resumePromptMode: SessionContinuationResumePromptModeV1;
@@ -121,6 +130,7 @@ function normalizeIntent(value: unknown): TemporaryThrottleRecoveryIntent | null
     && record.status !== 'checking'
     && record.status !== 'exhausted'
     && record.status !== 'cancelled'
+    && record.status !== 'awaiting_outcome'
   ) {
     return null;
   }
@@ -131,6 +141,7 @@ function normalizeIntent(value: unknown): TemporaryThrottleRecoveryIntent | null
   const resetAtMs = record.resetAtMs === null ? null : normalizeNonNegativeInteger(record.resetAtMs);
   const attemptCount = normalizeNonNegativeInteger(record.attemptCount);
   const maxAttempts = normalizeNonNegativeInteger(record.maxAttempts);
+  const continuation = normalizeContinuationIntent(record.continuation);
   const lastError = record.lastError === null
     ? null
     : typeof record.lastError === 'string' && record.lastError.trim().length > 0
@@ -156,9 +167,13 @@ function normalizeIntent(value: unknown): TemporaryThrottleRecoveryIntent | null
     retryAfterMs,
     resetAtMs,
     attemptCount,
-    maxAttempts,
+    capacityFailureCount: normalizeNonNegativeInteger(record.capacityFailureCount) ?? 0,
+    maxAttempts: continuation?.recoveryKind === 'capacity' ? 0 : maxAttempts,
     lastError,
-    continuation: normalizeContinuationIntent(record.continuation),
+    continuation,
+    ...(typeof record.serviceId === 'string' ? { serviceId: record.serviceId } : {}),
+    ...(typeof record.profileId === 'string' || record.profileId === null ? { profileId: record.profileId } : {}),
+    ...(typeof record.groupId === 'string' || record.groupId === null ? { groupId: record.groupId } : {}),
   };
 }
 
@@ -175,9 +190,9 @@ export class TemporaryThrottleRecoveryScheduler {
       baseBackoffMs: this.baseBackoffMs,
       maxBackoffMs: this.maxBackoffMs,
       jitterMs: deps.jitterMs,
-      store: deps.store,
+      store: this.observeStore(deps.store),
       normalizeIntent,
-      getStatus: (intent) => intent.status,
+      getStatus: (intent) => intent.status === 'awaiting_outcome' ? 'cancelled' : intent.status,
       getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
       getAttemptCount: (intent) => intent.attemptCount,
       getMaxAttempts: (intent) => intent.maxAttempts,
@@ -208,6 +223,46 @@ export class TemporaryThrottleRecoveryScheduler {
     });
   }
 
+  private observeStore(store: DurableRecoveryStore<TemporaryThrottleRecoveryIntent> | undefined): DurableRecoveryStore<TemporaryThrottleRecoveryIntent> | undefined {
+    if (!this.deps.onStateChange) return store;
+    const memory = new Map<string, TemporaryThrottleRecoveryIntent>();
+    const source: DurableRecoveryStore<TemporaryThrottleRecoveryIntent> = store ?? {
+      read: (key: string) => memory.get(key) ?? null,
+      readAll: () => [...memory.entries()],
+      write: (key: string, intent: TemporaryThrottleRecoveryIntent) => { memory.set(key, intent); },
+      remove: (key: string) => { memory.delete(key); },
+    };
+    const publish = async (key: string, previous: TemporaryThrottleRecoveryIntent | null) => {
+      const intent = normalizeIntent(source.read(key));
+      await this.deps.onStateChange?.(key, intent, previous);
+    };
+    return {
+      ...source,
+      write: async (key, intent) => {
+        const previous = normalizeIntent(source.read(key));
+        await source.write(key, intent);
+        await publish(key, previous);
+      },
+      ...(source.remove ? { remove: async (key: string) => {
+        const previous = normalizeIntent(source.read(key));
+        await source.remove!(key);
+        await publish(key, previous);
+      } } : {}),
+      ...(source.merge ? { merge: async (key, next, merge) => {
+        const previous = normalizeIntent(source.read(key));
+        const result = await source.merge!(key, next, merge);
+        await publish(key, previous);
+        return result;
+      } } satisfies Pick<DurableRecoveryStore<TemporaryThrottleRecoveryIntent>, 'merge'> : {}),
+      ...(source.transact ? { transact: async (key, transaction) => {
+        const previous = normalizeIntent(source.read(key));
+        const result = await source.transact!(key, transaction);
+        await publish(key, previous);
+        return result;
+      } } satisfies Pick<DurableRecoveryStore<TemporaryThrottleRecoveryIntent>, 'transact'> : {}),
+    };
+  }
+
   async enable(input: EnableTemporaryThrottleRecoveryInput): Promise<{
     status: TemporaryThrottleStatus;
     nextRetryAtMs: number | null;
@@ -230,14 +285,17 @@ export class TemporaryThrottleRecoveryScheduler {
         resetAtMs,
       }),
       attemptCount: 0,
-      maxAttempts: Math.max(1, Math.trunc(input.maxAttempts ?? defaultMaxAttempts)),
+      maxAttempts: continuation?.recoveryKind === 'capacity' ? 0 : Math.max(1, Math.trunc(input.maxAttempts ?? defaultMaxAttempts)),
       lastError: null,
       continuation,
+      serviceId: input.serviceId,
+      profileId: input.profileId,
+      groupId: input.groupId,
     };
     const intent = await this.scheduler.upsertMerged({
       sessionId: input.sessionId,
       intent: nextIntent,
-      merge: (previous, next) => this.mergeSameTemporaryThrottleIntent(previous, next),
+      merge: (previous, next) => this.mergeSameTemporaryThrottleIntent(previous, next, input.issueFingerprint),
     });
     return {
       status: intent.status,
@@ -249,8 +307,38 @@ export class TemporaryThrottleRecoveryScheduler {
   private mergeSameTemporaryThrottleIntent(
     previous: TemporaryThrottleRecoveryIntent | null,
     next: TemporaryThrottleRecoveryIntent,
+    baseIssueFingerprint: string,
   ): TemporaryThrottleRecoveryIntent {
-    if (!previous || previous.issueFingerprint !== next.issueFingerprint) return next;
+    if (!previous || previous.issueFingerprint !== next.issueFingerprint) {
+      const capacityFailureCount = (previous?.capacityFailureCount ?? 0) + (next.continuation?.recoveryKind === 'capacity' ? 1 : 0);
+      if (next.continuation?.recoveryKind !== 'capacity') return { ...next, capacityFailureCount };
+      if (previous?.status === 'cancelled' && previous.continuation?.recoveryKind === 'capacity'
+        && (previous.capacityFailureCount ?? 0) > 0
+        && previous.issueFingerprint === buildOccurrenceFingerprint(baseIssueFingerprint, previous.continuation)) {
+        return { ...next, status: 'cancelled', nextRetryAtMs: null, capacityFailureCount, attemptCount: previous.attemptCount };
+      }
+      return {
+        ...next,
+        capacityFailureCount,
+        attemptCount: previous?.attemptCount ?? 0,
+        nextRetryAtMs: Math.max(
+          next.armedAtMs + this.computeCapacityBackoffMs(capacityFailureCount),
+          next.armedAtMs + (next.retryAfterMs ?? 0),
+          next.resetAtMs ?? 0,
+        ),
+      };
+    }
+    if (previous.continuation?.recoveryKind === 'capacity') {
+      if (previous.status !== 'waiting') return previous;
+      const providerFloor = Math.max(
+        previous.armedAtMs + (previous.retryAfterMs ?? 0), previous.resetAtMs ?? 0,
+        next.retryAfterMs === null ? 0 : previous.armedAtMs + next.retryAfterMs, next.resetAtMs ?? 0,
+      );
+      return { ...previous,
+        retryAfterMs: Math.max(0, providerFloor - previous.armedAtMs),
+        nextRetryAtMs: Math.max(previous.nextRetryAtMs ?? 0, providerFloor),
+      };
+    }
     if (previous.status === 'exhausted') return previous;
     if (previous.status === 'cancelled') return previous;
     if (previous.status === 'checking') return previous;
@@ -273,6 +361,14 @@ export class TemporaryThrottleRecoveryScheduler {
     return this.scheduler.readByKeyPassive(sessionId);
   }
 
+  async recordTurnLifecycle(input: Readonly<{ sessionId: string; event: string; terminalStatus?: 'completed' | 'failed'; observedAtMs?: number }>): Promise<void> {
+    if (input.event !== 'assistant_message_end' || input.terminalStatus !== 'completed') return;
+    const current = this.read(input.sessionId);
+    if (!current || !current.capacityFailureCount) return;
+    if ((input.observedAtMs ?? this.deps.nowMs()) < current.armedAtMs) return;
+    await this.scheduler.clearByKey(input.sessionId);
+  }
+
   hydrate(): ReadonlyArray<TemporaryThrottleRecoveryIntent> {
     return this.scheduler.hydratePassive();
   }
@@ -282,6 +378,22 @@ export class TemporaryThrottleRecoveryScheduler {
   }
 
   async wake(input: { sessionId: string; reason: 'timer' | 'retry_now' }): Promise<{ status: string }> {
+    let intent = this.read(input.sessionId);
+    if (input.reason === 'retry_now' && intent?.continuation?.recoveryKind === 'capacity'
+      && (intent.status === 'cancelled' || intent.status === 'exhausted')) {
+      const nowMs = this.deps.nowMs();
+      const providerFloor = Math.max(intent.retryAfterMs === null ? 0 : intent.armedAtMs + intent.retryAfterMs, intent.resetAtMs ?? 0);
+      const armedAtMs = Math.max(nowMs, intent.armedAtMs + 1);
+      intent = await this.scheduler.upsert({ sessionId: input.sessionId,
+        intent: { ...intent, status: 'waiting', armedAtMs,
+          retryAfterMs: providerFloor > armedAtMs ? providerFloor - armedAtMs : null,
+          nextRetryAtMs: Math.max(nowMs, providerFloor) },
+      });
+    }
+    if (intent?.continuation?.recoveryKind === 'capacity' && intent.status === 'waiting') {
+      const providerFloor = Math.max(intent.retryAfterMs === null ? 0 : intent.armedAtMs + intent.retryAfterMs, intent.resetAtMs ?? 0);
+      if (this.deps.nowMs() < providerFloor) return { status: 'waiting' };
+    }
     const result = await this.scheduler.wake({
       sessionId: input.sessionId,
       reason: input.reason,
@@ -307,7 +419,7 @@ export class TemporaryThrottleRecoveryScheduler {
     } catch {
       return {
         status: 'wait',
-        nextRetryAtMs: nowMs + this.computeBackoffMs(intent.attemptCount),
+        nextRetryAtMs: nowMs + this.computeRetryBackoffMs(intent),
         lastError: 'temporary_throttle_probe_failed',
         intent: {
           ...intent,
@@ -329,7 +441,7 @@ export class TemporaryThrottleRecoveryScheduler {
       } catch {
         return {
           status: 'wait',
-          nextRetryAtMs: nowMs + this.computeBackoffMs(intent.attemptCount),
+          nextRetryAtMs: nowMs + this.computeRetryBackoffMs(intent),
           lastError: 'temporary_throttle_resume_failed',
           intent: {
             ...intent,
@@ -338,6 +450,10 @@ export class TemporaryThrottleRecoveryScheduler {
         };
       }
       if (resumeResult.status === 'superseded') {
+        if (intent.capacityFailureCount) {
+          return { status: 'terminal', lastError: resumeResult.reason,
+            intent: { ...intent, status: 'exhausted', nextRetryAtMs: null, lastError: null } };
+        }
         return { status: 'superseded', reason: resumeResult.reason };
       }
       if (resumeResult.status === 'terminal') {
@@ -356,7 +472,7 @@ export class TemporaryThrottleRecoveryScheduler {
         status: 'success',
         intent: {
           ...intent,
-          status: 'cancelled',
+          status: intent.continuation?.recoveryKind === 'capacity' ? 'awaiting_outcome' : 'cancelled',
           nextRetryAtMs: null,
           lastError: null,
         },
@@ -372,13 +488,17 @@ export class TemporaryThrottleRecoveryScheduler {
     const retryAfterMs = normalizeNonNegativeInteger(result.retryAfterMs);
     return {
       status: 'wait',
-      nextRetryAtMs: nowMs + (retryAfterMs ?? this.computeBackoffMs(intent.attemptCount)),
+      nextRetryAtMs: intent.continuation?.recoveryKind === 'capacity'
+        ? Math.max(nowMs + this.computeRetryBackoffMs(intent), nowMs + (retryAfterMs ?? 0), intent.resetAtMs ?? 0)
+        : nowMs + (retryAfterMs ?? this.computeBackoffMs(intent.attemptCount)),
       lastError: typeof result.lastError === 'string' && result.lastError.trim().length > 0
         ? result.lastError.trim()
         : null,
       intent: {
         ...intent,
-        retryAfterMs,
+        retryAfterMs: intent.continuation?.recoveryKind === 'capacity' && retryAfterMs !== null
+          ? nowMs - intent.armedAtMs + retryAfterMs
+          : retryAfterMs,
       },
     };
   }
@@ -387,14 +507,30 @@ export class TemporaryThrottleRecoveryScheduler {
     return this.wake({ sessionId: input.sessionId, reason: 'retry_now' });
   }
 
-  async stopRetrying(input: { sessionId: string }): Promise<{ status: string } | null> {
-    const intent = await this.scheduler.cancel({ sessionId: input.sessionId });
+  async stopRetrying(input: { sessionId: string; issueFingerprint?: string; armedAtMs?: number }): Promise<{ status: string } | null> {
+    const intent = await this.scheduler.cancel({ sessionId: input.sessionId,
+      ...(input.issueFingerprint !== undefined || input.armedAtMs !== undefined ? {
+        expectedCurrent: (current: TemporaryThrottleRecoveryIntent) => current.issueFingerprint === input.issueFingerprint && current.armedAtMs === input.armedAtMs,
+      } : {}),
+    });
     return intent ? { status: 'cancelled' } : null;
   }
 
   private computeBackoffMs(attemptCount: number): number {
     const exponential = this.baseBackoffMs * (2 ** attemptCount);
     return Math.min(this.maxBackoffMs, exponential) + Math.max(0, Math.trunc(this.deps.jitterMs?.() ?? 0));
+  }
+
+  private computeRetryBackoffMs(intent: TemporaryThrottleRecoveryIntent): number {
+    return intent.continuation?.recoveryKind === 'capacity'
+      ? this.computeCapacityBackoffMs(Math.max(intent.capacityFailureCount ?? 1, intent.attemptCount + 1))
+      : this.computeBackoffMs(intent.attemptCount);
+  }
+
+  private computeCapacityBackoffMs(failureCount: number): number {
+    const base = Math.min(300_000, 5_000 * (2 ** Math.min(6, Math.max(0, failureCount - 1))));
+    const random = Math.min(1, Math.max(0, (this.deps.random ?? Math.random)()));
+    return Math.round(base * (0.8 + random * 0.4));
   }
 
   private resolveInitialRetryAtMs(input: Readonly<{

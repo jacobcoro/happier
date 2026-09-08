@@ -10,6 +10,7 @@ export type ScmDiffPrefetchRequest = Readonly<{
 }>;
 
 export type ScmDiffPrefetchFetchFn = (input: Readonly<{
+    snapshotSignature: string;
     sessionId: string;
     diffArea: ScmDiffArea;
     path: string;
@@ -86,18 +87,8 @@ export class ScmDiffPrefetchScheduler {
 
     private async runOne(scope: PrefetchScopeState, path: string): Promise<void> {
         try {
-            const res = await this.deps.fetchDiff({ sessionId: scope.sessionId, diffArea: scope.diffArea, path });
-            if (res && res.success) {
-                this.deps.cache.set(
-                    {
-                        sessionId: scope.sessionId,
-                        snapshotSignature: scope.snapshotSignature,
-                        diffArea: scope.diffArea,
-                        path,
-                    },
-                    res.diff ?? '',
-                );
-            }
+            // Acquisition owns cache writes and invalidation; scheduling must not republish stale results.
+            await this.deps.fetchDiff({ snapshotSignature: scope.snapshotSignature, sessionId: scope.sessionId, diffArea: scope.diffArea, path });
         } finally {
             scope.inFlight.delete(path);
             this.pump(scope);

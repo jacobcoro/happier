@@ -14,33 +14,9 @@ import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFrom
 import { toTestIdSafeValue } from '../../src/testkit/uiE2e/testIdSafeValue';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
+import { collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
-
-function collectBrowserDiagnostics(params: Readonly<{ page: Page }>): () => string {
-  const pageConsole: string[] = [];
-  const pageErrors: string[] = [];
-  const requestFailures: string[] = [];
-  const responseErrors: string[] = [];
-
-  params.page.on('console', (msg) => pageConsole.push(`[${msg.type()}] ${msg.text()}`));
-  params.page.on('pageerror', (err) => pageErrors.push(String(err)));
-  params.page.on('requestfailed', (request) => {
-    const failure = request.failure();
-    requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
-  });
-  params.page.on('response', (response) => {
-    const status = response.status();
-    if (status >= 400) responseErrors.push(`${status} ${response.request().method()} ${response.url()}`);
-  });
-
-  return () =>
-    `# Browser diagnostics\n\n` +
-    `## Console\n\n${pageConsole.length ? pageConsole.join('\n') : '(none)'}\n\n` +
-    `## Page errors\n\n${pageErrors.length ? pageErrors.join('\n') : '(none)'}\n\n` +
-    `## Request failures\n\n${requestFailures.length ? requestFailures.join('\n') : '(none)'}\n\n` +
-    `## Response errors\n\n${responseErrors.length ? responseErrors.join('\n') : '(none)'}\n`;
-}
 
 function detailsPaneLocator(page: Page) {
   return page
@@ -199,8 +175,8 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
 
       const fileDetailsScroll = detailsPaneLocator(page).getByTestId('file-details-scroll');
       await expect(fileDetailsScroll).toHaveCount(1, { timeout: 120_000 });
-      await expect(detailsPaneLocator(page).getByTestId('file-details-stage-file')).toHaveCount(1, { timeout: 60_000 });
-      await detailsPaneLocator(page).getByTestId('file-details-stage-file').click();
+      await expect(detailsPaneLocator(page).getByTestId('file-details-select-lines')).toHaveCount(1, { timeout: 60_000 });
+      await detailsPaneLocator(page).getByTestId('file-details-select-lines').click();
 
       const firstHunkLine = detailsPaneLocator(page).getByText('ADDED_HUNK1_A', { exact: true }).first();
       await expect(firstHunkLine).toHaveCount(1, { timeout: 120_000 });

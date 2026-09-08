@@ -448,13 +448,15 @@ async function pumpPendingWhileActive(
     if (opts.abortSignal.aborted) wakeController.abort(opts.abortSignal.reason);
 
     let passDirty = false;
-    const armedWake = opts.waitForPendingEligibilityUpdate(wakeController.signal).then(
-      (updated) => {
-        if (updated) passDirty = true;
-        return updated;
-      },
-      () => false,
-    );
+    const armedWake = waitForWakeSignal({
+      waitForPendingEligibilityUpdate: opts.waitForPendingEligibilityUpdate,
+      controller: wakeController,
+      metadataWaitRetryBackoffMs: DEFAULT_SESSION_METADATA_WAIT_RETRY_BACKOFF_MS,
+    }).then((winner) => {
+      const updated = winner.kind === 'meta' ? winner.ok : winner.hasMessages;
+      if (updated) passDirty = true;
+      return updated;
+    });
 
     try {
       const result = await opts.drainPending({
@@ -468,11 +470,7 @@ async function pumpPendingWhileActive(
         || result.stoppedReason === 'auth_failure'
       ) return;
       if (passDirty) continue;
-      const didWake = await armedWake || (
-        !opts.abortSignal.aborted
-        && await opts.waitForPendingEligibilityUpdate(opts.abortSignal).catch(() => false)
-      );
-      if (!didWake) return;
+      if (!await armedWake) return;
     } finally {
       opts.abortSignal.removeEventListener('abort', onAbort);
       wakeController.abort('active-turn-pending-pass-complete');
@@ -841,13 +839,13 @@ function logTerminalAuthDrainStop(opts: DrainPendingOptions, status: 401 | 403 |
 }
 
 async function waitForWakeSignal<Mode, Message>(opts: {
-  messageQueue: MessageQueue2<Mode, Message>;
+  messageQueue?: MessageQueue2<Mode, Message>;
   waitForPendingEligibilityUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
   controller: AbortController;
   metadataWaitRetryBackoffMs: number;
 }): Promise<WakeWinner> {
   const queueWait = opts.messageQueue
-    .waitForMessagesSignal(opts.controller.signal)
+    ?.waitForMessagesSignal(opts.controller.signal)
     .then((hasMessages) => ({ kind: 'queue' as const, hasMessages }));
   try {
     while (true) {
@@ -855,19 +853,19 @@ async function waitForWakeSignal<Mode, Message>(opts: {
         return { kind: 'meta', ok: false };
       }
 
-      const metaWait = opts.waitForPendingEligibilityUpdate(opts.controller.signal)
-        .then(
-          (ok) => ({ kind: 'meta' as const, ok }),
-          () => ({ kind: 'meta' as const, ok: false }),
-        );
-
-      const winner = await Promise.race([queueWait, metaWait]);
+      const metaWait = opts.waitForPendingEligibilityUpdate(opts.controller.signal).then(
+        (ok) => ({ kind: 'meta' as const, ok }),
+        () => ({ kind: 'meta' as const, ok: false }),
+      );
+      const winner = await Promise.race([...(queueWait ? [queueWait] : []), metaWait]);
       if (winner.kind !== 'meta' || winner.ok || opts.controller.signal.aborted) {
         return winner;
       }
 
+      // Offline/deferred adapters may have no live wake source yet. Retry attaching to that
+      // source without polling the queue; real client waits survive transient disconnects.
       const queueIdleOrBackoffWinner = await Promise.race([
-        queueWait,
+        ...(queueWait ? [queueWait] : []),
         waitForSessionMetadataRetryBackoff({
           abortSignal: opts.controller.signal,
           backoffMs: opts.metadataWaitRetryBackoffMs,

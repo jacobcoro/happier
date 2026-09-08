@@ -70,6 +70,46 @@ const ENTRY_COVER_RELEASING_EFFECT_TYPES: readonly EntryRestoreOwnerEffect['type
 ];
 
 describe('entry restore owner', () => {
+    it.each([
+        { name: 'empty', items: [], contentHeight: 0 },
+        { name: 'short', items: [{ id: 'tail' }], contentHeight: 200 },
+    ])('keeps a settled $name entry materializing until its saved target arrives or history is exhausted', ({ items, contentHeight }) => {
+        const owner = createEntryRestoreOwner();
+        const pending = {
+            ...baseAttempt,
+            platform: 'web' as const,
+            items,
+            contentHeight,
+            exactAnchorIndex: null,
+            canMaterializeOlder: true,
+            restoredViewport: { ...baseAttempt.restoredViewport, anchor: { ...anchor, seq: 20 } },
+        };
+        expect(owner.attempt(pending)).toContainEqual({ type: 'request-bounded-materialization', targetSeq: 20 });
+        // The host keeps availability true while its one lookup is in flight.
+        expect(effectTypes(owner.attempt(pending))).not.toContain('close-entry-ownership');
+        expect(executeEffects(owner.attempt({ ...pending, items: baseAttempt.items, contentHeight: 2400, exactAnchorIndex: 2 })))
+            .toHaveLength(1);
+
+        const exhaustedOwner = createEntryRestoreOwner();
+        exhaustedOwner.attempt(pending);
+        expect(effectTypes(exhaustedOwner.attempt({ ...pending, canMaterializeOlder: false })))
+            .toContain('close-entry-ownership');
+    });
+
+    it('materializes a settled short distance-only entry without inventing an anchor target', () => {
+        const owner = createEntryRestoreOwner();
+        const pending = {
+            ...baseAttempt,
+            platform: 'web' as const,
+            contentHeight: 200,
+            canMaterializeOlder: true,
+            restoredViewport: { ...baseAttempt.restoredViewport, anchor: null },
+        };
+        expect(owner.attempt(pending)).toContainEqual({ type: 'request-bounded-materialization', targetSeq: null });
+        expect(effectTypes(owner.attempt({ ...pending, userScrollObserved: true }))).toContain('close-entry-ownership');
+        expect(owner.attempt({ ...pending, contentHeight: 2400 })).toEqual([]);
+    });
+
     it('attempt anchored native entry opens the transaction and returns one semantic restore-anchor command', () => {
         const owner = createEntryRestoreOwner();
 
@@ -342,6 +382,45 @@ describe('entry restore owner', () => {
             targetSeq: 20,
             type: 'request-bounded-materialization',
         });
+    });
+
+    it('materializes a loaded anchor outside the projection only while entry restoration owns positioning', () => {
+        const owner = createEntryRestoreOwner();
+        const outsideProjectionAttempt = {
+            ...baseAttempt,
+            platform: 'web' as const,
+            anchorOutsideProjectionSeq: 20,
+            canMaterializeOlder: true,
+            exactAnchorCommandIndex: null,
+        };
+
+        const openingEffects = owner.attempt(outsideProjectionAttempt);
+        expect(openingEffects).toContainEqual({ type: 'request-bounded-materialization', targetSeq: 20 });
+        expect(executeEffects(openingEffects)).toEqual([]);
+
+        // Materialization made A renderable; complete its normal entry transaction.
+        owner.attempt({ ...baseAttempt, platform: 'web' });
+        owner.observeWeb({
+            contentHeight: 2400,
+            layoutHeight: 600,
+            nowMs: 1100,
+            observation: { status: 'aligned' },
+            sessionId: 'session-a',
+        });
+        expect(owner.telemetryState('session-a')).toBe('closed');
+
+        // A subsequent navigation window excludes A again, but must not reopen it.
+        expect(owner.attempt(outsideProjectionAttempt)).toEqual([]);
+
+        owner.resetForSession({ sessionId: 'session-a' });
+        expect(owner.attempt({ ...outsideProjectionAttempt, userScrollObserved: true }))
+            .toEqual([{ type: 'close-entry-ownership', outcome: 'preempted' }]);
+        expect(owner.attempt(outsideProjectionAttempt)).toEqual([]);
+
+        owner.resetForSession({ sessionId: 'session-a' });
+        expect(owner.attempt({ ...outsideProjectionAttempt, jumpToSeqActive: true }))
+            .toEqual([{ type: 'close-entry-ownership', outcome: 'preempted' }]);
+        expect(owner.attempt(outsideProjectionAttempt)).toEqual([]);
     });
 
     it('keeps distance-only growth targetless even when bounded materialization is available', () => {

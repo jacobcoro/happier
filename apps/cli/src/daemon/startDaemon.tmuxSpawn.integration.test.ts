@@ -51,11 +51,11 @@ describe('daemon tmux spawn config', () => {
     vi.clearAllMocks();
   });
 
-  it('uses merged env and bun runtime when configured', () => {
+  it('uses merged env and bun runtime when configured', async () => {
     process.env.HAPPIER_CLI_SUBPROCESS_RUNTIME = 'bun';
     process.env.PATH = '/bin';
 
-    const cfg = buildTmuxSpawnConfig({
+    const cfg = await buildTmuxSpawnConfig({
       agent: 'claude',
       directory: '/tmp',
       extraEnv: {
@@ -67,16 +67,16 @@ describe('daemon tmux spawn config', () => {
       extraArgs: ['--happy-terminal-mode', 'tmux'],
     });
 
-    expect(cfg.commandTokens[0]).toBe('bun');
+    expect(cfg.commandTokens).toContain('bun');
     expect(cfg.tmuxEnv.PATH).toBe('/bin');
     expect(cfg.tmuxEnv.FOO).toBe('bar');
     expect(cfg.tmuxCommandEnv.TMUX_TMPDIR).toBe('/custom/tmux');
     expect(cfg.commandTokens).toEqual(expect.arrayContaining(['--happy-terminal-mode', 'tmux']));
   });
 
-  it('uses the admitted immutable runner decision for the tmux child command', () => {
+  it('uses the admitted immutable runner decision for the tmux child command', async () => {
     const immutableEntrypoint = '/runtime/.runner-snapshots/0123456789abcdef/index.mjs';
-    const cfg = buildTmuxSpawnConfig({
+    const cfg = await buildTmuxSpawnConfig({
       agent: 'claude',
       directory: '/tmp',
       extraEnv: {},

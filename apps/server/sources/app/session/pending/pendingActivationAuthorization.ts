@@ -3,6 +3,14 @@ import type { Tx } from '@/storage/inTx';
 
 type ActivationTarget = Readonly<{ accountId: string; requestId: string }>;
 
+export function shouldArmPendingActivationAuthorization(params: Readonly<{
+    requestedAction: { kind: string };
+    resumeWhenAvailable?: boolean;
+}>): boolean {
+    return params.resumeWhenAvailable === true
+        || (params.resumeWhenAvailable !== false && params.requestedAction.kind === 'send_now');
+}
+
 const AUTHORIZATION_SELECT = {
     accountId: true,
     lastActiveAt: true,
@@ -44,6 +52,7 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
     sessionId: string;
     requestId: string;
     now?: Date;
+    resumeWhenAvailable?: true;
 }>): Promise<ActivationTarget | undefined> {
     const now = params.now ?? new Date();
     const eligible = await params.tx.sessionPendingMessage.findUnique({
@@ -64,7 +73,10 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
         || eligible.deliveryState !== null
         || eligible.providerAction !== null
         || !requestedAction.success
-        || requestedAction.data.kind !== 'send_now'
+        || !shouldArmPendingActivationAuthorization({
+            requestedAction: requestedAction.data,
+            resumeWhenAvailable: params.resumeWhenAvailable,
+        })
     ) return undefined;
 
     const session = await params.tx.session.findUniqueOrThrow({

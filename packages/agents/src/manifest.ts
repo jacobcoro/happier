@@ -80,6 +80,7 @@ export const AGENTS_CORE = {
         cloudConnect: { vendorKey: 'openai', status: 'wired' },
         connectedServices: {
             supportedServiceIds: ['openai-codex', 'openai'],
+            quotaResetServiceIds: ['openai-codex'],
             sessionAuthSwitch: {
                 continuityMode: 'restart_shared_state_required',
                 supportedTransitions: ['same_connected_group'],

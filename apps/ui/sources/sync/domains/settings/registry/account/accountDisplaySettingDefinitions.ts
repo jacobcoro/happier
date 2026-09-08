@@ -107,6 +107,13 @@ export const ACCOUNT_DISPLAY_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     },
+    executionRunsNotifyParentOnCompletionDefault: {
+        schema: z.boolean(),
+        default: false,
+        description: 'Notify the parent agent with a structured completion event when an execution run finishes',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
     executionRunsGuidanceMaxChars: {
         schema: z.number(),
         default: 4_000,

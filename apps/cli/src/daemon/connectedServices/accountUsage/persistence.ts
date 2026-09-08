@@ -2,7 +2,8 @@ import {
   ConnectedServiceUsageSourceV1Schema,
   ProviderAccountUsageRecordIdSchema,
   ProviderAccountUsageSnapshotV1Schema,
-  sealProviderAccountUsageSnapshotCiphertext,
+  sealProviderAccountUsageSnapshot,
+  splitProviderAccountUsageSubscription,
   type ConnectedServiceUsageSourceV1,
   type ProviderAccountUsageRecordId,
   type ProviderAccountUsageSnapshotV1,
@@ -171,6 +172,7 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
   serverScope?: string;
   accountScope?: string;
   minFreshnessMs?: number;
+  isSubscriptionEnabled?: () => boolean;
 }>): ProviderAccountUsagePersistenceScheduler {
   const fingerprintKey = resolveFingerprintKey(params);
   const minFreshnessMs = normalizeNonNegativeInteger(
@@ -214,16 +216,16 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
     const material = params.credentials.encryption.type === 'legacy'
       ? { type: 'legacy' as const, secret: params.credentials.encryption.secret }
       : { type: 'dataKey' as const, machineKey: params.credentials.encryption.machineKey };
-    const ciphertext = sealProviderAccountUsageSnapshotCiphertext({
+    const sealed = sealProviderAccountUsageSnapshot({
       material,
-      payload: payload.snapshot,
+      snapshot: payload.snapshot,
       randomBytes: params.randomBytes,
     });
     await params.api.registerProviderAccountUsageSnapshotSealed({
       recordId: payload.recordId,
       recordKey: payload.snapshot.recordKey,
       ...(payload.source ? { source: payload.source } : {}),
-      sealed: { format: 'account_scoped_v1', ciphertext },
+      sealed,
       metadata,
     });
     stateByPersistenceKey.set(_key, payload.materialState);
@@ -242,7 +244,10 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
 
   return {
     recordInBandSnapshot: async (inputSnapshot, options) => {
-      const snapshot = ProviderAccountUsageSnapshotV1Schema.parse(inputSnapshot);
+      const parsedSnapshot = ProviderAccountUsageSnapshotV1Schema.parse(inputSnapshot);
+      const snapshot = params.isSubscriptionEnabled?.() === true
+        ? parsedSnapshot
+        : splitProviderAccountUsageSubscription(parsedSnapshot).snapshot;
       const status = deriveProviderAccountUsageStatus(snapshot);
       const materialFingerprint = computeProviderAccountUsageSnapshotFingerprint(snapshot, fingerprintKey);
       const materialState: ProviderAccountUsagePersistenceMaterialState = {

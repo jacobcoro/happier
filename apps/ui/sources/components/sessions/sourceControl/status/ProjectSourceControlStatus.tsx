@@ -77,7 +77,7 @@ export function ProjectSourceControlStatus({ sessionId }: ProjectSourceControlSt
         return null;
     }
 
-    const hasLineChanges = scmStatusSummary.hasLineChanges;
+    const hasLineChanges = scmStatusSummary.isComplete !== false && scmStatusSummary.hasLineChanges;
     const changedFilesLabel = t('files.sourceControlStatus.changedFilesLabel', { count: scmStatusSummary.changedFiles });
 
     return (

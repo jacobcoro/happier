@@ -1,6 +1,9 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { I18nManager, Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+
+import { FocusRing, WEB_FOCUS_OUTLINE_RESET } from '@/components/ui/interaction/FocusRing';
+import { useIsKeyboardModality } from '@/components/ui/interaction/inputModalityStore';
 
 import { shadowLevelStyle } from '@/shadowElevation';
 import { Text } from '@/components/ui/text/Text';
@@ -109,6 +112,22 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const compact = props.compact;
+    const keyboardModality = useIsKeyboardModality();
+    const [focusedTabId, setFocusedTabId] = React.useState<T | null>(null);
+    const tabRefs = React.useRef(new Map<T, React.ElementRef<typeof Pressable>>());
+    const handleTabKeyDown = (index: number, event: React.KeyboardEvent) => {
+        const direction = event.key === 'ArrowRight' ? (I18nManager.isRTL ? -1 : 1)
+            : event.key === 'ArrowLeft' ? (I18nManager.isRTL ? 1 : -1) : 0;
+        const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? props.tabs.length - 1
+            : direction !== 0 ? (index + direction + props.tabs.length) % props.tabs.length
+                : event.key === ' ' || event.key === 'Spacebar' ? index : null;
+        if (nextIndex === null) return;
+        const nextTab = props.tabs[nextIndex];
+        if (!nextTab) return;
+        event.preventDefault();
+        props.onSelectTab(nextTab.id);
+        if (nextIndex !== index) tabRefs.current.get(nextTab.id)?.focus();
+    };
     // Icons replace labels only when the whole bar is iconic; a half-iconic row reads as broken.
     const iconOnly = props.tabs.length > 0 && props.tabs.every((tab) => tab.icon != null);
 
@@ -118,7 +137,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                 style={[styles.inner, compact ? styles.innerCompact : null]}
                 accessibilityRole="tablist"
             >
-                {props.tabs.map((tab) => {
+                {props.tabs.map((tab, tabIndex) => {
                     const active = props.activeTabId === tab.id;
                     const badgeCount = tab.badgeCount ?? 0;
                     const accessibleName = tab.accessibilityLabel ?? tab.label;
@@ -130,9 +149,19 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                     return (
                         <Pressable
                             key={tab.id}
+                            ref={(node) => {
+                                if (node) tabRefs.current.set(tab.id, node);
+                                else tabRefs.current.delete(tab.id);
+                            }}
+                            {...(Platform.OS === 'web' ? {
+                                tabIndex: active ? 0 : -1,
+                                onKeyDown: (event: React.KeyboardEvent) => handleTabKeyDown(tabIndex, event),
+                                onFocus: () => setFocusedTabId(tab.id),
+                                onBlur: () => setFocusedTabId((current) => current === tab.id ? null : current),
+                            } : {})}
                             testID={props.testIDPrefix ? `${props.testIDPrefix}:${tab.id}` : undefined}
                             onPress={() => props.onSelectTab(tab.id)}
-                            style={[styles.tab, compact ? styles.tabCompact : null, active ? styles.tabActive : null]}
+                            style={[styles.tab, compact ? styles.tabCompact : null, active ? styles.tabActive : null, Platform.OS === 'web' ? WEB_FOCUS_OUTLINE_RESET : null]}
                             accessibilityRole="tab"
                             accessibilityState={{ selected: active }}
                             aria-selected={active}
@@ -160,6 +189,13 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                                     />
                                 </View>
                             ) : content}
+                            {Platform.OS === 'web' && (keyboardModality || focusedTabId === tab.id) ? (
+                                <FocusRing
+                                    testID={props.testIDPrefix ? `${props.testIDPrefix}:${tab.id}:focus-ring` : undefined}
+                                    visible={keyboardModality && focusedTabId === tab.id}
+                                    radius={compact ? 5 : 7}
+                                />
+                            ) : null}
                         </Pressable>
                     );
                 })}

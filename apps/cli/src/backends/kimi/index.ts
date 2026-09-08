@@ -17,18 +17,18 @@ export const agent = {
     return (opts) => ({ backend: createKimiBackend(opts as any) });
   },
   needsAccountSettingsForProbes: true,
-  resolveModelsProbeVariant: ({ accountSettings }) => {
+  resolveModelsProbeVariant: ({ accountSettings, processEnv }) => {
     const selector =
-      normalizeKimiAcpPythonSelector(process.env.HAPPIER_KIMI_ACP_SELECTOR)
+      normalizeKimiAcpPythonSelector(processEnv?.HAPPIER_KIMI_ACP_SELECTOR)
       ?? normalizeKimiAcpPythonSelector(accountSettings?.kimiAcpPythonSelector)
       ?? 'auto';
     return `kimi:python-selector:${selector}`;
   },
-  resolveModelsProbeBackendOptions: ({ accountSettings }) => {
+  resolveModelsProbeBackendOptions: ({ accountSettings, processEnv }) => {
     const extras = resolveProviderSpawnExtrasForRuntime({
       agentId: 'kimi',
       settings: accountSettings ?? {},
-      processEnv: process.env,
+      processEnv: processEnv ?? process.env,
     });
     return extras.kimiAcpPythonSelector === 'auto' || extras.kimiAcpPythonSelector === 'poll'
       ? { kimiAcpPythonSelector: extras.kimiAcpPythonSelector }

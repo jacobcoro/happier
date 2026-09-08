@@ -109,6 +109,8 @@ export const UI_FEATURE_REGISTRY = {
     'connectedServices.accountGroups': {
         settingsToggle: undefined,
     },
+    'connectedServices.subscription': { settingsToggle: undefined },
+    'connectedServices.autoQuotaReset': { settingsToggle: undefined },
     'connectedServices.accountFallback': {
         settingsToggle: undefined,
     },

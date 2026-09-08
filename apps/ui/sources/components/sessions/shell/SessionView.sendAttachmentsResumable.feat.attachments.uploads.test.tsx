@@ -680,7 +680,7 @@ const { getInactiveSessionUiState } = await import('@/components/sessions/model/
 const { SessionView } = await import('./SessionView');
 
 describe('SessionView (attachments.uploads resumable send)', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         sessionState.session.active = true;
         sessionState.session.presence = 'online';
         sessionMachineTargetState.available = false;
@@ -707,7 +707,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
         sessionTranscriptIdsState.current = [];
         draftHookState.valuesBySessionId.clear();
         clearSessionAttachmentDrafts('s1');
-        void deleteSessionDraft({ scope: TEST_SERVER_ACCOUNT_SCOPE, address: TEST_SESSION_DRAFT_ADDRESS });
+        await deleteSessionDraft({ scope: TEST_SERVER_ACCOUNT_SCOPE, address: TEST_SESSION_DRAFT_ADDRESS });
     });
 
     it('restores unsent attachment drafts when the session input remounts', async () => {
@@ -1141,6 +1141,11 @@ describe('SessionView (attachments.uploads resumable send)', () => {
             'routing.executionRunDelivery',
             'interrupt',
         );
+        expect(existingSessionDraftSemanticValues.read(
+            TEST_SERVER_ACCOUNT_SCOPE,
+            's1',
+            'routing.executionRunDelivery',
+        )).toBe('interrupt');
 
         let tree: renderer.ReactTestRenderer | undefined;
         try {
@@ -1326,6 +1331,11 @@ describe('SessionView (attachments.uploads resumable send)', () => {
             'routing.executionRunDelivery',
             'interrupt',
         );
+        expect(existingSessionDraftSemanticValues.read(
+            TEST_SERVER_ACCOUNT_SCOPE,
+            's1',
+            'routing.executionRunDelivery',
+        )).toBe('interrupt');
 
         let tree: renderer.ReactTestRenderer | undefined;
         try {

@@ -51,9 +51,33 @@ const formatter: ConnectedServiceQuotaGaugeLabelFormatter = {
     durationHoursMinutes: ({ hours, minutes }) => `${hours}h ${minutes}m`,
     durationHours: ({ hours }) => `${hours}h`,
     durationMinutes: ({ minutes }) => `${minutes}m`,
+    subscriptionEnds: ({ date }) => `Ends ${date}`,
+    subscriptionEndsInDays: ({ days }) => `Ends in ${days} day${days === 1 ? '' : 's'}`,
+    subscriptionRenews: ({ date }) => `Renews ${date}`,
+    subscriptionRenewsInDays: ({ days }) => `Renews in ${days} day${days === 1 ? '' : 's'}`,
 };
 
 describe('computeConnectedServiceQuotaGaugeViewModel', () => {
+    it('retains subscription lifecycle independently of fresh quota meters', () => {
+        const subscription = {
+            status: 'subscribed' as const,
+            renewal: 'off' as const,
+            observedAtMs: 1_000,
+            staleAfterMs: 500,
+            currentPeriodStartAtMs: 500,
+            currentPeriodEndAtMs: 50_000,
+        };
+        const viewModel = computeConnectedServiceQuotaGaugeViewModel({
+            snapshot: { ...snapshot([meter({ meterId: 'daily', label: 'Daily', used: 30, limit: 100 })]), subscription },
+            windowMode: 'most_constrained',
+            nowMs: 2_000,
+            formatter,
+        });
+        expect(viewModel?.isStale).toBe(false);
+        expect(viewModel?.subscription).toMatchObject({ renewal: 'off', isLastKnown: false });
+        expect(viewModel?.subscription?.summary).toBe('Ends in 1 day');
+    });
+
     it('selects the reliable meter with the least remaining quota for most_constrained mode', () => {
         const capacityDetails: ConnectedServiceQuotaMeterV1['details'] & { limitCategory: 'capacity' } = {
             limitCategory: 'capacity',

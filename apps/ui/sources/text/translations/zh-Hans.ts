@@ -1787,6 +1787,7 @@ export const zhHans: TranslationStructure = {
         title: "Happier 运行指令",
         subtitle: "关闭后，编码代理的系统提示词中将移除原生优先路由说明和 Happier 运行机制。",
       },
+      notifyParentOnCompletion: { title: '运行完成时通知父代理', subtitle: '向父代理发送结构化的完成事件。' },
       characterBudget: {
         title: "自定义规则字符上限",
         subtitle: ({ value }: { value: string }) => `${value} 个字符`,
@@ -2400,6 +2401,28 @@ export const zhHans: TranslationStructure = {
   },
 
   connectedServices: {
+      subscription: {
+          title: "订阅",
+          currentPeriod: "当前周期",
+          renewal: "续订",
+          renewalOn: "开启",
+          renewalOff: "关闭",
+          renewalUnknown: "未知",
+          renews: ({ date }: { date: string }) => `${date}续订`,
+          ends: ({ date }: { date: string }) => `${date}结束`,
+          renewsInDays: ({ days }: { days: number }) => `${days}天后续订`,
+          endsInDays: ({ days }: { days: number }) => `${days}天后结束`,
+          periodEnds: ({ date }: { date: string }) => `当前周期于${date}结束`,
+          period: ({ start, end }: { start: string; end: string }) => `${start} – ${end}`,
+          periodStarted: ({ date }: { date: string }) => `${date}开始`,
+          accessUntil: ({ date }: { date: string }) => `访问权限保留至${date}`,
+          checked: ({ time }: { time: string }) => `检查时间：${time}`,
+          lastKnown: ({ summary }: { summary: string }) => `上次已知信息：${summary}`,
+          unavailable: "订阅详情不可用",
+          refreshFailed: "无法刷新订阅详情。正在显示上次获取的信息。",
+          outdated: "订阅详情可能已过期。",
+          none: "无订阅",
+      },
     fallbackName: "已连接服务",
     serviceNames: {
       claudeSubscription: "Claude 订阅",
@@ -2909,6 +2932,8 @@ export const zhHans: TranslationStructure = {
         membersSubtitle: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} 已启用`,
         optionsTitle: "选项",
         autoSwitchTitle: "自动回退",
+        autoQuotaResetTitle: "自动使用配额重置",
+        autoQuotaResetSubtitle: "仅当池中没有可用账户且耗尽的配额可以重置时，才消耗已保存的重置次数。默认关闭。",
         autoSwitchEnabledSubtitle: "当当前账号需要恢复时切换到另一个成员。",
         autoSwitchDisabledSubtitle: "继续使用当前成员，直到你手动切换。",
         strategyTitle: "选择策略",
@@ -3436,6 +3461,8 @@ export const zhHans: TranslationStructure = {
       readySubtitle: "当一轮完成时显示本地通知",
       readyPreviewTitle: "就绪消息预览",
       readyPreviewSubtitle: "在此设备的就绪通知中包含最新助手消息",
+      requestPreviewTitle: "请求预览",
+      requestPreviewSubtitle: "包含需要授权的命令、问题和回答选项。这些内容可能会显示在锁屏上。",
       permissionRequestsTitle: "权限请求",
       permissionRequestsSubtitle: "当会话需要批准时显示本地通知",
       userActionsTitle: "操作请求",
@@ -3578,6 +3605,8 @@ export const zhHans: TranslationStructure = {
       readySubtitle: "当一轮完成且代理正在等待你的命令时发送",
       readyPreviewTitle: "就绪消息预览",
       readyPreviewSubtitle: "在此 webhook 的就绪通知中包含最新助手消息文本",
+      requestPreviewTitle: "请求预览",
+      requestPreviewSubtitle: "在此 webhook 的数据中包含需要授权的命令、问题和回答选项。",
       permissionRequestsTitle: "权限请求",
       permissionRequestsSubtitle: "当会话因等待批准而被阻塞时发送",
       userActionsTitle: "操作请求",
@@ -3605,6 +3634,10 @@ export const zhHans: TranslationStructure = {
         title: "就绪消息预览",
         subtitle: "在“就绪”轮次的推送通知中包含最新助手消息文本",
       },
+      requestPreview: {
+          title: "请求预览",
+          subtitle: "包含需要授权的命令、问题和回答选项。这些内容可能会显示在锁屏上。",
+      },
       permissionRequests: {
         title: "权限请求",
         subtitle: "当会话因等待批准而被阻塞时通知",
@@ -3627,6 +3660,15 @@ export const zhHans: TranslationStructure = {
       readyFallbackBody: "本轮已结束。打开会话继续。",
       permissionFallbackBody: "需要批准。",
       userActionFallbackBody: "此会话需要你的输入。",
+      requestLabels: {
+          command: "命令",
+          file: "文件",
+          selectOne: "单选",
+          selectMultiple: "多选",
+          customAnswer: "允许自定义回答",
+          localMessages: "本地消息",
+          remoteMessages: "远程消息",
+      },
     },
     channels: {
       default: '默认',
@@ -4875,6 +4917,16 @@ export const zhHans: TranslationStructure = {
       railScrollDownA11y: "向下滚动导航",
     },
     usageLimitRecovery: {
+        overloadTitle: "模型过载",
+        overloadWaiting: "等待重试。",
+        overloadDispatching: "正在重试。",
+        overloadAwaiting: "正在等待模型响应。",
+        overloadStopped: "自动重试已停止。准备好后可重试。",
+        overloadExhausted: "自动重试次数已用尽。准备好后可重试。",
+        overloadOffline: "请重新连接会话所在机器以查看重试状态。",
+        stopRetrying: "停止重试",
+        overloadCountdown: ({ seconds, attempt }: { seconds: number; attempt: number }) => `模型过载 — ${seconds}秒后重试 · 第${attempt}次`,
+        overloadAttempt: ({ attempt }: { attempt: number }) => `第${attempt}次`,
       title: "已达到使用限制",
       readyTitle: "使用限制已重置",
       resetBody: ({ time }: { time: string }) =>
@@ -6746,6 +6798,8 @@ export const zhHans: TranslationStructure = {
   },
 
   files: {
+            revealInFiles: "在文件中显示",
+            openChanges: "打开更改",
     searchPlaceholder: "搜索文件...",
     clearSearchA11y: "清除搜索",
     createFileA11y: "创建文件",
@@ -6989,6 +7043,10 @@ export const zhHans: TranslationStructure = {
       noFilesInProject: "项目中没有文件",
       repositoryFolderLoadFailed: "无法加载文件夹",
       repositoryCollapseAll: "全部折叠",
+    commitCreated: "提交已创建",
+    commitRefreshFailed: ({ sha }: { sha: string }) => `提交 ${sha} 已创建，但仓库刷新失败。请重试刷新以更新版本控制状态。`,
+    refreshingRepository: "正在刷新仓库状态…",
+    retryRefresh: "重试刷新",
     sourceControlOperationsLog: {
       title: "最近的版本控制操作",
       allSessions: "所有会话",
@@ -7004,8 +7062,11 @@ export const zhHans: TranslationStructure = {
       reviewNoMatches: "无匹配项",
       reviewLargeDiffOneAtATime: "检测到较大的 diff；将随滚动加载差异内容。",
       reviewDiffRequestFailed: "无法加载 diff",
+      reviewPreviousHunk: "上一个差异块",
+      reviewNextHunk: "下一个差异块",
       reviewUnableToLoadDiff: "无法加载 diff",
       tryDifferentTerm: "尝试不同的搜索词",
+      previousSearchResults: "上一次搜索的结果",
       searchResults: ({ count }: { count: number }) => `搜索结果 (${count})`,
       projectRoot: "项目根目录",
     stagedChanges: ({ count }: { count: number }) => `已暂存的更改 (${count})`,
@@ -7026,7 +7087,9 @@ export const zhHans: TranslationStructure = {
         "你编辑时，此文件已在磁盘上更改。草稿已保持不变；保存前请查看最新文件。",
       selectionFailed: "更新选择失败",
       openReviewCommentsFailed: "打开审阅评论失败",
-        reviewComments: {
+        reviewPreviousFile: "上一个文件",
+                  reviewNextFile: "下一个文件",
+                  reviewComments: {
           title: ({ count }: { count: number }) => `审阅评论（${count}）`,
           placeholder: "添加审查评论…",
           jump: "跳转",
@@ -7036,6 +7099,7 @@ export const zhHans: TranslationStructure = {
           modalSubtitle: "查看哪些评论会随下一条消息发送。",
           modalSummary: ({ included, count }: { included: number; count: number }) =>
             `已为下一次提示选择 ${included}/${count} 条`,
+          goToComposer: '前往消息输入框',
           detachOrDiscardTitle: "移除审阅评论？",
           detachOrDiscardBody:
             "分离会保留评论，但不随下一次提示发送。丢弃会删除这些评论。",
@@ -7102,6 +7166,8 @@ export const zhHans: TranslationStructure = {
       combined: "合并",
     },
     fileActions: {
+      selectEntireFileForCommit: '选择整个文件进行提交',
+      selectLines: '选择行',
       selectForCommit: "选择用于提交",
       selectFilesToCommit: "选择要提交的文件",
       stageFile: "暂存文件",
@@ -7118,6 +7184,9 @@ export const zhHans: TranslationStructure = {
     },
 	    toolbar: {
 	      changedFiles: "更改的文件",
+	      projectFiles: "项目",
+	      allFiles: "所有文件",
+	      projectFilesUnavailable: "此处无法使用项目筛选。正在显示所有文件。",
 	      hiddenFiles: "显示隐藏文件",
 	      details: "详情",
 	      upload: "上传",

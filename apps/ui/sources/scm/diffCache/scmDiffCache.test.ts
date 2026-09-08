@@ -14,6 +14,35 @@ function key(input: { sessionId?: string; sig?: string; area?: ScmDiffArea; path
 }
 
 describe('ScmDiffCache', () => {
+    it('shares equivalent concurrent loads and cached results, with freshness and scope isolation', async () => {
+        const cache = new ScmDiffCache({ maxEntries: 10, maxTotalBytes: 10_000, now: () => 1 });
+        let finish!: (value: { success: true; diff: string }) => void;
+        let loads = 0;
+        const load = () => { loads++; return new Promise<{ success: true; diff: string }>((resolve) => { finish = resolve; }); };
+        const first = cache.getOrLoad(key({ path: 'a.ts' }), load);
+        const second = cache.getOrLoad(key({ path: 'a.ts' }), load);
+        expect(loads).toBe(1);
+        finish({ success: true, diff: 'first' });
+        expect(await first).toEqual(await second);
+        expect(await cache.getOrLoad(key({ path: 'a.ts' }), load)).toEqual({ success: true, diff: 'first' });
+        expect(loads).toBe(1);
+        for (const next of [key({ path: 'a.ts', sig: 'sig2' }), key({ path: 'a.ts', sessionId: 's2' }), key({ path: 'a.ts', area: 'included' })]) {
+            expect(await cache.getOrLoad(next, async () => ({ success: true, diff: 'fresh' }))).toEqual({ success: true, diff: 'fresh' });
+        }
+    });
+
+    it('does not resurrect an invalidated pending diff or retain failures', async () => {
+        const cache = new ScmDiffCache({ maxEntries: 10, maxTotalBytes: 10_000, now: () => 1 });
+        let finish!: (value: { success: true; diff: string }) => void;
+        const pending = cache.getOrLoad(key({ path: 'a.ts' }), () => new Promise((resolve) => { finish = resolve; }));
+        cache.invalidatePaths({ sessionId: 's1', paths: new Set(['a.ts']) });
+        finish({ success: true, diff: 'stale' });
+        await pending;
+        expect(cache.get(key({ path: 'a.ts' }))).toBeNull();
+        await expect(cache.getOrLoad(key({ path: 'a.ts' }), async () => { throw new Error('offline'); })).rejects.toThrow('offline');
+        expect(await cache.getOrLoad(key({ path: 'a.ts' }), async () => ({ success: true, diff: 'recovered' }))).toEqual({ success: true, diff: 'recovered' });
+    });
+
     it('stores and retrieves diffs by session/signature/area/path', () => {
         const cache = new ScmDiffCache({ maxEntries: 10, maxTotalBytes: 10_000, now: () => 1_000 });
         cache.set(key({ path: 'a.ts' }), 'diff-a');

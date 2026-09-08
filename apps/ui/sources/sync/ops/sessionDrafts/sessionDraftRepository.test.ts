@@ -92,6 +92,170 @@ function uuid(value: number): string {
 }
 
 describe('sessionDraftRepository', () => {
+    it('retains opaque envelope fields and the predecessor entry pointer when editing a hydrated scope', () => {
+        const storage = createMemoryStorage();
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'before' } });
+        repository.writeNewSessionDraft({ scope, draftId: uuid(991), patch: { text: 'ordinary entry' }, materializationIntent: 'userEdit' });
+        const key = [...storage.values.keys()][0]!;
+        storage.set(key, JSON.stringify({
+            ...JSON.parse(storage.values.get(key)!),
+            ordinaryEntryDraftId: uuid(991),
+            futureEnvelopeField: { preserved: ['opaque', 42] },
+        }));
+        const restored = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        restored.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'after' } });
+        expect(JSON.parse(storage.values.get(key)!)).toMatchObject({
+            ordinaryEntryDraftId: uuid(991),
+            futureEnvelopeField: { preserved: ['opaque', 42] },
+        });
+    });
+
+    it.each([false, true])('exposes automatic persistence failures and clears the error after retry (sync=%s)', async (syncEnabled) => {
+        const memory = createMemoryStorage();
+        let fail = true;
+        const storage = { ...memory, flush: async () => { if (fail) throw new Error('disk unavailable'); } };
+        const remote = createRemote();
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), transport: remote.transport, syncEnabled });
+        const notifications: string[] = [];
+        repository.subscribeSessionDraft(scope, sessionAddress, () => {
+            notifications.push(repository.getSessionDraftSnapshot(scope, sessionAddress)?.status ?? 'absent');
+        });
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'preserve across failed autosave' } });
+        await vi.waitFor(() => expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.status).toBe('error'));
+        expect(repository.getExistingSessionDraftProjection(scope, 'session-a')?.status).toBe('error');
+        expect(notifications).toContain('error');
+        expect(remote.transport.mutate).not.toHaveBeenCalled();
+        await expect(repository.flushSessionDraft({ scope, address: sessionAddress })).rejects.toThrow('disk unavailable');
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('preserve across failed autosave');
+        fail = false;
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'retry this edit' } });
+        await vi.waitFor(() => expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.status).toBe(syncEnabled ? 'pending' : 'clean'));
+        expect(repository.getExistingSessionDraftProjection(scope, 'session-a')?.status).toBe(syncEnabled ? 'pending' : 'clean');
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('retry this edit');
+    });
+    it('does not reserialize unrelated large replicas when one draft changes', () => {
+        const storage = createMemoryStorage();
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        const coldText = 'unchanged large document'.repeat(10_000);
+        repository.writeExistingSessionDraft({ scope, sessionId: 'cold', patch: { text: coldText } });
+        const stringify = JSON.stringify;
+        const serializedSizes: number[] = [];
+        const observed = vi.spyOn(JSON, 'stringify').mockImplementation((...args: Parameters<typeof JSON.stringify>) => {
+            const result = stringify(...args);
+            serializedSizes.push(result?.length ?? 0);
+            return result;
+        });
+        try {
+            repository.writeExistingSessionDraft({ scope, sessionId: 'hot', patch: { text: 'one keystroke' } });
+        } finally {
+            observed.mockRestore();
+        }
+        expect(serializedSizes.reduce((total, size) => total + size, 0)).toBeLessThan(coldText.length);
+        expect(createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false })
+            .getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'cold' })?.document.composer.text.value).toBe(coldText);
+    });
+
+    it('clears accepted currentness synchronously while awaiting browser durability', async () => {
+        const memory = createMemoryStorage();
+        let fail = false;
+        const storage = {
+            ...memory,
+            prepare: async () => {},
+            flush: async () => { if (fail) throw new Error('disk unavailable'); },
+        };
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        await repository.ensureSessionDraftRepositoryHydrated(scope);
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'accepted' } });
+        const currentness = repository.captureSessionDraftCurrentness({ scope, address: sessionAddress });
+        fail = true;
+        const clearing = repository.clearSessionDraftCurrentness({ scope, address: sessionAddress, currentness });
+        const rejected = expect(clearing).rejects.toThrow('disk unavailable');
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value ?? '').toBe('');
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'next message' } });
+        await rejected;
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('next message');
+        fail = false;
+        await repository.flushSessionDraft({ scope, address: sessionAddress });
+        expect(createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false })
+            .getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('next message');
+    });
+
+    it('prepares async storage and refuses a successful flush until local bytes are durable', async () => {
+        const memory = createMemoryStorage();
+        let prepared = false;
+        let fail = true;
+        const storage = {
+            ...memory,
+            getString: (key: string) => {
+                if (!prepared) throw new Error('not prepared');
+                return memory.getString(key);
+            },
+            prepare: async () => { prepared = true; },
+            flush: async () => { if (fail) throw new Error('disk unavailable'); },
+        };
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        await repository.ensureSessionDraftRepositoryHydrated(scope);
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'keep me' } });
+        await expect(repository.flushSessionDraft({ scope, address: sessionAddress })).rejects.toThrow('disk unavailable');
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('keep me');
+        fail = false;
+        expect(await repository.flushSessionDraft({ scope, address: sessionAddress })).toEqual({ status: 'local-only' });
+    });
+
+    it('rolls back a rejected synchronous persistence transaction without poisoning cached replicas', async () => {
+        const memory = createMemoryStorage();
+        let fail = false;
+        const storage = { ...memory, set: (key: string, value: string) => {
+            if (fail) throw new Error('quota');
+            return memory.set(key, value);
+        } };
+        const cipher = plainCipher();
+        const remote = createRemote({ revision: 1, createdAt: 1, updatedAt: 1,
+            content: await cipher.seal(sessionAddress, createSessionDocument('before', uuid(1))) });
+        const options = { storage, cipher, transport: remote.transport, syncEnabled: true };
+        const repository = createSessionDraftRepository(options);
+        await repository.materializeExact(scope, sessionAddress);
+        remote.replaceCurrent({ revision: 2, createdAt: 1, updatedAt: 2,
+            content: await cipher.seal(sessionAddress, createSessionDocument('rejected', uuid(2))) });
+        fail = true;
+        await expect(repository.ensureSessionDraftRepositoryHydrated(scope)).rejects.toThrow('quota');
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('before');
+        fail = false;
+        repository.writeExistingSessionDraft({ scope, sessionId: 'other', patch: { text: 'unrelated' } });
+        expect(createSessionDraftRepository(options).getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('before');
+    });
+    it('stores duplicated draft text once and restores pending edits for a later flush', async () => {
+        const storage = createMemoryStorage();
+        const cipher = plainCipher();
+        const remote = createRemote();
+        const options = { storage, cipher, transport: remote.transport, syncEnabled: true, randomUUID: () => uuid(1) };
+        const repository = createSessionDraftRepository(options);
+        const text = 'large-draft-payload:'.repeat(10_000);
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text } });
+        expect([...storage.values.values()][0].split(text).length - 1).toBe(1);
+        const restored = createSessionDraftRepository(options);
+        expect(restored.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe(text);
+        expect(await restored.flushSessionDraft({ scope, address: sessionAddress })).toEqual({ status: 'clean' });
+        expect([...storage.values.values()][0].split(text).length - 1).toBe(1);
+        expect(createSessionDraftRepository(options).getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe(text);
+    });
+
+    it('reads the existing v1 replica document without losing pending mutation identity', async () => {
+        const storage = createMemoryStorage();
+        const document = createSessionDocument('legacy pending', uuid(8));
+        storage.set('session-drafts-repository-v1:8:server-a9:account-a', JSON.stringify({ v: 1, replicas: {
+            [canonicalSessionDraftAddressV1(sessionAddress)]: {
+                address: sessionAddress, baseRevision: 'absent', baseRawDocument: null, localRawDocument: document,
+                pendingFieldMutations: [{ path: { kind: 'composer', field: 'text' }, mutationId: uuid(8), intent: 'edit', baseMutationId: null, field: document.composer.text }],
+                status: 'pending', conflict: null, createdAt: 1, updatedAt: 2, materialized: true, deleteWhenEmpty: false, localSupplement: {},
+            },
+        } }));
+        const remote = createRemote();
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), transport: remote.transport, syncEnabled: true });
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text).toEqual(document.composer.text);
+        expect(await repository.flushSessionDraft({ scope, address: sessionAddress })).toEqual({ status: 'clean' });
+    });
     it('does not notify or replace a materialized replica for a same-value user edit', () => {
         const address = { kind: 'newSession', draftId: uuid(300) } as const;
         const repository = createSessionDraftRepository({
@@ -349,7 +513,14 @@ describe('sessionDraftRepository', () => {
             randomUUID: () => uuid(23),
             now: () => 4,
         });
-        expect(restored.getSessionDraftSnapshot(scope, sessionAddress)?.status).toBe('conflict');
+        expect(restored.getSessionDraftSnapshot(scope, sessionAddress)).toMatchObject({
+            status: 'conflict',
+            document: { composer: { text: { value: 'mine' } } },
+            conflict: { fields: [{ fieldId: 'composer.text', mine: 'mine', synced: 'theirs' }] },
+        });
+        await restored.resolveSessionDraftConflict({ scope, address: sessionAddress, fieldId: 'composer.text', action: 'keepDevice' });
+        expect(await restored.flushSessionDraft({ scope, address: sessionAddress })).toEqual({ status: 'clean' });
+        expect(restored.getSessionDraftSnapshot(scope, sessionAddress)?.document.composer.text.value).toBe('mine');
     });
 
     it('uses the synced value and clears the selected field conflict without writing it back', async () => {

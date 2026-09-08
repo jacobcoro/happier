@@ -740,7 +740,12 @@ describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
     expect(runWithControlClient).not.toHaveBeenCalled();
   });
 
-  it('consumes a connected-service Codex reset credit for the selected profile', async () => {
+  it.each(['profile', 'group'] as const)('consumes a connected-service Codex reset credit through the daemon for the exact %s profile', async (kind) => {
+    const consumeConnectedServiceResetCredit = vi.fn(async (): Promise<unknown> => ({
+      ok: true,
+      snapshot: null,
+      receipt: { idempotencyKey: 'key', status: 'consumed' },
+    }));
     const fetchRuntime = vi.fn(async (url: string, init: RequestInit) => {
       if (init.method === 'POST') {
         return { ok: true, status: 200, json: async () => ({ code: 'reset', windows_reset: 2 }) } as Response;
@@ -767,6 +772,7 @@ describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
       runWithControlClient,
       fetchRuntime,
       resolveConnectedServiceResetCreditAuth,
+      consumeConnectedServiceResetCredit,
     });
     const metadata = {
       machineId: 'machine-local',
@@ -788,7 +794,8 @@ describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
         maxAttempts: 3,
         lastProbeError: null,
         selectedAuth: {
-          kind: 'profile',
+          kind,
+          ...(kind === 'group' ? { groupId: 'pool' } : {}),
           serviceId: 'openai-codex',
           profileId: 'work',
         },
@@ -801,25 +808,39 @@ describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
     });
     expect(resolveConnectedServiceResetCreditAuth).toHaveBeenCalledWith(expect.objectContaining({
       selectedAuth: {
-        kind: 'profile',
+        kind,
+        ...(kind === 'group' ? { groupId: 'pool' } : {}),
         serviceId: 'openai-codex',
         profileId: 'work',
       },
     }));
-    expect(fetchRuntime).toHaveBeenCalledWith(
-      'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume',
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({
-          Authorization: 'Bearer connected-access',
-          'ChatGPT-Account-Id': 'acct-connected',
-          'Content-Type': 'application/json',
-        }),
-        body: JSON.stringify({
-          redeem_request_id: 'usage-limit:sess_1:reset:reset-credit',
-          credit_id: 'credit-connected-1',
-        }),
-      }),
-    );
+    expect(consumeConnectedServiceResetCredit).toHaveBeenCalledWith({
+      serviceId: 'openai-codex', profileId: 'work',
+      idempotencyKey: 'connected-service-quota-recovery-credit:v1:openai-codex:work:aggregate:unknown',
+    });
+    expect(fetchRuntime.mock.calls.some(([, init]) => init.method === 'POST')).toBe(false);
+    consumeConnectedServiceResetCredit.mockResolvedValue({
+      ok: true, snapshot: null, receipt: { idempotencyKey: 'key', status: 'not_available' },
+    });
+    await expect(adapter.consumeResetCredit?.(createParams(metadata))).resolves.toMatchObject({
+      ok: false, errorCode: 'no_credit',
+    });
+    consumeConnectedServiceResetCredit.mockResolvedValue({
+      ok: true, snapshot: null, receipt: { idempotencyKey: 'key', status: 'unknown_after_timeout' },
+    });
+    await expect(adapter.consumeResetCredit?.(createParams(metadata))).resolves.toMatchObject({
+      ok: false, errorCode: 'connected_service_quota_recovery_credit_unknown_after_timeout',
+    });
+    consumeConnectedServiceResetCredit.mockResolvedValue({
+      ok: false, errorCode: 'connected_service_quota_refresh_timeout', error: 'timeout',
+      receipt: { idempotencyKey: 'key', status: 'consumed' },
+    });
+    await expect(adapter.consumeResetCredit?.(createParams(metadata))).resolves.toMatchObject({
+      ok: false, errorCode: 'connected_service_quota_refresh_timeout',
+    });
+    consumeConnectedServiceResetCredit.mockResolvedValue({ ok: true });
+    await expect(adapter.consumeResetCredit?.(createParams(metadata))).resolves.toMatchObject({
+      ok: false, errorCode: 'connected_service_quota_recovery_credit_unsupported_response',
+    });
   });
 });

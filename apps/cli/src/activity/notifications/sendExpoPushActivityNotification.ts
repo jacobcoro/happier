@@ -14,6 +14,7 @@ export async function sendExpoPushActivityNotificationAsync(params: Readonly<{
 }>): Promise<void> {
   const built = buildActivityNotificationContent(params.event, {
     readyIncludeMessageText: params.channel.readyIncludeMessageText !== false,
+    requestIncludeMessageText: params.channel.requestIncludeMessageText !== false,
   });
   await params.sender.sendToAllDevicesAsync(built.title, built.body, built.data);
 }

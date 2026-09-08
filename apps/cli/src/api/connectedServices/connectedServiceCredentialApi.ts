@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 import {
   AccountEncryptionModeResponseSchema,
+  CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER,
+  CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
   ConnectedServiceAuthGroupErrorResponseV1Schema,
   ConnectedServiceAuthGroupListResponseV1Schema,
   ConnectedServiceAuthGroupResponseV1Schema,
@@ -336,7 +338,7 @@ export async function listConnectedServiceAuthGroups(params: Readonly<{
     const response = await axios.get(
       `${serverUrl}/v3/connect/${serviceId}/groups`,
       {
-        headers: authHeaders(params.token),
+        headers: { ...authHeaders(params.token), [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE },
         timeout: resolveConnectedServicesServerApiTimeoutMs(),
       },
     );
@@ -375,7 +377,7 @@ export async function getConnectedServiceAuthGroup(params: Readonly<{
     const response = await axios.get(
       `${serverUrl}/v3/connect/${serviceId}/groups/${groupId}`,
       {
-        headers: authHeaders(params.token),
+        headers: { ...authHeaders(params.token), [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE },
         timeout: resolveConnectedServicesServerApiTimeoutMs(),
         signal: params.signal,
       },

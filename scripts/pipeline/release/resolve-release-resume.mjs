@@ -29,6 +29,7 @@ const TRUSTED_RELEASE_CONTROL_BRANCHES = new Set(['dev', 'preview', 'main']);
 const RESUMABLE_WORKFLOW_EVENTS = new Map([
   ['.github/workflows/nightly-dev.yml', new Set(['schedule', 'workflow_dispatch'])],
   ['.github/workflows/release.yml', new Set(['workflow_dispatch'])],
+  ['.github/workflows/release-preview-and-production.yml', new Set(['workflow_dispatch'])],
 ]);
 
 /** @param {unknown} value @param {string} label */
@@ -89,13 +90,16 @@ function flattenArtifacts(value) {
  * @param {{
  *   originRun: unknown;
  *   artifacts: unknown;
- *   expected: { repository: string; workflowPath: string; channel: string; sourceSha?: string; operationId?: string };
+ *   expected: { repository: string; workflowPath: string; channel: string; sourceSha?: string; operationId?: string; statusArtifactName?: string };
  * }} input
  */
 export function inspectReleaseResumeOrigin(input) {
   const run = asRecord(input.originRun, 'origin run');
   const expectedRepository = requiredString(input.expected.repository, 'expected repository');
   const expectedWorkflowPath = requiredString(input.expected.workflowPath, 'expected workflow path');
+  const statusArtifactName = input.expected.statusArtifactName
+    ? requiredString(input.expected.statusArtifactName, 'expected status artifact name')
+    : 'happier-release-status';
   const repository = asRecord(run.repository, 'origin run repository');
   const headRepository = asRecord(run.head_repository, 'origin run head repository');
   if (repository.full_name !== expectedRepository || headRepository.full_name !== expectedRepository) {
@@ -126,9 +130,9 @@ export function inspectReleaseResumeOrigin(input) {
 
   const matches = flattenArtifacts(input.artifacts)
     .map((entry) => asRecord(entry, 'artifact'))
-    .filter((artifact) => artifact.name === 'happier-release-status');
+    .filter((artifact) => artifact.name === statusArtifactName);
   if (matches.length !== 1) {
-    throw new Error('[release] resume origin must contain exactly one happier-release-status artifact');
+    throw new Error(`[release] resume origin must contain exactly one ${statusArtifactName} artifact`);
   }
   const artifact = matches[0];
   if (artifact.expired !== false) throw new Error('[release] resume status artifact is expired');
@@ -152,7 +156,7 @@ export function inspectReleaseResumeOrigin(input) {
  *   artifacts: unknown;
  *   downloadedDigest: string;
  *   status: unknown;
- *   expected: { repository: string; workflowPath: string; channel: string; sourceSha?: string; operationId?: string };
+ *   expected: { repository: string; workflowPath: string; channel: string; sourceSha?: string; operationId?: string; statusArtifactName?: string };
  * }} input
  */
 export function resolveReleaseResume(input) {
@@ -346,6 +350,7 @@ export async function main(argv = process.argv.slice(2)) {
       'expected-channel': { type: 'string' },
       'expected-source-sha': { type: 'string', default: '' },
       'expected-operation-id': { type: 'string', default: '' },
+      'status-artifact-name': { type: 'string', default: 'happier-release-status' },
       'github-output': { type: 'string' },
     },
     allowPositionals: false,
@@ -359,6 +364,7 @@ export async function main(argv = process.argv.slice(2)) {
     channel: String(values['expected-channel'] ?? ''),
     sourceSha: String(values['expected-source-sha'] ?? ''),
     operationId: String(values['expected-operation-id'] ?? ''),
+    statusArtifactName: String(values['status-artifact-name'] ?? 'happier-release-status'),
   };
   const outputPath = String(values['github-output'] ?? '');
   if (!outputPath) throw new Error('[release] --github-output is required');

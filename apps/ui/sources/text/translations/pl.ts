@@ -1870,6 +1870,7 @@ export const pl: TranslationStructure = {
             title: "Instrukcje uruchomień Happier",
             subtitle: "Wyłączenie usuwa routing z priorytetem natywnym i mechanikę uruchomień Happier z promptów systemowych agentów kodujących.",
           },
+          notifyParentOnCompletion: { title: 'Powiadom agenta nadrzędnego po zakończeniu', subtitle: 'Wysyła do agenta nadrzędnego ustrukturyzowane zdarzenie zakończenia.' },
           characterBudget: {
             title: "Limit reguł niestandardowych",
             subtitle: ({ value }: { value: string }) => `${value} znaków`,
@@ -2498,6 +2499,28 @@ export const pl: TranslationStructure = {
   },
 
   connectedServices: {
+      subscription: {
+          title: "Subskrypcja",
+          currentPeriod: "Bieżący okres",
+          renewal: "Odnowienie",
+          renewalOn: "Włączone",
+          renewalOff: "Wyłączone",
+          renewalUnknown: "Nieznane",
+          renews: ({ date }: { date: string }) => `Odnowienie: ${date}`,
+          ends: ({ date }: { date: string }) => `Koniec: ${date}`,
+          renewsInDays: ({ days }: { days: number }) => `Odnowienie za ${days} dni`,
+          endsInDays: ({ days }: { days: number }) => `Koniec za ${days} dni`,
+          periodEnds: ({ date }: { date: string }) => `Bieżący okres kończy się ${date}`,
+          period: ({ start, end }: { start: string; end: string }) => `${start} – ${end}`,
+          periodStarted: ({ date }: { date: string }) => `Początek: ${date}`,
+          accessUntil: ({ date }: { date: string }) => `Dostęp pozostaje aktywny do ${date}`,
+          checked: ({ time }: { time: string }) => `Sprawdzono: ${time}`,
+          lastKnown: ({ summary }: { summary: string }) => `Ostatnie znane dane: ${summary}`,
+          unavailable: "Szczegóły subskrypcji niedostępne",
+          refreshFailed: "Nie udało się odświeżyć szczegółów subskrypcji. Wyświetlane są ostatnie znane informacje.",
+          outdated: "Szczegóły subskrypcji mogą być nieaktualne.",
+          none: "Brak subskrypcji",
+      },
     fallbackName: "Połączona usługa",
     serviceNames: {
       claudeSubscription: "Subskrypcja Claude",
@@ -3019,6 +3042,8 @@ export const pl: TranslationStructure = {
         membersSubtitle: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} włączonych`,
         optionsTitle: "Opcje",
         autoSwitchTitle: "Automatyczne przełączenie",
+        autoQuotaResetTitle: "Automatycznie używaj resetów limitu",
+        autoQuotaResetSubtitle: "Zużywa dostępny reset tylko wtedy, gdy żadne konto w puli nie jest gotowe i można zresetować wyczerpany limit. Domyślnie wyłączone.",
         autoSwitchEnabledSubtitle: "Przełącz na innego członka, gdy aktywne konto wymaga odzyskiwania.",
         autoSwitchDisabledSubtitle: "Używaj aktywnego członka, dopóki nie zmienisz go ręcznie.",
         strategyTitle: "Strategia wyboru",
@@ -3567,6 +3592,8 @@ export const pl: TranslationStructure = {
       readySubtitle: 'Pokazuj lokalne powiadomienie, gdy tura się kończy',
       readyPreviewTitle: 'Podglądy wiadomości gotowości',
       readyPreviewSubtitle: 'Uwzględniaj najnowszą wiadomość asystenta w powiadomieniach gotowości na tym urządzeniu',
+      requestPreviewTitle: "Podgląd próśb",
+      requestPreviewSubtitle: "Uwzględniaj polecenia wymagające zgody, pytania i opcje odpowiedzi. Mogą pojawić się na ekranie blokady.",
       permissionRequestsTitle: 'Prośby o uprawnienia',
       permissionRequestsSubtitle: 'Pokazuj lokalne powiadomienie, gdy sesja wymaga zatwierdzenia',
       userActionsTitle: 'Prośby o akcję',
@@ -3713,6 +3740,8 @@ export const pl: TranslationStructure = {
       readySubtitle: 'Wysyłaj, gdy tura się kończy, a agent czeka na Twoją komendę',
       readyPreviewTitle: 'Podglądy wiadomości gotowości',
       readyPreviewSubtitle: 'Uwzględniaj najnowszy tekst wiadomości asystenta w powiadomieniach gotowości dla tego webhooka',
+      requestPreviewTitle: "Podgląd próśb",
+      requestPreviewSubtitle: "Uwzględniaj polecenia wymagające zgody, pytania i opcje odpowiedzi w danych tego webhooka.",
       permissionRequestsTitle: 'Prośby o uprawnienia',
       permissionRequestsSubtitle: 'Wysyłaj, gdy sesja czeka na zatwierdzenie',
       userActionsTitle: 'Prośby o akcję',
@@ -3742,6 +3771,10 @@ export const pl: TranslationStructure = {
         title: 'Podglądy wiadomości gotowości',
         subtitle: 'Uwzględniaj najnowszy tekst wiadomości asystenta w powiadomieniach push dla tur gotowości',
       },
+      requestPreview: {
+          title: "Podgląd próśb",
+          subtitle: "Uwzględniaj polecenia wymagające zgody, pytania i opcje odpowiedzi. Mogą pojawić się na ekranie blokady.",
+      },
       permissionRequests: {
         title: "Prośby o uprawnienia",
         subtitle:
@@ -3766,6 +3799,15 @@ export const pl: TranslationStructure = {
         readyFallbackBody: "Tura zakończona. Otwórz sesję, aby kontynuować.",
         permissionFallbackBody: "Wymagane zatwierdzenie.",
         userActionFallbackBody: "Ta sesja wymaga Twojego wkładu.",
+        requestLabels: {
+            command: "Polecenie",
+            file: "Plik",
+            selectOne: "Wybierz jedną odpowiedź",
+            selectMultiple: "Wybierz kilka odpowiedzi",
+            customAnswer: "Można wpisać własną odpowiedź",
+            localMessages: "Wiadomości lokalne",
+            remoteMessages: "Wiadomości zdalne",
+        },
       },
       channels: {
         default: 'Domyślne',
@@ -5074,6 +5116,16 @@ export const pl: TranslationStructure = {
       railScrollDownA11y: "Przewiń nawigację w dół",
     },
     usageLimitRecovery: {
+        overloadTitle: "Model przeciążony",
+        overloadWaiting: "Oczekiwanie na ponowienie.",
+        overloadDispatching: "Ponawianie teraz.",
+        overloadAwaiting: "Oczekiwanie na odpowiedź modelu.",
+        overloadStopped: "Automatyczne próby zatrzymane. Możesz ponowić.",
+        overloadExhausted: "Automatyczne próby wyczerpane. Możesz ponowić.",
+        overloadOffline: "Połącz się ponownie z maszyną sesji, aby sprawdzić stan prób.",
+        stopRetrying: "Zatrzymaj próby",
+        overloadCountdown: ({ seconds, attempt }: { seconds: number; attempt: number }) => `Model przeciążony — ponowienie za ${seconds} s · próba ${attempt}`,
+        overloadAttempt: ({ attempt }: { attempt: number }) => `Próba ${attempt}`,
       title: "Osiągnięto limit użycia",
       readyTitle: "Limit użycia został zresetowany",
       resetBody: ({ time }: { time: string }) =>
@@ -6981,6 +7033,8 @@ export const pl: TranslationStructure = {
   },
 
   files: {
+            revealInFiles: "Pokaż w plikach",
+            openChanges: "Otwórz zmiany",
     searchPlaceholder: "Wyszukaj pliki...",
     clearSearchA11y: "Wyczyść wyszukiwanie",
     createFileA11y: "Utwórz plik",
@@ -7230,6 +7284,10 @@ export const pl: TranslationStructure = {
       noFilesInProject: "Brak plików w projekcie",
       repositoryFolderLoadFailed: "Nie można wczytać folderu",
       repositoryCollapseAll: "Zwiń wszystko",
+    commitCreated: "Utworzono commit",
+    commitRefreshFailed: ({ sha }: { sha: string }) => `Commit ${sha} został utworzony, ale odświeżenie repozytorium nie powiodło się. Ponów odświeżenie stanu kontroli wersji.`,
+    refreshingRepository: "Odświeżanie repozytorium…",
+    retryRefresh: "Ponów odświeżenie",
     sourceControlOperationsLog: {
       title: "Ostatnie operacje kontroli wersji",
       allSessions: "Wszystkie sesje",
@@ -7245,8 +7303,11 @@ export const pl: TranslationStructure = {
       reviewNoMatches: "Brak dopasowań",
       reviewLargeDiffOneAtATime: "Wykryto duży diff; różnice będą wczytywane podczas przewijania.",
       reviewDiffRequestFailed: "Nie można wczytać diffu",
+      reviewPreviousHunk: "Poprzedni fragment",
+      reviewNextHunk: "Następny fragment",
       reviewUnableToLoadDiff: "Nie można wczytać diffu",
       tryDifferentTerm: "Spróbuj innego terminu wyszukiwania",
+      previousSearchResults: "Wyniki poprzedniego wyszukiwania",
       searchResults: ({ count }: { count: number }) =>
         `Wyniki wyszukiwania (${count})`,
     projectRoot: "Katalog główny projektu",
@@ -7269,7 +7330,9 @@ export const pl: TranslationStructure = {
         "Ten plik zmienił się na dysku podczas edycji. Szkic pozostał bez zmian; sprawdź najnowszą wersję pliku przed zapisaniem.",
       selectionFailed: "Nie udało się zaktualizować wyboru",
       openReviewCommentsFailed: "Nie udało się otworzyć komentarzy do przeglądu",
-        reviewComments: {
+        reviewPreviousFile: "Poprzedni plik",
+                  reviewNextFile: "Następny plik",
+                  reviewComments: {
           title: ({ count }: { count: number }) => `Komentarze przeglądu (${count})`,
           placeholder: "Dodaj komentarz do przeglądu…",
           jump: "Przejdź",
@@ -7279,6 +7342,7 @@ export const pl: TranslationStructure = {
           modalSubtitle: "Sprawdź, które komentarze zostaną wysłane z następną wiadomością.",
           modalSummary: ({ included, count }: { included: number; count: number }) =>
             `${included} z ${count} wybranych do następnego promptu`,
+          goToComposer: 'Przejdź do wiadomości',
           detachOrDiscardTitle: "Usunąć komentarze przeglądu?",
           detachOrDiscardBody:
             "Odłączenie zachowa komentarze, ale wykluczy je z następnego promptu. Odrzucenie je usunie.",
@@ -7346,6 +7410,8 @@ export const pl: TranslationStructure = {
       combined: "Połączone",
     },
     fileActions: {
+      selectEntireFileForCommit: 'Wybierz cały plik do commita',
+      selectLines: 'Wybierz wiersze',
       selectForCommit: "Wybierz do commitu",
       selectFilesToCommit: "Wybierz pliki do commitu",
       stageFile: "Dodaj do stage",
@@ -7363,6 +7429,9 @@ export const pl: TranslationStructure = {
     },
 	    toolbar: {
 	      changedFiles: "Zmienione pliki",
+	      projectFiles: "Projekt",
+	      allFiles: "Wszystkie pliki",
+	      projectFilesUnavailable: "Filtrowanie projektu jest tutaj niedostępne. Wyświetlane są wszystkie pliki.",
 	      hiddenFiles: "Pokaż ukryte pliki",
 	      details: "Szczegóły",
 	      upload: "Prześlij",

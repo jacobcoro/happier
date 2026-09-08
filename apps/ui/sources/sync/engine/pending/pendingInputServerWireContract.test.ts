@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     PENDING_INPUT_PROTOCOL_VERSION_V1,
+    PENDING_INPUT_PROTOCOL_VERSION_V2,
     type FeaturesResponse,
 } from '@happier-dev/protocol';
 import { parseReleasedServerV021Features } from '@/dev/testkit';
@@ -14,7 +15,10 @@ function ready(features: FeaturesResponse): ServerFeaturesSnapshot {
     return { status: 'ready', features };
 }
 
-function currentFeatures(params: Readonly<{ includePendingInput?: boolean }> = {}): FeaturesResponse {
+function currentFeatures(params: Readonly<{
+    includePendingInput?: boolean;
+    pendingInputProtocolVersion?: number;
+}> = {}): FeaturesResponse {
     const base = buildServerFeaturesResponse();
     return {
         ...base,
@@ -33,7 +37,7 @@ function currentFeatures(params: Readonly<{ includePendingInput?: boolean }> = {
                 runtimeActivity: { protocolVersion: 2 },
                 pendingInput: params.includePendingInput === false
                     ? undefined
-                    : { protocolVersion: PENDING_INPUT_PROTOCOL_VERSION_V1 },
+                    : { protocolVersion: params.pendingInputProtocolVersion ?? PENDING_INPUT_PROTOCOL_VERSION_V2 },
             },
         },
     };
@@ -42,6 +46,10 @@ function currentFeatures(params: Readonly<{ includePendingInput?: boolean }> = {
 describe('Pending input server HTTP wire contract', () => {
     it('selects the current Pending wire only from the explicit Pending-input protocol minimum', () => {
         expect(resolvePendingInputServerWireMode(ready(currentFeatures())))
+            .toBe('pending_input_v2');
+        expect(resolvePendingInputServerWireMode(ready(currentFeatures({
+            pendingInputProtocolVersion: PENDING_INPUT_PROTOCOL_VERSION_V1,
+        }))))
             .toBe('pending_input_v1');
         expect(resolvePendingInputServerWireMode(ready(currentFeatures({ includePendingInput: false }))))
             .toBe('indeterminate');

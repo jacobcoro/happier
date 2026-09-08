@@ -159,7 +159,6 @@ export function CodeLineRow(props: {
 
     return (
         <View
-            nativeID={line.id}
             style={[
                 styles.row,
                 highlighted ? styles.rowHighlighted : null,

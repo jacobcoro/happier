@@ -45,6 +45,8 @@ import {
     type PermissionRequestCoordinatorContext,
 } from './permissionRequestCoordinator';
 import type { PermissionResult } from './permissionResult';
+import type { SessionPermissionRpcPayload } from './sessionPermissionRpc';
+import type { SessionPermissionRpcRouter } from './sessionPermissionRpcRouter';
 
 export type { PermissionResult } from './permissionResult';
 
@@ -52,6 +54,7 @@ export type PermissionRequestPushSender = PermissionRequestPushSenderFromSetting
 
 type AgentStateRequestsRecord = NonNullable<AgentState['requests']>;
 type AgentStateCompletedRequestsRecord = NonNullable<AgentState['completedRequests']>;
+let permissionRpcConsumerSequence = 0;
 
 /**
  * Permission response from the mobile app.
@@ -85,6 +88,7 @@ export interface PendingRequest {
     toolName: string;
     input: unknown;
     coordinatorManaged?: boolean;
+    resolveDecisionIfPolicyChanges?: () => PermissionResult | null;
 }
 
 /**
@@ -104,6 +108,8 @@ export abstract class BasePermissionHandler {
     private readonly getAccountSettingsSnapshotFn: () => AccountSettings | null;
     private readonly toolTrace: { protocol: ToolTraceProtocol; provider: string } | null;
     private readonly triggerAbortCallbackOnAbortDecision: boolean;
+    private readonly permissionRpcConsumerName = `permission-handler-${++permissionRpcConsumerSequence}`;
+    private unregisterPermissionRpcConsumer: (() => void) | null = null;
 
     /**
      * Returns the log prefix for this handler.
@@ -320,39 +326,23 @@ export abstract class BasePermissionHandler {
      * Setup RPC handler for permission responses.
      */
     protected setupRpcHandler(): void {
+        this.unregisterPermissionRpcConsumer?.();
+        this.unregisterPermissionRpcConsumer = null;
+        const sessionWithRouter = this.session as ApiSessionClient & {
+            getOrCreatePermissionRpcRouter?: () => SessionPermissionRpcRouter;
+        };
+        if (typeof sessionWithRouter.getOrCreatePermissionRpcRouter === 'function') {
+            this.unregisterPermissionRpcConsumer = sessionWithRouter.getOrCreatePermissionRpcRouter().registerConsumer({
+                name: this.permissionRpcConsumerName,
+                tryHandlePermissionRpc: (response) => this.tryHandlePermissionRpc(response, true),
+            });
+            return;
+        }
+
         this.session.rpcHandlerManager.registerHandler<PermissionResponse, void>(
             SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_LEGACY,
             async (response) => {
-                const legacyPending = this.pendingRequests.get(response.id);
-                const hasStructuredAnswers = response.answers !== undefined;
-                const candidateContext = hasStructuredAnswers
-                    ? null
-                    : this.requestCoordinator.getResponseContext(response.id);
-                const requiresLocalQuestionOwner = hasStructuredAnswers
-                    || (candidateContext !== null && this.isStructuredQuestionContext(candidateContext));
-                const context = requiresLocalQuestionOwner
-                    ? this.requireLocallyOwnedStructuredResponseContext(response.id, legacyPending)
-                    : candidateContext;
-                if (!context) {
-                    logger.debug(
-                        `${this.getLogPrefix()} Permission response received without pending request and without agentState request; ignored`,
-                    );
-                    return;
-                }
-
-                const structuredAnswers = hasStructuredAnswers
-                    ? normalizeLegacyStructuredQuestionAnswers({
-                        answers: response.answers!,
-                        questions: this.readStructuredQuestions(context),
-                    })
-                    : undefined;
-
-                this.handlePermissionResponseWithContext({
-                    response,
-                    context,
-                    legacyPending,
-                    structuredAnswers,
-                });
+                this.tryHandlePermissionRpc(response);
             }
         );
         this.session.rpcHandlerManager.registerHandler<unknown, void>(
@@ -362,19 +352,53 @@ export abstract class BasePermissionHandler {
                 if (!parsed.success) {
                     throw new PublicRpcHandlerError(PUBLIC_RPC_HANDLER_ERROR_CODES.STRUCTURED_QUESTION_INVALID);
                 }
-                const legacyPending = this.pendingRequests.get(parsed.data.id);
-                const context = this.requireLocallyOwnedStructuredResponseContext(parsed.data.id, legacyPending);
-                this.handlePermissionResponseWithContext({
-                    response: { id: parsed.data.id, approved: true },
-                    context,
-                    legacyPending,
-                    structuredAnswers: normalizeStructuredQuestionAnswersV1(
-                        parsed.data.structuredAnswersV1,
-                        this.readStructuredQuestions(context),
-                    ),
+                this.tryHandlePermissionRpc({
+                    id: parsed.data.id,
+                    approved: true,
+                    structuredAnswersV1: parsed.data.structuredAnswersV1,
                 });
             },
         );
+    }
+
+    private tryHandlePermissionRpc(response: SessionPermissionRpcPayload, requireLocalPending: boolean = false): boolean {
+        const legacyPending = this.pendingRequests.get(response.id);
+        if (requireLocalPending && !legacyPending) return false;
+        const hasStructuredAnswers = response.answers !== undefined || response.structuredAnswersV1 !== undefined;
+        const candidateContext = hasStructuredAnswers
+            ? null
+            : this.requestCoordinator.getResponseContext(response.id);
+        const requiresLocalQuestionOwner = hasStructuredAnswers
+            || (candidateContext !== null && this.isStructuredQuestionContext(candidateContext));
+        const context = requiresLocalQuestionOwner
+            ? this.requireLocallyOwnedStructuredResponseContext(response.id, legacyPending)
+            : candidateContext;
+        if (!context) {
+            logger.debug(
+                `${this.getLogPrefix()} Permission response received without pending request and without agentState request; ignored`,
+            );
+            return false;
+        }
+
+        const structuredAnswers = response.structuredAnswersV1 !== undefined
+            ? normalizeStructuredQuestionAnswersV1(
+                response.structuredAnswersV1,
+                this.readStructuredQuestions(context),
+            )
+            : response.answers !== undefined
+                ? normalizeLegacyStructuredQuestionAnswers({
+                    answers: response.answers,
+                    questions: this.readStructuredQuestions(context),
+                })
+                : undefined;
+
+        this.handlePermissionResponseWithContext({
+            response,
+            context,
+            legacyPending,
+            structuredAnswers,
+        });
+        return true;
     }
 
     private requireLocallyOwnedStructuredResponseContext(
@@ -498,7 +522,12 @@ export abstract class BasePermissionHandler {
         });
     }
 
-    protected requestPermissionDecision(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
+    protected requestPermissionDecision(
+        toolCallId: string,
+        toolName: string,
+        input: unknown,
+        resolveDecisionIfPolicyChanges?: () => PermissionResult | null,
+    ): Promise<PermissionResult> {
         if (this.isPermissionRequestClaimed(toolCallId)) {
             return Promise.reject(new Error(`Permission request ${toolCallId} is reserved by a newer runtime`));
         }
@@ -513,6 +542,7 @@ export abstract class BasePermissionHandler {
                 toolName,
                 input: normalizedInput,
                 coordinatorManaged: true,
+                resolveDecisionIfPolicyChanges,
                 resolve: (value) => {
                     this.resolvePendingPermissionRequest(toolCallId, value);
                 },
@@ -667,6 +697,8 @@ export abstract class BasePermissionHandler {
             this.cancelPendingRequests({ reason: 'Session reset' });
 
             this.allowedToolIdentifiers.clear();
+            this.unregisterPermissionRpcConsumer?.();
+            this.unregisterPermissionRpcConsumer = null;
             this.requestStore.dispose();
             logger.debug(`${this.getLogPrefix()} Permission handler reset`);
         } finally {

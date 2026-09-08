@@ -1,7 +1,7 @@
 {
   "name": "@happier-dev/app",
   "main": "index.ts",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "happierExpoRuntimeVersion": "0.2.7-native",
   "happier": {
     "installFreshnessInputs": [
@@ -130,6 +130,7 @@
     "@hugeicons/react-native": "1.0.15",
     "@legendapp/list": "3.3.3",
     "@lezer/highlight": "1.2.3",
+    "@lezer/markdown": "1.6.3",
     "@livekit/react-native": "^2.9.0",
     "@livekit/react-native-expo-plugin": "^1.0.1",
     "@livekit/react-native-webrtc": "^137.0.0",
@@ -259,6 +260,7 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "@babel/core": "^7.25.2",
     "@expo/config-plugins": "~54.0.1",
     "@expo/ngrok": "^4.1.0",

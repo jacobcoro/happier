@@ -67,6 +67,7 @@ export const FilesystemBrowserList = React.memo(function FilesystemBrowserList(p
 
     const sharedListProps = {
         ref: props.listRef,
+        ...(Platform.OS === 'web' && props.treeRole ? { role: 'tree' as const } : {}),
         data: props.nodes,
         keyExtractor,
         style: props.style,

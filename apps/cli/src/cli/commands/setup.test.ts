@@ -33,6 +33,7 @@ let interactive = true;
 let relayInstallResultUrl: string | null = null;
 let tailscaleStatus: import('@happier-dev/cli-common/tailscale').TailscaleStatusSnapshot | null = null;
 const multipleChoiceAnswers: string[] = [];
+const multipleChoicePrompts: string[] = [];
 const promptInputAnswers: string[] = [];
 
 vi.mock('@/utils/spawnHappyCLI', () => ({
@@ -95,7 +96,10 @@ vi.mock('@/terminal/prompts/promptInput', () => ({
 }));
 
 vi.mock('@/terminal/prompts/promptMultipleChoice', () => ({
-  promptMultipleChoice: async () => multipleChoiceAnswers.shift() ?? 'cloud',
+  promptMultipleChoice: async (prompt: string) => {
+    multipleChoicePrompts.push(prompt);
+    return multipleChoiceAnswers.shift() ?? 'cloud';
+  },
 }));
 
 vi.mock('@/terminal/prompts/promptConfirmYesNo', () => ({
@@ -123,6 +127,7 @@ beforeEach(() => {
   spawned.length = 0;
   spawnedEnvs.length = 0;
   multipleChoiceAnswers.length = 0;
+  multipleChoicePrompts.length = 0;
   promptInputAnswers.length = 0;
   exitCodeByCommand = new Map();
   activeProfile = null;
@@ -142,6 +147,17 @@ afterEach(() => {
 });
 
 describe('happier setup — choosing a relay', () => {
+  it('explains the three device-connection choices before selecting one', async () => {
+    await handleSetupCliCommand(context([]));
+
+    const prompt = multipleChoicePrompts.join('\n');
+    expect(prompt).toContain('How would you like to connect your devices?');
+    expect(prompt).toContain('No server maintenance');
+    expect(prompt).toContain('Happier app or your administrator');
+    expect(prompt).toContain('additional server');
+    expect(prompt).toContain('reachable network route');
+  });
+
   it('switches a machine pointed at a custom relay back to Cloud before signing in', async () => {
     activeProfile = { serverUrl: 'https://relay.example.com' };
 
@@ -254,6 +270,9 @@ describe('happier setup — a relay only this computer can reach', () => {
     await handleSetupCliCommand(context(['--this-computer']));
 
     expect(output.text()).toContain('reachable from this computer only');
+    expect(output.text()).toContain('this actual computer or VM');
+    expect(output.text()).toContain('Tailscale on both devices');
+    expect(output.text()).toContain('headless VM');
     expect(output.text()).not.toContain('Your phone reaches this relay');
   });
 

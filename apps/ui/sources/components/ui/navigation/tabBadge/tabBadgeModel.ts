@@ -63,7 +63,7 @@ export function resolveGitTabBadge(
     if (!diff) {
         return null;
     }
-    if (mode === 'changedFiles') {
+    if (mode === 'changedFiles' || scm?.isComplete === false) {
         return diff.modifiedCount > 0 ? { kind: 'count', value: diff.modifiedCount } : null;
     }
     return { kind: 'diff', added: diff.added, removed: diff.removed, modifiedCount: diff.modifiedCount };

@@ -37,6 +37,8 @@ If the same family escapes twice:
 
 Mocks represent external boundaries, not internal policy. A fake protocol server must evolve with the protocol methods it claims to implement. Prefer typed fixtures/builders and one boundary harness over repeated inline response objects.
 
+For UI tests, inventory repeated `vi.mock(...)` targets before adding another local mock. High raw counts are a drift signal, not an instruction to rewrite everything: migrate a family when a reproduced failure shows its local variant is stale, when the same fixture changes in lockstep, or when a canonical testkit already owns the boundary. Keep real reducers, providers, registries, and internal orchestration active beneath the mocked system boundary.
+
 ## Timeout policy
 
 Do not raise timeouts globally. First classify:
@@ -55,6 +57,7 @@ A larger timeout is valid only when the operation is making observable progress 
 - Keep runner-pool selection as an input to the reusable workflow. Blacksmith is a manual accelerator for approved non-secret Linux lanes, not a fork of CI; the same job graph and commands must continue to work on GitHub-hosted runners.
 - Use matrices only for real platform/configuration differences.
 - Keep result aggregators tiny and free of dependency installation.
+- Keep independent source-test jobs independent and let the terminal result job aggregate their recorded conclusions. A failing unit, typecheck, or integration lane must not prevent unrelated E2E shards from reporting, but publication and trust-dependent jobs still require their real prerequisites.
 - Reuse immutable prepared inputs when that avoids repeated lifecycle installs without turning caches into evidence.
 - Cache only reproducible inputs; never let a cache become the authority for generated-output freshness.
 - Do not add retries around release mutations unless the operation is proven idempotent or state reconciliation precedes retry.

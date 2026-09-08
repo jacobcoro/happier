@@ -56,6 +56,8 @@ function createHandle(initial: string) {
 
 type RunOptions = Readonly<{
     filePath?: string;
+    isEditing?: boolean;
+    isActive?: boolean;
     editorSeedText?: string;
     editorResetKey?: number;
     handle?: MarkdownEditorHandle | null;
@@ -75,6 +77,8 @@ async function mountHook(initial: RunOptions) {
         getEditorText: () => string;
     } = {
         filePath: initial.filePath ?? 'notes/readme.md',
+        isEditing: initial.isEditing ?? true,
+        isActive: initial.isActive ?? true,
         editorSeedText: liveText,
         editorResetKey: initial.editorResetKey ?? 0,
         handle: initial.handle ?? null,
@@ -90,6 +94,8 @@ async function mountHook(initial: RunOptions) {
         handleRef.current = p.handle;
         latest = useMarkdownFileEditMode({
             filePath: p.filePath,
+            isEditing: p.isEditing,
+            isActive: p.isActive,
             editorSeedText: p.editorSeedText,
             editorResetKey: p.editorResetKey,
             editorHandleRef: handleRef,
@@ -127,6 +133,13 @@ describe('useMarkdownFileEditMode', () => {
         expect(get().markdownEditMode).toBe('rich');
         expect(get().richEligible).toBe(true);
         expect(get().richDisabledReason).toBeUndefined();
+    });
+
+    it('defers eligibility until file editing starts', async () => {
+        const { get, rerender } = await mountHook({ isEditing: false });
+        expect(get().richEligible).toBe(false);
+        await rerender({ isEditing: true });
+        expect(get().richEligible).toBe(true);
     });
 
     it('is not eligible when the feature flag is off', async () => {
@@ -304,6 +317,37 @@ describe('useMarkdownFileEditMode', () => {
         expect(get().seedText).toBe('# Reloaded from disk');
         expect(get().resetKey).not.toBe(resetKeyBefore);
         expect(get().resetKey.startsWith('2:raw:')).toBe(true);
+    });
+
+    it.each(['non-markdown', 'feature-disabled'])('does not poll raw text for %s editing', async (scenario) => {
+        vi.useFakeTimers();
+        settingState.markdownDefaultEditMode = 'raw';
+        featureState.markdownRichEditor = scenario !== 'feature-disabled';
+        const getEditorText = vi.fn(() => '# Draft');
+        await mountHook({ filePath: scenario === 'non-markdown' ? 'index.ts' : 'README.md', getEditorText });
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        expect(getEditorText).not.toHaveBeenCalled();
+    });
+
+    it('pauses hidden raw-editor reads and resumes without resetting the draft', async () => {
+        vi.useFakeTimers();
+        settingState.markdownDefaultEditMode = 'raw';
+        let liveText = '# Draft';
+        const getEditorText = vi.fn(() => liveText);
+        const { get, rerender } = await mountHook({ editorSeedText: liveText, getEditorText });
+        const resetKey = get().resetKey;
+        await rerender({ isActive: false });
+        getEditorText.mockClear();
+        liveText = 'See the note.[^1]\n\n[^1]: kept draft\n';
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        expect(getEditorText).not.toHaveBeenCalled();
+        expect(get().markdownEditMode).toBe('raw');
+        expect(get().resetKey).toBe(resetKey);
+        await rerender({ isActive: true });
+        expect(getEditorText).toHaveBeenCalled();
+        expect(get().richEligible).toBe(false);
+        expect(get().richDisabledReason).toBe('footnotes');
+        expect(get().resetKey).toBe(resetKey);
     });
 
     it('recomputes raw-mode rich eligibility from the live editor text during the edit session', async () => {

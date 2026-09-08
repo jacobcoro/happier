@@ -21,6 +21,8 @@ import {
   type NotifyConnectedServiceRuntimeAuthFailure,
   type ResumeInactiveSessionWhenUsageLimitReady,
   type RetryTemporaryThrottleNow,
+  type ReadTemporaryThrottleRecovery,
+  type CancelTemporaryThrottleRecovery,
   type ScheduleInactiveSessionUsageLimitRecoveryCheck,
 } from '@/session/actions/createCliActionDeps';
 import {
@@ -54,6 +56,8 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
   notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
+  readTemporaryThrottleRecovery?: ReadTemporaryThrottleRecovery;
+  cancelTemporaryThrottleRecovery?: CancelTemporaryThrottleRecovery;
 }>;
 
 type GoalOperation = 'get' | 'set' | 'clear';
@@ -369,6 +373,8 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
     ...(params.deps?.retryTemporaryThrottleNow
       ? { retryTemporaryThrottleNow: params.deps.retryTemporaryThrottleNow }
       : {}),
+    readTemporaryThrottleRecovery: params.deps?.readTemporaryThrottleRecovery,
+    cancelTemporaryThrottleRecovery: params.deps?.cancelTemporaryThrottleRecovery,
   });
 
   if (params.operation === 'enable') {

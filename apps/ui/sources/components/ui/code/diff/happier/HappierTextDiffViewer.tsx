@@ -40,6 +40,8 @@ export const HappierTextDiffViewer = React.memo<TextDiffViewerProps>((props) => 
                 showLineNumbers={props.showLineNumbers}
                 showPrefix={props.showPrefix}
                 scrollToLineId={props.scrollToLineId}
+                onScrollToLine={props.onScrollToLine}
+                externalScrollView={props.externalScrollView}
                 highlightLineId={props.highlightLineId}
                 highlightLineIds={props.highlightLineIds}
                 syntaxHighlighting={syntaxHighlighting}

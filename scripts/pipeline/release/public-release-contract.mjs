@@ -40,7 +40,13 @@ export function resolvePublicReleaseContract() {
     kind: PUBLIC_RELEASE_CONTRACT_KIND,
     conductorProtocol: {
       version: 1,
-      capabilities: ['release-analysis-v1', 'release-dispatch-plan-v3', 'ci-run-id', 'production-promotion-mode-v1'],
+      capabilities: [
+        'release-analysis-v1',
+        'release-dispatch-plan-v3',
+        'ci-run-id',
+        'production-promotion-mode-v1',
+        'combined-preview-production-v1',
+      ],
     },
     targets: Object.values(versionedComponents).map(({ id, baselineTagPrefix, changedWhen }) => ({
       id,

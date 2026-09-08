@@ -1,14 +1,13 @@
 import { t } from '@/text';
 import { config } from '@/config';
-import { sessionScmDiffFile, sessionReadFile, sessionStatFile } from '@/sync/ops';
+import { sessionReadFile, sessionStatFile } from '@/sync/ops';
 import { resolveSessionPathState } from '@/hooks/session/files/sessionPathState';
 import { getImageMimeTypeFromPath, isBinaryContent, isKnownBinaryPath } from '@/scm/utils/filePresentation';
 import type { ScmDiffArea } from '@happier-dev/protocol';
 import type { FileDiffMode } from '@/components/sessions/files/file/FileActionToolbar';
 import type { ScmEntryKind } from '@/sync/domains/state/storageTypes';
-import { buildAddedFileUnifiedDiff, decodeUtf8Base64 } from '@/scm/diff/fallbackUnifiedDiff';
-import { looksLikeUnifiedDiff } from '@/scm/diff/looksLikeUnifiedDiff';
-import { extractUnifiedDiffForSingleFile } from '@/scm/diff/extractUnifiedDiffForSingleFile';
+import { decodeUtf8Base64 } from '@/scm/diff/fallbackUnifiedDiff';
+import { fetchSessionUnifiedDiffForPath, invalidateSessionUnifiedDiffPath } from '@/scm/diff/fetchSessionUnifiedDiffForPath';
 import { digest } from '@/platform/digest';
 
 export type SessionFileDetailsFileContent = Readonly<{
@@ -58,7 +57,14 @@ export async function refreshSessionFileDetails(input: Readonly<{
     sessionPath: string | null;
     sessionsReady: boolean;
     fileEntryKind?: ScmEntryKind | null;
+    fileHasIncludedDelta?: boolean;
     imagePreviewMaxBytes?: number | null;
+    includeDiff?: boolean;
+    includeFile?: boolean;
+    reuseFile?: Readonly<{ fileContent: SessionFileDetailsFileContent; fileWriteSupported: boolean }>;
+    snapshotSignature?: string | null;
+    forceRefresh?: boolean;
+    onDiffContent?: (diff: string | null) => void;
 }>): Promise<SessionFileDetailsRefreshResult> {
     const sessionState = resolveSessionPathState({
         sessionId: input.sessionId,
@@ -76,135 +82,174 @@ export async function refreshSessionFileDetails(input: Readonly<{
         };
     }
 
+    const includeDiff = input.includeDiff !== false && !isKnownBinaryPath(input.filePath) && !getImageMimeTypeFromPath(input.filePath);
+    // A saved file can be refreshed before the next SCM snapshot advances.
+    if (input.forceRefresh && !includeDiff) {
+        invalidateSessionUnifiedDiffPath({ sessionId: input.sessionId, path: input.filePath });
+    }
+
     let failedReadError: string | null = null;
     let diffContent: string | null = null;
     let fileContent: SessionFileDetailsFileContent | null = null;
     let error: string | null = null;
 
-    try {
-        const diffResponse = await sessionScmDiffFile(input.sessionId, {
-            path: input.filePath,
-            area: toScmDiffArea(input.diffMode),
-        });
-        diffContent = diffResponse.success ? (diffResponse.diff ?? '') : null;
-        if (typeof diffContent === 'string' && diffContent.includes('diff --git ') && (diffContent.match(/^diff --git /gm) ?? []).length > 1) {
-            diffContent = extractUnifiedDiffForSingleFile({ patch: diffContent, path: input.filePath });
+    let fileTask: Promise<SessionFileDetailsRefreshResult> | null = null;
+    const loadFile = (): Promise<SessionFileDetailsRefreshResult> => {
+        if (fileTask) return fileTask;
+        if (input.reuseFile) {
+            fileTask = Promise.resolve({ status: 'ready', error: null, diffContent: null, ...input.reuseFile });
+            return fileTask;
         }
-        if (typeof diffContent === 'string' && !looksLikeUnifiedDiff(diffContent)) {
-            diffContent = null;
-        }
+        fileTask = (async (): Promise<SessionFileDetailsRefreshResult> => {
+            try {
+                const imageMime = getImageMimeTypeFromPath(input.filePath);
+                const wantsBinaryPreview = typeof imageMime === 'string' && imageMime.trim().length > 0;
 
-        const imageMime = getImageMimeTypeFromPath(input.filePath);
-        const wantsBinaryPreview = typeof imageMime === 'string' && imageMime.trim().length > 0;
+                const genericMaxPreviewBytesRaw = config.filesPreviewMaxBytes;
+                const genericMaxPreviewBytes =
+                    typeof genericMaxPreviewBytesRaw === 'number' && Number.isFinite(genericMaxPreviewBytesRaw) && genericMaxPreviewBytesRaw > 0
+                        ? Math.floor(genericMaxPreviewBytesRaw)
+                        : null;
+                const imageMaxPreviewBytesRaw = input.imagePreviewMaxBytes;
+                const imageMaxPreviewBytes =
+                    typeof imageMaxPreviewBytesRaw === 'number' && Number.isFinite(imageMaxPreviewBytesRaw) && imageMaxPreviewBytesRaw > 0
+                        ? Math.floor(imageMaxPreviewBytesRaw)
+                        : null;
+                const maxPreviewBytes = wantsBinaryPreview && imageMaxPreviewBytes != null
+                    ? imageMaxPreviewBytes
+                    : genericMaxPreviewBytes;
 
-        const genericMaxPreviewBytesRaw = config.filesPreviewMaxBytes;
-        const genericMaxPreviewBytes =
-            typeof genericMaxPreviewBytesRaw === 'number' && Number.isFinite(genericMaxPreviewBytesRaw) && genericMaxPreviewBytesRaw > 0
-                ? Math.floor(genericMaxPreviewBytesRaw)
-                : null;
-        const imageMaxPreviewBytesRaw = input.imagePreviewMaxBytes;
-        const imageMaxPreviewBytes =
-            typeof imageMaxPreviewBytesRaw === 'number' && Number.isFinite(imageMaxPreviewBytesRaw) && imageMaxPreviewBytesRaw > 0
-                ? Math.floor(imageMaxPreviewBytesRaw)
-                : null;
-        const maxPreviewBytes = wantsBinaryPreview && imageMaxPreviewBytes != null
-            ? imageMaxPreviewBytes
-            : genericMaxPreviewBytes;
+                const readOptions = maxPreviewBytes != null ? { maxBytes: maxPreviewBytes } : undefined;
+                const statLimitBytes =
+                    typeof maxPreviewBytes === 'number' && Number.isFinite(maxPreviewBytes) && maxPreviewBytes > 0
+                        ? maxPreviewBytes
+                        : null;
+                let statSizeBytes: number | null = null;
+                if (statLimitBytes != null) {
+                    const stat = await sessionStatFile(input.sessionId, input.filePath);
+                    if (stat.success && stat.exists === true && typeof stat.sizeBytes === 'number') {
+                        statSizeBytes = Math.max(0, Math.floor(stat.sizeBytes));
+                        if (stat.sizeBytes > statLimitBytes) {
+                            return {
+                                status: 'ready',
+                                error: t('files.fileTooLargeToPreview'),
+                                diffContent,
+                                fileContent: null,
+                                fileWriteSupported: false,
+                            };
+                        }
+                    }
+                }
 
-        const readOptions = maxPreviewBytes != null ? { maxBytes: maxPreviewBytes } : undefined;
-        const statLimitBytes =
-            typeof maxPreviewBytes === 'number' && Number.isFinite(maxPreviewBytes) && maxPreviewBytes > 0
-                ? maxPreviewBytes
-                : null;
-        let statSizeBytes: number | null = null;
-        if (statLimitBytes != null) {
-            const stat = await sessionStatFile(input.sessionId, input.filePath);
-            if (stat.success && stat.exists === true && typeof stat.sizeBytes === 'number') {
-                statSizeBytes = Math.max(0, Math.floor(stat.sizeBytes));
-                if (stat.sizeBytes > statLimitBytes) {
+                if (wantsBinaryPreview) {
+                    fileContent = { content: '', isBinary: true, contentHash: null, binaryMime: imageMime, binarySizeBytes: statSizeBytes };
                     return {
                         status: 'ready',
-                        error: t('files.fileTooLargeToPreview'),
+                        error: null,
                         diffContent,
-                        fileContent: null,
+                        fileContent,
+                        fileWriteSupported: true,
+                    };
+                }
+
+                if (isKnownBinaryPath(input.filePath) && !wantsBinaryPreview) {
+                    fileContent = { content: '', isBinary: true, contentHash: null };
+                    return {
+                        status: 'ready',
+                        error: null,
+                        diffContent,
+                        fileContent,
+                        fileWriteSupported: true,
+                    };
+                }
+
+                const readResponse = await sessionReadFile(input.sessionId, input.filePath, readOptions);
+                if (!readResponse.success) {
+                    failedReadError = readResponse.error || t('files.fileReadFailed');
+                    error = failedReadError;
+                    fileContent = null;
+                    return {
+                        status: 'ready',
+                        error,
+                        diffContent,
+                        fileContent,
                         fileWriteSupported: false,
                     };
                 }
+
+                const encodedContent = readResponse.content || '';
+
+                const decodedContent = decodeUtf8Base64(encodedContent);
+                if (isBinaryContent(decodedContent)) {
+                    fileContent = { content: '', isBinary: true, contentHash: null };
+                    return {
+                        status: 'ready',
+                        error: null,
+                        diffContent,
+                        fileContent,
+                        fileWriteSupported: true,
+                    };
+                }
+
+                fileContent = { content: decodedContent, isBinary: false, contentHash: await computeTextContentHash(decodedContent) };
+
+                return {
+                    status: 'ready',
+                    error: null,
+                    diffContent,
+                    fileContent,
+                    fileWriteSupported: true,
+                };
+            } catch (err) {
+                const message = err instanceof Error ? err.message : t('files.fileReadFailed');
+                error = message;
+                return {
+                    status: 'ready',
+                    error,
+                    diffContent,
+                    fileContent,
+                    fileWriteSupported: failedReadError == null,
+                };
             }
-        }
-
-        if (wantsBinaryPreview) {
-            fileContent = { content: '', isBinary: true, contentHash: null, binaryMime: imageMime, binarySizeBytes: statSizeBytes };
-            return {
-                status: 'ready',
-                error: null,
-                diffContent,
-                fileContent,
-                fileWriteSupported: true,
-            };
-        }
-
-        if (isKnownBinaryPath(input.filePath) && !wantsBinaryPreview) {
-            fileContent = { content: '', isBinary: true, contentHash: null };
-            return {
-                status: 'ready',
-                error: null,
-                diffContent,
-                fileContent,
-                fileWriteSupported: true,
-            };
-        }
-
-        const readResponse = await sessionReadFile(input.sessionId, input.filePath, readOptions);
-        if (!readResponse.success) {
-            failedReadError = readResponse.error || t('files.fileReadFailed');
-            error = failedReadError;
-            fileContent = null;
-            return {
-                status: 'ready',
-                error,
-                diffContent,
-                fileContent,
-                fileWriteSupported: false,
-            };
-        }
-
-        const encodedContent = readResponse.content || '';
-
-        const decodedContent = decodeUtf8Base64(encodedContent);
-        if (isBinaryContent(decodedContent)) {
-            fileContent = { content: '', isBinary: true, contentHash: null };
-            return {
-                status: 'ready',
-                error: null,
-                diffContent,
-                fileContent,
-                fileWriteSupported: true,
-            };
-        }
-
-        fileContent = { content: decodedContent, isBinary: false, contentHash: await computeTextContentHash(decodedContent) };
-
-        const entryKind = input.fileEntryKind ?? null;
-        if (diffContent == null && (entryKind === 'untracked' || entryKind === 'added')) {
-            diffContent = buildAddedFileUnifiedDiff({ filePath: input.filePath, newText: decodedContent });
-        }
-        return {
-            status: 'ready',
-            error: null,
-            diffContent,
-            fileContent,
-            fileWriteSupported: true,
-        };
-    } catch (err) {
-        const message = err instanceof Error ? err.message : t('files.fileReadFailed');
-        error = message;
-        return {
-            status: 'ready',
-            error,
-            diffContent,
-            fileContent,
-            fileWriteSupported: failedReadError == null,
-        };
+        })();
+        return fileTask;
+    };
+    if (input.includeFile !== false || isKnownBinaryPath(input.filePath) || getImageMimeTypeFromPath(input.filePath)) {
+        void loadFile();
     }
+    let diffError: string | null = null;
+    const diffTask = (async () => {
+        if (!includeDiff) return;
+        try {
+            const response = await fetchSessionUnifiedDiffForPath({
+                sessionId: input.sessionId,
+                path: input.filePath,
+                diffArea: toScmDiffArea(input.diffMode),
+                file: input.fileEntryKind ? { status: input.fileEntryKind, hasIncludedDelta: input.fileHasIncludedDelta } : null,
+                snapshotSignature: input.snapshotSignature,
+                forceRefresh: input.forceRefresh,
+                normalizeError: (value) => value instanceof Error ? value.message : String(value),
+                fallbackError: t('files.fileReadFailed'),
+                readFileForFallback: async () => {
+                    const result = await loadFile();
+                    return result.status === 'ready' && result.fileContent && !result.fileContent.isBinary
+                        ? result.fileContent.content : null;
+                },
+            });
+            if (!response.success) {
+                diffError = response.error;
+                return;
+            }
+            diffContent = response.diff || null;
+            if (diffContent) input.onDiffContent?.(diffContent);
+        } catch (err) {
+            diffError = err instanceof Error ? err.message : t('files.fileReadFailed');
+        }
+    })();
+    await diffTask;
+    const result = await (fileTask ?? (diffContent ? Promise.resolve<SessionFileDetailsRefreshResult>({
+        status: 'ready', error: null, diffContent, fileContent: null, fileWriteSupported: true,
+    }) : loadFile()));
+    if (result.status !== 'ready') return result;
+    return { ...result, diffContent, error: result.error ?? diffError };
 }

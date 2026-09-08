@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import * as childProcess from 'node:child_process';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { waitForCondition } from '@/testkit/async/waitFor';
 import { withTempDir } from '@/testkit/fs/tempDir';
@@ -18,7 +19,101 @@ import {
     writeFakeCodexAppServerScript,
 } from '../testkit/fakeCodexAppServer';
 
+vi.mock('node:child_process', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:child_process')>();
+    return { ...actual, spawn: vi.fn(actual.spawn) };
+});
+
 describe('createCodexAppServerClient', () => {
+    it('settles pending requests and reports stdin failure without an uncaught stream error', async () => {
+        await withTempDir('happier-codex-app-server-client-stdin-error-', async (root) => {
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + "\\n");',
+                    '  }',
+                    '}',
+                ],
+            });
+            // Observe the real OS child so the injected pipe error keeps the client and cleanup path real.
+            const spawn = vi.mocked(childProcess.spawn);
+            spawn.mockClear();
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer),
+            });
+            try {
+                const child = spawn.mock.results.find((result) => result.type === 'return')?.value;
+                if (!child?.stdin) throw new Error('Expected the app-server child stdin');
+                const stdin = child.stdin;
+                const exits: Error[] = [];
+                client.onExit((error) => { exits.push(error); });
+                const pending = client.request('pending/request', {}, { timeoutMs: null })
+                    .then(() => null, (error: unknown) => error);
+                const pipeError = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+
+                expect(() => stdin.emit('error', pipeError)).not.toThrow();
+                expect(await pending).toBe(pipeError);
+                expect(exits).toEqual([pipeError]);
+                await expect(client.request('next/request')).rejects.toBe(pipeError);
+            } finally {
+                await client.dispose();
+            }
+        });
+    });
+
+    it.each(['timeout', 'abort'] as const)('settles %s while an OS stdin write is still pending', async (outcome) => {
+        await withTempDir('happier-codex-app-server-client-pending-write-', async (root) => {
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + "\\n");',
+                    '  }',
+                    '}',
+                ],
+            });
+            const spawn = vi.mocked(childProcess.spawn);
+            spawn.mockClear();
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer),
+            });
+            const child = spawn.mock.results.find((result) => result.type === 'return')?.value;
+            if (!child?.stdin) throw new Error('Expected the app-server child stdin');
+            const write = vi.spyOn(child.stdin, 'write').mockImplementation(() => true);
+            const controller = new AbortController();
+            try {
+                const pending = client.request('pending/write', {}, {
+                    timeoutMs: outcome === 'timeout' ? 250 : null,
+                    signal: controller.signal,
+                }).then(() => null, (error: unknown) => error);
+                await waitForCondition(() => write.mock.calls.length > 0, {
+                    timeoutMs: 1_000,
+                    intervalMs: 1,
+                    label: 'pending OS stdin write',
+                });
+                if (outcome === 'abort') controller.abort();
+                const result = await Promise.race([
+                    pending,
+                    new Promise<'write-still-pending'>((resolve) => setTimeout(() => resolve('write-still-pending'), 1_000)),
+                ]);
+                expect(result).toBeInstanceOf(Error);
+                expect(result).toMatchObject(outcome === 'abort'
+                    ? { name: 'AbortError' }
+                    : { message: 'Codex app-server request pending/write timed out after 250ms' });
+            } finally {
+                write.mockRestore();
+                await client.dispose();
+            }
+        });
+    });
+
     it('terminates the complete app-server process tree when disposed', async () => {
         await withTempDir('happier-codex-app-server-client-process-tree-', async (root) => {
             const fakeAppServer = await writeFakeCodexAppServerScript({

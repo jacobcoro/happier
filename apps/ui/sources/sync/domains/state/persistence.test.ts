@@ -99,18 +99,18 @@ const sessionLocalScopeA: ServerAccountScope = { serverId: 'server-a', accountId
 const sessionLocalScopeB: ServerAccountScope = { serverId: 'server-a', accountId: 'account-b' };
 
 describe('persistence', () => {
-    beforeEach(() => {
-        clearPersistence();
+    beforeEach(async () => {
+        await clearPersistence();
     });
 
-    it('clears all persisted settings scopes and legacy settings state', () => {
+    it('clears all persisted settings scopes and legacy settings state', async () => {
         store.set('settings', JSON.stringify({ settings: settingsDefaults, version: 1 }));
         store.set('pending-settings', JSON.stringify({ analyticsOptOut: true }));
         store.set('account-settings:v2:8:server-a9:account-a', JSON.stringify({ settings: settingsDefaults, version: 2 }));
         store.set('pending-account-settings:v2:8:server-a9:account-a', JSON.stringify({ viewInline: true }));
         store.set('profile', JSON.stringify({ id: 'account-a' }));
 
-        clearPersistence();
+        await clearPersistence();
 
         expect([...store.keys()]).toEqual([]);
     });

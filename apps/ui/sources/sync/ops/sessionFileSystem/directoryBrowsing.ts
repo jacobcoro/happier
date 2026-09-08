@@ -38,9 +38,10 @@ export async function sessionCreateDirectory(sessionId: string, path: string): P
   });
 }
 
-type SessionListDirectoryRequest = Readonly<{ path: string }>;
+type SessionListDirectoryRequest = Readonly<{ path: string; includeGitIgnore?: boolean }>;
 
 export type DirectoryEntry = Readonly<{
+  gitIgnored?: boolean;
   name: string;
   type: 'file' | 'directory' | 'other';
   size?: number;
@@ -48,11 +49,11 @@ export type DirectoryEntry = Readonly<{
 }>;
 
 export type SessionListDirectoryResponse =
-  | Readonly<{ success: true; entries: DirectoryEntry[] }>
+  | Readonly<{ success: true; entries: DirectoryEntry[]; gitIgnoreAvailable?: boolean }>
   | Readonly<{ success: false; error: string }>;
 
-export async function sessionListDirectory(sessionId: string, path: string): Promise<SessionListDirectoryResponse> {
-  const request: SessionListDirectoryRequest = { path };
+export async function sessionListDirectory(sessionId: string, path: string, options?: Readonly<{ includeGitIgnore?: boolean }>): Promise<SessionListDirectoryResponse> {
+  const request: SessionListDirectoryRequest = { path, ...options };
   return await callSessionMachineRpcWithFallback<SessionListDirectoryResponse, SessionListDirectoryRequest, Extract<SessionListDirectoryResponse, { success: false }>>({
     sessionId,
     request,

@@ -1,10 +1,20 @@
 import { spawn } from 'node:child_process';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { readProcessRunState } from './processRunState';
+import { isPidAliveBySignal, readProcessRunState } from './processRunState';
 
 const spawnedPids: number[] = [];
+
+describe('isPidAliveBySignal', () => {
+  afterEach(() => vi.restoreAllMocks());
+  it.each(['EPERM', 'EACCES', 'EIO'])('keeps an unobservable process present for %s', (code) => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('process probe'), { code });
+    });
+    expect(isPidAliveBySignal(4321)).toBe(true);
+  });
+});
 
 function spawnSleeper(): number {
   const child = spawn('sleep', ['120'], { stdio: 'ignore' });

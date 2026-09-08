@@ -35,6 +35,9 @@ describe('buildAllRepositoryChangedFiles', () => {
 });
 
 describe('formatLineChanges', () => {
+    it('omits exact line counts when statistics are incomplete', () => {
+        expect(formatLineChanges(makeFile('large.txt', { linesAdded: 3, linesRemoved: 2, isComplete: false }))).toBe('');
+    });
     it('formats additions/removals and omits empty values', () => {
         expect(formatLineChanges(makeFile('src/a.ts', { linesAdded: 3, linesRemoved: 2 }))).toBe('+3 -2');
         expect(formatLineChanges(makeFile('src/a.ts', { linesAdded: 3, linesRemoved: 0 }))).toBe('+3');

@@ -21,6 +21,7 @@ import { Text } from '@/components/ui/text/Text';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { Modal } from '@/modal';
 import type { QuotaResetRow } from '@/sync/domains/connectedServices/buildQuotaResetRows';
+import { resolveSubscriptionEndTime } from '@/sync/domains/connectedServices/resolveSubscriptionEndTime';
 import {
     isConnectedServiceItemCollapsed,
     resolveConnectedServiceCollapseKey,
@@ -28,6 +29,7 @@ import {
 } from '@/sync/domains/connectedServices/resolveConnectedServiceCollapseKey';
 import { useSettingMutable } from '@/sync/store/hooks';
 import type { ConnectedServiceCredentialHealthStatusV1, ConnectedServiceId } from '@happier-dev/protocol';
+import type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol';
 import { t } from '@/text';
 
 import { resolveAccountCapacityRings, type AccountUsageRow } from './accountBlockModel';
@@ -45,6 +47,7 @@ export type AccountBlockVariant = 'detail' | 'poolMember';
 export type AccountBlockQuotaView = Readonly<{
     loading: boolean;
     hasSnapshot: boolean;
+    nowMs: number;
     isStale: boolean;
     /** Whether refresh updates the same source currently displayed in this block. */
     canRefresh: boolean;
@@ -65,6 +68,7 @@ export type AccountBlockQuotaView = Readonly<{
     consumeRecoveryCreditPending: boolean;
     consumeRecoveryCreditPendingTarget: Readonly<{ providerCreditId: string | null }> | null;
     canConsume: boolean;
+    subscription: ProviderAccountSubscriptionV1 | null;
 }>;
 
 export interface AccountBlockViewProps {
@@ -195,6 +199,43 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 13,
         flexShrink: 1,
     },
+    subscriptionSummary: {
+        color: theme.colors.text.primary,
+        fontSize: 13,
+        lineHeight: 18,
+        fontWeight: '600',
+    },
+    subscriptionMeta: {
+        color: theme.colors.text.secondary,
+        fontSize: 13,
+        lineHeight: 18,
+    },
+    subscriptionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        marginBottom: 6,
+    },
+    subscriptionStatus: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+    },
+    subscriptionStatusDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+    },
+    subscriptionStatusDotOn: {
+        backgroundColor: theme.colors.state.success.foreground,
+    },
+    subscriptionStatusDotOff: {
+        backgroundColor: theme.colors.text.tertiary,
+    },
+    subscriptionStatusDotUnknown: {
+        backgroundColor: theme.colors.state.warning.foreground,
+    },
     resetRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -248,6 +289,25 @@ function resolveResetRowLabel(row: QuotaResetRow): string {
         date: formatResetExpiryDate(row.expiresAtMs),
         countdown: row.countdownLabel ?? '',
     });
+}
+
+function resolveSubscriptionStatusLabel(subscription: ProviderAccountSubscriptionV1): string {
+    if (subscription.status === 'none') return t('connectedServices.subscription.none');
+    if (subscription.status === 'unavailable') return t('connectedServices.subscription.unavailable');
+    if (subscription.renewal === 'on') return t('connectedServices.subscription.renewalOn');
+    if (subscription.renewal === 'off') return t('connectedServices.subscription.renewalOff');
+    return t('connectedServices.subscription.renewalUnknown');
+}
+
+function resolveSubscriptionEndsLabel(nowMs: number, endAtMs: number): string {
+    const endTime = resolveSubscriptionEndTime({
+        nowMs,
+        endAtMs,
+        formatDate: (value) => new Date(value).toLocaleDateString(),
+    });
+    return endTime.kind === 'relativeDays'
+        ? t('connectedServices.subscription.endsInDays', { days: endTime.days })
+        : t('connectedServices.subscription.ends', { date: endTime.date });
 }
 
 export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
@@ -367,6 +427,13 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
                     <Icon name="arrow-clockwise" size={11} color={theme.colors.text.tertiary} />
                     <Text style={styles.metaCountText}>
                         {t('connectedServices.quota.recoveryCreditBadge', { count: quota.resetAvailableCount })}
+                    </Text>
+                </View>
+            ) : null}
+            {quota?.subscription?.renewal === 'off' && typeof quota.subscription.currentPeriodEndAtMs === 'number' ? (
+                <View testID={`${testID}:subscription-end`} style={styles.metaCount}>
+                    <Text style={styles.metaCountText}>
+                        {resolveSubscriptionEndsLabel(quota.nowMs, quota.subscription.currentPeriodEndAtMs)}
                     </Text>
                 </View>
             ) : null}
@@ -564,6 +631,34 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
             style={[styles.usageSections, quota.isRefreshing && styles.refreshingDim]}
             pointerEvents={quota.isRefreshing ? 'none' : 'auto'}
         >
+            {quota.subscription ? (
+                <ItemSection testID={`${testID}:subscription`}>
+                    <ItemGroupColumn span={2}>
+                        <View testID={`${testID}:subscription:header`} style={styles.subscriptionHeader}>
+                            <Eyebrow>{t('connectedServices.subscription.title')}</Eyebrow>
+                            <View style={styles.subscriptionStatus}>
+                                <View style={[
+                                    styles.subscriptionStatusDot,
+                                    quota.subscription.renewal === 'on'
+                                        ? styles.subscriptionStatusDotOn
+                                        : quota.subscription.renewal === 'off'
+                                            ? styles.subscriptionStatusDotOff
+                                            : styles.subscriptionStatusDotUnknown,
+                                ]} />
+                                <Text testID={`${testID}:subscription:renewal`} style={styles.subscriptionSummary}>
+                                    {resolveSubscriptionStatusLabel(quota.subscription)}
+                                </Text>
+                            </View>
+                        </View>
+                        {typeof quota.subscription.currentPeriodEndAtMs === 'number' ? (
+                            <Text testID={`${testID}:subscription:period`} style={styles.subscriptionMeta}>
+                                {resolveSubscriptionEndsLabel(quota.nowMs, quota.subscription.currentPeriodEndAtMs)}
+                            </Text>
+                        ) : null}
+                    </ItemGroupColumn>
+                </ItemSection>
+            ) : null}
+
             {quota.usageRows.length > 0 ? (
                 <ItemSection testID={`${testID}:usage`} caption={t('connectedServices.account.usageCaption')}>
                     {quota.usageRows.map((row) => (

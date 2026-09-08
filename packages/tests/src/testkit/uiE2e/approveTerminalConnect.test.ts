@@ -11,12 +11,12 @@ import { approveTerminalConnect } from './approveTerminalConnect';
 
 function createLocator(params: Readonly<{
   count?: number;
-  onClick?: () => void;
+  onClick?: (options?: Parameters<Locator['click']>[0]) => void;
 }>): Locator {
   return {
     count: async () => params.count ?? 0,
-    click: async () => {
-      params.onClick?.();
+    click: async (options?: Parameters<Locator['click']>[0]) => {
+      params.onClick?.(options);
     },
     first: () => createLocator(params),
   } as unknown as Locator;
@@ -51,6 +51,27 @@ describe('approveTerminalConnect', () => {
       toHaveCount: async () => {},
       toBeVisible: async () => {},
     }));
+  });
+
+  it('dismisses the success modal while the destination navigation is loading', async () => {
+    const page = createFakePage();
+    const originalLocator = page.locator;
+    let modalVisible = true;
+    const modal = createLocator({
+      count: 1,
+      onClick: (options) => {
+        modalVisible = false;
+        // Playwright boundary: click completed but the destination load is pending.
+        if (options?.noWaitAfter !== true) throw new Error('scheduled navigation is still loading');
+      },
+    });
+    page.locator = ((selector: string) => selector === '[data-testid="web-modal-button-0"]:visible' ? modal : originalLocator(selector)) as Page['locator'];
+    playwrightExpect.mockImplementation(() => ({
+      toBeVisible: async () => {},
+      toHaveCount: async () => { expect(modalVisible).toBe(false); },
+    }));
+    await approveTerminalConnect({ page: page as unknown as Page });
+    expect(modalVisible).toBe(false);
   });
 
   it('clicks the visible terminal-connect approve control when hidden controls share the same test id', async () => {

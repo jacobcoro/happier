@@ -412,7 +412,7 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
                                 ) : null}
                             </View>
                             <Text style={styles.statsText}>
-                                {`${LINE_ADDED_PREFIX}${file.added} ${LINE_REMOVED_PREFIX}${file.removed}`}
+                                {file.isComplete === false ? t('common.unavailable') : `${LINE_ADDED_PREFIX}${file.added} ${LINE_REMOVED_PREFIX}${file.removed}`}
                             </Text>
                         </Pressable>
 

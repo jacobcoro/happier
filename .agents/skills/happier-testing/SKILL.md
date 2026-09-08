@@ -95,6 +95,8 @@ CLI lane rule:
 - Do not add new inline `vi.mock(...)` families for `expo-router`, `@/text`, `@/modal`, `react-native`, `react-native-unistyles`, or `@/sync/domains/state/storage` when the UI testkit already owns that boundary. If a needed case is missing, extend the canonical UI testkit helper in the same change instead of inventing a file-local mock family.
 - If a one-off local UI override is truly unavoidable, keep it minimal, base it on the canonical factory where possible, and leave a short justification comment rather than turning it into a new reusable pattern.
 - Prefer typed fixtures/builders from the owning testkit over repeated inline object literals whenever the same state/session/theme/config shape is reused across tests.
+- When one boundary spy carries several event kinds (for example a session socket), filter to the event owned by the contract before asserting. A total call count is incidental and becomes stale whenever an unrelated valid event is added.
+- Extend the canonical boundary harness's default behavior for the one exceptional event under test. Do not replace the whole boundary with a one-response stub that silently stops acknowledging neighboring protocol calls.
 - Keep package-specific fixtures near the owning package:
   - UI helpers in `apps/ui`
   - CLI helpers in `apps/cli`
@@ -106,12 +108,17 @@ CLI lane rule:
 - Click the real submit/confirm button after waiting for it to be enabled.
 - Do not rely on Enter-to-send or similar settings-sensitive shortcuts unless the test explicitly configures the setting first.
 - When a UI flow changes, update the corresponding Playwright spec in the same change.
+- Use `packages/tests/src/testkit/uiE2e/browserDiagnostics.ts` for browser console, page-error, failed-request, and error-response collection. Append diagnostics with its stack-preserving helper; never replace the original exception with a new wrapper that erases the deciding callsite.
+- Label repeated lifecycle waits by phase (for example, initial upload versus conflict retry). When one scenario crosses filesystem, daemon, API, and UI boundaries, capture enough outcome state to identify the boundary that failed rather than increasing every timeout.
+- Configure the UI state the assertion actually needs. In particular, a plain or all-untracked workspace is empty in the repository tree's **Project** visibility mode; use the shared repository-tree visibility helper when the scenario requires **All files**. Do not weaken the product's default just to make a fixture visible.
 
 ## Anti-Flake Process Rules
 
 - Keep only one active rerun per spec/lane.
 - If a runner hangs or is killed, inspect whether the failure is repo-owned, harness-owned, or environmental before retrying blindly.
 - When shared process helpers change, rerun a broader lane that can reveal leaked handles or child-process cleanup regressions.
+- Before starting Metro/Playwright in a shared development VM, inspect current compiler, Vitest, and Metro load. A bundle-fetch timeout while several unrelated compilers or Metro servers saturate the same VM is not valid RED evidence. Wait for capacity or use the configured execution target, then rerun the same command; do not encode local contention as a larger repository timeout.
+- Preserve the runner's original stack, phase label, browser diagnostics, and focused artifacts. If the hosted log omits the deciding state, download the bounded Playwright shard artifact before rerunning; inspect metadata first and avoid blindly fetching oversized diagnostics trees.
 
 ## Live Validation Gates
 

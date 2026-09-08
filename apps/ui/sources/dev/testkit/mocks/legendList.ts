@@ -20,7 +20,7 @@ export type CapturingLegendListMockState = Readonly<{
     get props(): any | null;
     reset: () => void;
     refHandle: Readonly<{
-        cancelInitialScrollPreservation: ReturnType<typeof vi.fn>;
+        cancelScroll: ReturnType<typeof vi.fn>;
         clearCaches: ReturnType<typeof vi.fn>;
         getNativeScrollRef: ReturnType<typeof vi.fn>;
         getScrollableNode: ReturnType<typeof vi.fn>;
@@ -46,7 +46,7 @@ export function createCapturingLegendListMock(
     let props: any | null = null;
     const scrollableNode = { kind: 'legend-scrollable-node' };
     const refHandle = {
-        cancelInitialScrollPreservation: vi.fn(),
+        cancelScroll: vi.fn(),
         clearCaches: vi.fn(),
         getNativeScrollRef: vi.fn(() => scrollableNode),
         getScrollableNode: vi.fn(() => scrollableNode),

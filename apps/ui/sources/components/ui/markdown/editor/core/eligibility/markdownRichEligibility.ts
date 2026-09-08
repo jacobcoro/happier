@@ -26,6 +26,8 @@ export type MarkdownRichIneligibleReason =
 
 export type MarkdownRichEligibility = Readonly<{
     eligible: boolean;
+    /** The web editor module is loading before an HTML safety check. */
+    pending?: boolean;
     reason?: MarkdownRichIneligibleReason;
 }>;
 

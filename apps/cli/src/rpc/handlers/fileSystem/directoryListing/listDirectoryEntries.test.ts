@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -46,6 +47,42 @@ describe('listDirectoryEntries', () => {
       ['b-file.txt', 'file'],
     ]);
     expect(result.entries.some((entry) => entry.absolutePath.endsWith('nested'))).toBe(false);
+  });
+
+  it('classifies actual Git ignores while preserving tracked descendants and useful dotfiles', async () => {
+    const root = createTempDirectory();
+    execFileSync('git', ['init', '--quiet'], { cwd: root });
+    writeFileSync(join(root, '.gitignore'), 'build/\n*.log\n');
+    mkdirSync(join(root, 'build'));
+    mkdirSync(join(root, '.github'));
+    writeFileSync(join(root, 'build', 'tracked.txt'), 'source');
+    writeFileSync(join(root, 'build', 'noise.log'), 'noise');
+    writeFileSync(join(root, 'tracked.log'), 'source');
+    writeFileSync(join(root, 'noise.log'), 'noise');
+    execFileSync('git', ['add', '-f', 'build/tracked.txt', 'tracked.log'], { cwd: root });
+    const list = (directoryPath: string) => listDirectoryEntries({
+      directoryPath, includeFiles: true, maxEntries: null, statConcurrency: 4, includeGitIgnore: true,
+    });
+    const rootResult = await list(root);
+    expect(rootResult.gitIgnoreAvailable).toBe(true);
+    expect(Object.fromEntries(rootResult.entries.map((entry) => [entry.name, entry.gitIgnored]))).toMatchObject({
+      '.git': true, '.gitignore': false, '.github': false, build: false, 'tracked.log': false, 'noise.log': true,
+    });
+    const nested = await list(join(root, 'build'));
+    expect(Object.fromEntries(nested.entries.map((entry) => [entry.name, entry.gitIgnored]))).toEqual({
+      'tracked.txt': false, 'noise.log': true,
+    });
+    writeFileSync(join(root, '.git', 'index'), 'invalid index');
+    const failed = await list(root);
+    expect(failed.gitIgnoreAvailable).toBe(false);
+    expect(failed.entries.some((entry) => entry.name === 'noise.log')).toBe(true);
+    expect(failed.entries.every((entry) => entry.gitIgnored === undefined)).toBe(true);
+    const outside = createTempDirectory();
+    writeFileSync(join(outside, 'keep.log'), 'keep');
+    const unavailable = await list(outside);
+    expect(unavailable.gitIgnoreAvailable).toBe(false);
+    expect(unavailable.entries.map((entry) => entry.name)).toEqual(['keep.log']);
+    expect(unavailable.entries[0].gitIgnored).toBeUndefined();
   });
 
   it('can hide files and report truncation when maxEntries is applied', async () => {

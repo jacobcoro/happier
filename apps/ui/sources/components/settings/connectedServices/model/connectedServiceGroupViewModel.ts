@@ -75,6 +75,7 @@ const connectedServiceAuthGroupPolicyKeys = [
     'v',
     'strategy',
     'autoSwitch',
+    'autoUseQuotaResetsWhenExhausted',
     'switchOn',
     'cooldownMs',
     'honorProviderResetsAt',

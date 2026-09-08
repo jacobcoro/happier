@@ -22,6 +22,7 @@ export type FilesystemBrowserRowProps = Readonly<{
     selected?: boolean;
     testID?: string;
     webRole?: React.AriaRole;
+    treeItemProps?: Pick<ItemProps, 'webRole' | 'webTabIndex' | 'accessibilityLevel' | 'webKeyShortcuts' | 'accessibilityState' | 'focusRef' | 'onFocus' | 'onKeyDown'>;
     density?: ItemProps['density'];
     basePaddingLeft?: number;
     depthIndent?: number;
@@ -53,6 +54,7 @@ export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.Re
                     }
                 }}
                 webRole={props.webRole}
+                {...props.treeItemProps}
                 showDivider={showDivider}
                 style={[
                     {
@@ -97,6 +99,7 @@ export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.Re
                 onLongPress={props.onLongPress}
                 onContextMenu={props.onContextMenu}
                 webRole={props.webRole}
+                {...props.treeItemProps}
                 showDivider={showDivider}
                 style={[
                     {

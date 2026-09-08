@@ -8,6 +8,18 @@ import { closeSync, existsSync, openSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
+export type PromptAnimation = Readonly<{
+  animate?: boolean;
+  intervalMs?: number;
+  render: (elapsedSeconds: number) => string;
+  onMove?: (delta: -1 | 1) => void;
+  answerOnEmpty?: () => string;
+}>;
+
+type PromptOptions = Readonly<{
+  animation?: PromptAnimation;
+}>;
+
 /**
  * Decide whether we can ask the user a question, given what the process can see.
  *
@@ -94,7 +106,96 @@ export function isInteractiveTerminal(): boolean {
  * On Windows (or if `/dev/tty` isn't accessible), fall back to
  * `process.stdin` / `process.stdout`.
  */
-export async function promptInput(prompt: string): Promise<string> {
+export async function promptInput(prompt: string, options: PromptOptions = {}): Promise<string> {
+  // Keep the established canonical-mode /dev/tty fallback static. When stdin
+  // and stdout are the terminal, readline can atomically redraw its own prompt
+  // and current input without competing terminal writes.
+  if (options.animation && process.stdin.isTTY && process.stdout.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let onKeypress: ((value: string, key: Readonly<{ name?: string }>) => void) | null = null;
+    try {
+      return await new Promise<string>((resolve, reject) => {
+        const startedAt = Date.now();
+        const initialColumns = process.stdout.columns;
+        const initialRows = process.stdout.rows;
+        const finish = (value: string): void => {
+          if (timer) clearInterval(timer);
+          timer = null;
+          rl.removeListener('close', onClose);
+          if (onKeypress) process.stdin.removeListener('keypress', onKeypress);
+          resolve(value);
+        };
+        const onClose = (): void => {
+          if (timer) clearInterval(timer);
+          timer = null;
+          if (onKeypress) process.stdin.removeListener('keypress', onKeypress);
+          const error = new Error('Terminal prompt closed');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        rl.once('close', onClose);
+        let redrawEnabled = true;
+        const canRedraw = (): boolean => {
+          const cursor = rl.getCursorPos();
+          return process.stdout.columns === initialColumns
+            && process.stdout.rows === initialRows
+            && !(typeof initialRows === 'number' && cursor.rows >= initialRows - 1);
+        };
+        const stopRedraw = (): void => {
+            if (timer) clearInterval(timer);
+            timer = null;
+            redrawEnabled = false;
+        };
+        const redraw = (): void => {
+          if (!canRedraw()) {
+            stopRedraw();
+            return;
+          }
+          const elapsedSeconds = options.animation!.animate === false ? 0 : (Date.now() - startedAt) / 1000;
+          rl.setPrompt(options.animation!.render(elapsedSeconds));
+          rl.prompt(true);
+        };
+        onKeypress = (_value, key) => {
+          if (key.name === 'escape') {
+            if (timer) clearInterval(timer);
+            timer = null;
+            rl.removeListener('close', onClose);
+            process.stdin.removeListener('keypress', onKeypress!);
+            const error = new Error('Terminal prompt aborted');
+            error.name = 'AbortError';
+            reject(error);
+            return;
+          }
+          if (!redrawEnabled || (key.name !== 'up' && key.name !== 'down')) return;
+          if (!canRedraw()) {
+            stopRedraw();
+            return;
+          }
+          options.animation!.onMove?.(key.name === 'up' ? -1 : 1);
+          redraw();
+        };
+        process.stdin.on('keypress', onKeypress);
+        if (options.animation!.animate !== false) {
+          timer = setInterval(redraw, Math.max(40, options.animation!.intervalMs ?? 120));
+          timer.unref?.();
+        }
+        try {
+          rl.question(prompt, (value) => finish(value === '' ? options.animation?.answerOnEmpty?.() ?? value : value));
+        } catch (error) {
+          if (timer) clearInterval(timer);
+          timer = null;
+          rl.removeListener('close', onClose);
+          if (onKeypress) process.stdin.removeListener('keypress', onKeypress);
+          reject(error);
+        }
+      });
+    } finally {
+      if (timer) clearInterval(timer);
+      rl.close();
+    }
+  }
+
   if (process.platform !== 'win32' && existsSync('/dev/tty')) {
     const ttyHandle = await open('/dev/tty', 'r+').catch(() => null);
     if (ttyHandle) {

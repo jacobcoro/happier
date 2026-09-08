@@ -4,9 +4,66 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { openSqliteDatabaseSync } from '@/utils/sqlite/sqliteSync';
 import { verifyResumeReachableCodex } from './verifyResumeReachableCodex';
 
 describe('verifyResumeReachableCodex', () => {
+  it('repairs the exact stale shared SQLite rollout path after locating the promoted rollout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-sqlite-'));
+    const vendorResumeId = '019f2339-9299-7e51-b192-9751a0a03586';
+    const otherVendorResumeId = '019f2339-9299-7e51-b192-9751a0a03587';
+    const codexHome = join(root, 'codex-home');
+    const sqliteHome = join(root, 'shared-sqlite');
+    const stalePath = join(root, 'removed-materialized-home', 'sessions', `rollout-${vendorResumeId}.jsonl`);
+    const otherStalePath = join(root, 'removed-materialized-home', 'sessions', `rollout-${otherVendorResumeId}.jsonl`);
+    const foundPath = join(
+      codexHome,
+      'sessions',
+      '2026',
+      '09',
+      '07',
+      `rollout-2026-09-07T10-00-00-${vendorResumeId}.jsonl`,
+    );
+
+    try {
+      await mkdir(join(codexHome, 'sessions', '2026', '09', '07'), { recursive: true });
+      await mkdir(sqliteHome, { recursive: true });
+      await writeFile(foundPath, '{}\n');
+
+      const databasePath = join(sqliteHome, 'state_5.sqlite');
+      const database = openSqliteDatabaseSync(databasePath);
+      try {
+        database.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)');
+        database.prepare('INSERT INTO threads (id, rollout_path) VALUES (?, ?)').run(vendorResumeId, stalePath);
+        database.prepare('INSERT INTO threads (id, rollout_path) VALUES (?, ?)').run(otherVendorResumeId, otherStalePath);
+      } finally {
+        database.close();
+      }
+
+      await expect(verifyResumeReachableCodex({
+        targetMaterializedRoot: root,
+        targetMaterializedEnv: {
+          CODEX_HOME: codexHome,
+          CODEX_SQLITE_HOME: sqliteHome,
+        },
+        vendorResumeId,
+        cwd: root,
+      })).resolves.toEqual({ ok: true, resolvedPath: foundPath });
+
+      const verifiedDatabase = openSqliteDatabaseSync(databasePath);
+      try {
+        expect(verifiedDatabase.prepare('SELECT rollout_path FROM threads WHERE id = ?').get(vendorResumeId))
+          .toEqual({ rollout_path: foundPath });
+        expect(verifiedDatabase.prepare('SELECT rollout_path FROM threads WHERE id = ?').get(otherVendorResumeId))
+          .toEqual({ rollout_path: otherStalePath });
+      } finally {
+        verifiedDatabase.close();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('returns ok=true when candidatePersistedSessionFile exists', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-candidate-'));
     try {

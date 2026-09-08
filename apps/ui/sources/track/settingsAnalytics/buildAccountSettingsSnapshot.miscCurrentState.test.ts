@@ -92,6 +92,7 @@ describe('buildAccountSettingsSnapshot', () => {
                 pushEnabled: false,
                 ready: false,
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
                 permissionRequest: false,
                 userActionRequest: false,
                 foregroundBehavior: 'silent',

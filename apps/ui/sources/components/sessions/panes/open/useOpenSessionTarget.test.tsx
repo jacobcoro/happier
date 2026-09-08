@@ -155,6 +155,26 @@ describe('useOpenSessionTarget', () => {
         expect(observedState?.scopes?.['session:s1']?.right?.isOpen ?? false).toBe(false);
     });
 
+    it('reveals a file without replacing its existing details tab', async () => {
+        const screen = await renderScreen(<AppPaneProvider><OpenerHost target={{ kind: 'file', path: 'src/a.ts' }} /><Probe /></AppPaneProvider>);
+        await pressTestInstanceAsync(screen.findByTestId('open')!, 'open');
+        const details = observedState.scopes['session:s1'].details;
+        await screen.update(<AppPaneProvider><OpenerHost target={{ kind: 'fileBrowser', revealPath: 'src/a.ts' }} /><Probe /></AppPaneProvider>);
+        await pressTestInstanceAsync(screen.findByTestId('open')!, 'open');
+        const scope = observedState.scopes['session:s1'];
+        expect(scope.right.activeTabId).toBe('files');
+        expect(scope.right.tabState.files.revealRequest).toEqual({ path: 'src/a.ts' });
+        expect(scope.details).toBe(details);
+    });
+
+    it('opens Changes in the existing source control pane', async () => {
+        const screen = await renderScreen(<AppPaneProvider><OpenerHost target={{ kind: 'sourceControl' }} /><Probe /></AppPaneProvider>);
+        await pressTestInstanceAsync(screen.findByTestId('open')!, 'open');
+        const scope = observedState.scopes['session:s1'];
+        expect(scope.right.activeTabId).toBe('git');
+        expect(scope.right.tabState.git.activeSubTabId).toBe('commit');
+    });
+
     it('does nothing at all for a target that resolves nowhere', async () => {
         layoutState.deviceType = 'phone';
         layoutState.platformOS = 'ios';

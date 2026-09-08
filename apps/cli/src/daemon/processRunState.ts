@@ -21,8 +21,9 @@ export function isPidAliveBySignal(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Access denial or an unrecognized probe failure does not establish process death.
+    return !(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH');
   }
 }
 

@@ -31,7 +31,7 @@ function authGroupResponse(activeProfileId: string, generation: number) {
       serviceId: 'openai-codex',
       groupId: 'main',
       displayName: null,
-      policy: { v: 1, autoSwitch: true },
+      policy: { v: 1, autoSwitch: true, autoUseQuotaResetsWhenExhausted: true },
       activeProfileId,
       generation,
       runtimeStateRevision: 0,
@@ -79,10 +79,14 @@ describe('ApiClient connected service auth groups v3', () => {
 
     expect(group?.activeProfileId).toBe('primary');
     expect(group?.generation).toBe(1);
+    expect(group?.policy.autoUseQuotaResetsWhenExhausted).toBe(true);
     expect(axios.get).toHaveBeenCalledWith(
       expect.stringContaining('/v3/connect/openai-codex/groups/main'),
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
   });
@@ -114,7 +118,10 @@ describe('ApiClient connected service auth groups v3', () => {
     expect(axios.get).toHaveBeenCalledWith(
       expect.stringContaining('/v3/connect/openai-codex/groups'),
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
     expect(String((axios.get as any).mock.calls[0]?.[0])).not.toContain('/groups/undefined');
@@ -220,7 +227,10 @@ describe('ApiClient connected service auth groups v3', () => {
       expect.stringContaining('/v3/connect/openai-codex/groups/main/active-profile'),
       { profileId: 'backup', expectedGeneration: 1 },
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
   });
@@ -245,7 +255,10 @@ describe('ApiClient connected service auth groups v3', () => {
       expect.stringContaining('/v3/connect/openai-codex/groups/main/active-profile'),
       { profileId: 'backup', expectedGeneration: 1, overrideRuntimeCooldown: true },
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
   });
@@ -290,7 +303,10 @@ describe('ApiClient connected service auth groups v3', () => {
         ],
       },
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
   });
@@ -328,7 +344,10 @@ describe('ApiClient connected service auth groups v3', () => {
       expect.stringContaining('/v3/connect/openai-codex/groups/main/runtime-state'),
       { memberStates: [] },
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
   });
@@ -388,20 +407,29 @@ describe('ApiClient connected service auth groups v3', () => {
       expect.stringContaining('/v3/connect/openai-codex/groups/main/members'),
       { profileId: 'backup', priority: 50, expectedGeneration: 1 },
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
     expect(axios.patch).toHaveBeenCalledWith(
       expect.stringContaining('/v3/connect/openai-codex/groups/main/members/backup'),
       { enabled: false, expectedGeneration: 2 },
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
       }),
     );
     expect(axios.delete).toHaveBeenCalledWith(
       expect.stringContaining('/v3/connect/openai-codex/groups/main/members/backup'),
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer happy-token',
+          accept: 'application/json; happier-connected-service-auto-quota-reset=1',
+        }),
         params: { expectedGeneration: 3 },
       }),
     );

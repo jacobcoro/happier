@@ -24,6 +24,8 @@ function handleModelList(msg) {
     writeFileSync(process.env.HAPPIER_FAKE_CODEX_APP_SERVER_ENV_CAPTURE_FILE, JSON.stringify({
       CODEX_HOME: process.env.CODEX_HOME ?? null,
       CODEX_SQLITE_HOME: process.env.CODEX_SQLITE_HOME ?? null,
+      HAPPIER_FAKE_PROFILE_MARKER: process.env.HAPPIER_FAKE_PROFILE_MARKER ?? null,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? null,
       CODEX_AUTH_FILE_PRESENT: typeof process.env.CODEX_HOME === 'string'
         ? existsSync(join(process.env.CODEX_HOME, 'auth.json'))
         : false,

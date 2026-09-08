@@ -1,11 +1,14 @@
 import * as React from 'react';
-import { ScrollView, View } from 'react-native';
-import { FileActionToolbar, type FileDiffMode, type FileDisplayMode } from '@/components/sessions/files/file/FileActionToolbar';
+import { useOpenSessionTarget } from '@/components/sessions/panes/open/useOpenSessionTarget';
+import { FileBrowserToolbarIconButton } from '@/components/ui/filesystemBrowser/FileBrowserToolbar';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Pressable, ScrollView, View } from 'react-native';
+import { FileActionToolbar, type FileDisplayMode } from '@/components/sessions/files/file/FileActionToolbar';
 import { FileContentPanel } from '@/components/sessions/files/file/FileContentPanel';
 import { FileDownloadButton } from '@/components/sessions/files/file/FileDownloadButton';
 import { FileBinaryState, FileErrorState, FileLoadingState } from '@/components/sessions/files/file/FileScreenState';
+import { SessionPaneLazyLoader } from '@/components/sessions/panes/SessionPaneLazyLoader';
 import { FileEditorPanel } from '@/components/sessions/files/file/editor/FileEditorPanel';
-import { RichMarkdownEditorPanel } from '@/components/ui/markdown/editor/RichMarkdownEditorPanel';
 import { ScmChangeDiscardButton } from '@/components/sessions/sourceControl/changes/ScmChangeDiscardButton';
 import {
     useSessionsReady,
@@ -25,14 +28,15 @@ import { t } from '@/text';
 import { buildFileLineSelectionFingerprint, canStartLineSelection, canUseLineSelection } from '@/scm/scmLineSelection';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
 import { allowsLiveStaging, isAtomicCommitStrategy } from '@/scm/settings/commitStrategy';
-import { resolveDefaultDiffModeForFile } from '@/scm/diff/defaultMode';
+import { useFileDetailsDiffMode } from '@/scm/diff/useFileDetailsDiffMode';
+import { buildScmDiffSnapshotSignature } from '@/scm/diffCache/scmDiffCacheKey';
 import { useFileScmStageActions } from '@/hooks/session/files/useFileScmStageActions';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 import type { ScmDiffArea } from '@happier-dev/protocol';
 import type { ReviewCommentAnchor, ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
-import { refreshSessionFileDetails, type SessionFileDetailsFileContent } from './sessionFileDetails/refreshSessionFileDetails';
+import { useSessionFileDetailsLoading } from './sessionFileDetails/useSessionFileDetailsLoading';
 import { useSessionFileEditorState } from './sessionFileDetails/useSessionFileEditorState';
 import { useMarkdownFileEditMode } from './sessionFileDetails/useMarkdownFileEditMode';
 import { useWorkspaceReviewCommentDraftHandlers } from '@/components/sessions/reviews/comments/useWorkspaceReviewCommentDraftHandlers';
@@ -48,6 +52,9 @@ import { useSessionFileDownloadAvailability } from '@/components/sessions/files/
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
 import { extractSelectedDiffLineKeysFromPatch } from '@/scm/scmPatchSelection';
+const loadRichMarkdownEditorPanel = async () =>
+    (await import('@/components/ui/markdown/editor/RichMarkdownEditorPanel')).RichMarkdownEditorPanel;
+
 export type SessionFileDeepLinkAnchor = Readonly<{
     source: ReviewCommentSource;
     anchor: ReviewCommentAnchor;
@@ -59,6 +66,7 @@ export type SessionFileDetailsViewProps = Readonly<{
     filePath: string;
     deepLinkAnchor?: SessionFileDeepLinkAnchor | null;
     presentation?: 'screen' | 'panel';
+    isActive?: boolean;
     /**
      * Optional hook for outer shells (like DetailsPanel) to preserve editor-like semantics.
      * For example: auto-pin a preview tab when the user begins editing.
@@ -73,10 +81,13 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const constrainWidth = presentation === 'screen';
     const sessionId = props.sessionId;
     const pane = useAppPaneScope(props.scopeId);
+    const reviewScope = useWorkspaceScopeForSession(sessionId);
+    const openTarget = useOpenSessionTarget({ sessionId, scopeId: props.scopeId, serverId: reviewScope?.serverId });
     const setDetailsTabState = pane.setDetailsTabState;
     const filePath = props.filePath;
     const deepLinkAnchor = props.deepLinkAnchor ?? null;
     const tabKey = React.useMemo(() => `file:${filePath}`, [filePath]);
+    const isActive = props.isActive ?? presentation === 'screen';
     const persistedDraft = pane.scopeState?.details?.tabState?.[tabKey] as any as
         | Readonly<{ isEditingFile: boolean; editorOriginalText: string; editorOriginalHash?: string | null; editorText: string }>
         | null
@@ -127,19 +138,28 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         [filePath, scmSnapshot]
     );
     const hasConflicts = scmSnapshot?.hasConflicts === true;
+    const snapshotSignature = React.useMemo(() => scmSnapshot ? buildScmDiffSnapshotSignature(scmSnapshot) : null, [scmSnapshot]);
 
-    const [fileContent, setFileContent] = React.useState<SessionFileDetailsFileContent | null>(null);
-    const [diffContent, setDiffContent] = React.useState<string | null>(null);
     const [displayMode, setDisplayMode] = React.useState<FileDisplayMode>(() => (
-        persistedDraft?.isEditingFile ? 'file' : 'diff'
+        persistedDraft?.isEditingFile || deepLinkAnchor?.source === 'file' ? 'file' : 'diff'
     ));
-    const [diffMode, setDiffMode] = React.useState<FileDiffMode>('pending');
-    const [isLoading, setIsLoading] = React.useState(true);
+    const displayRequestKey = `${props.scopeId}:${filePath}:${deepLinkKey}`;
+    const [displayRequest, setDisplayRequest] = React.useState<{ key: string; mode: FileDisplayMode } | null>(null);
+    const requestedDisplayMode = displayRequest?.key === displayRequestKey ? displayRequest.mode : null;
+    const onDisplayMode = React.useCallback((mode: FileDisplayMode) => {
+        setDisplayRequest({ key: displayRequestKey, mode });
+        setDisplayMode(mode);
+    }, [displayRequestKey]);
+    const [diffMode, setDiffMode] = useFileDetailsDiffMode({
+        fileKey: `${sessionId}:${filePath}`,
+        snapshot: scmSnapshot,
+        backendOverrides: scmDefaultDiffModeByBackend as Record<string, ScmDiffArea> | undefined,
+        hasIncludedDelta: fileEntry?.hasIncludedDelta === true,
+        hasPendingDelta: fileEntry?.hasPendingDelta === true,
+    });
     const [selectedLineKeys, setSelectedLineKeys] = React.useState<Set<string>>(new Set());
     const [commitSelectionModeActive, setCommitSelectionModeActive] = React.useState(false);
     const [reviewCommentModeActive, setReviewCommentModeActive] = React.useState(false);
-    const [error, setError] = React.useState<string | null>(null);
-    const [fileWriteSupported, setFileWriteSupported] = React.useState(true);
     const [jumpToAnchor, setJumpToAnchor] = React.useState<ReviewCommentAnchor | null>(deepLinkAnchor?.anchor ?? null);
 
     const hasIncludedDelta = fileEntry?.hasIncludedDelta === true;
@@ -162,6 +182,17 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         () => buildFileLineSelectionFingerprint(fileEntry),
         [fileEntry]
     );
+    const { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, refreshAll } = useSessionFileDetailsLoading({
+        sessionId, filePath, diffMode, sessionsReady, sessionPath,
+        fileEntryKind: fileEntry?.kind ?? null,
+        fileHasIncludedDelta: fileEntry?.hasIncludedDelta,
+        imagePreviewMaxBytes: filesImagePreviewMaxBytes,
+        includeDiff: displayMode === 'diff' && (scmSnapshot == null || fileEntry != null),
+        includeFile: displayMode !== 'diff',
+        snapshotSignature,
+        isActive,
+        refreshFingerprint: `${lineSelectionFingerprint ?? 'none'}:${scmSnapshot?.fetchedAt ?? 'none'}`,
+    });
     const lineSelectionEnabled = canUseLineSelection({
         scmWriteEnabled,
         includeExcludeEnabled,
@@ -184,16 +215,6 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const effectiveLineSelectionEnabled = lineSelectionEnabled && commitSelectionModeActive;
 
     React.useEffect(() => {
-        const resolved = resolveDefaultDiffModeForFile({
-            snapshot: scmSnapshot,
-            backendOverrides: scmDefaultDiffModeByBackend as Record<string, ScmDiffArea> | undefined,
-            hasIncludedDelta,
-            hasPendingDelta,
-        });
-        setDiffMode(resolved);
-    }, [hasIncludedDelta, hasPendingDelta, scmDefaultDiffModeByBackend, scmSnapshot]);
-
-    React.useEffect(() => {
         setSelectedLineKeys(new Set());
         setCommitSelectionModeActive(false);
     }, [diffMode, diffContent, lineSelectionFingerprint]);
@@ -205,79 +226,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         }
     }, [lineSelectionCanStart]);
 
-    const hasLoadedOnceRef = React.useRef(false);
-    const refreshAll = React.useCallback(async (options?: Readonly<{ background?: boolean }>) => {
-        const background = options?.background === true && hasLoadedOnceRef.current === true;
-        let keepLoading = false;
-        try {
-            if (!background) {
-                setIsLoading(true);
-                setError(null);
-            }
-
-            const result = await refreshSessionFileDetails({
-                sessionId,
-                filePath,
-                diffMode,
-                sessionsReady,
-                sessionPath,
-                fileEntryKind: fileEntry?.kind ?? null,
-                imagePreviewMaxBytes: filesImagePreviewMaxBytes,
-            });
-
-            if (result.status === 'waiting') {
-                // Keep the loading state while session metadata is still hydrating.
-                keepLoading = true;
-                return;
-            }
-
-            setDiffContent(result.diffContent);
-            setFileContent(result.fileContent);
-            setFileWriteSupported(result.fileWriteSupported);
-            hasLoadedOnceRef.current = true;
-            if (result.error) {
-                setError(result.error);
-                return;
-            }
-
-            // Editor state (if enabled) syncs to the latest file content in a dedicated hook.
-        } catch (err) {
-            const message = err instanceof Error ? err.message : t('files.fileReadFailed');
-            setError(message);
-        } finally {
-            if (!keepLoading) {
-                if (!background) {
-                    setIsLoading(false);
-                }
-            }
-        }
-    }, [diffMode, fileEntry?.kind, filePath, filesImagePreviewMaxBytes, sessionId, sessionPath, sessionsReady]);
-
-    React.useEffect(() => {
-        void refreshAll();
-    }, [refreshAll]);
-
     const isBinaryFile = fileContent?.isBinary === true;
-    const snapshotRefreshKey = scmSnapshot?.fetchedAt ?? null;
-    const fileRefreshFingerprint = React.useMemo(
-        () => `${lineSelectionFingerprint ?? 'none'}:${snapshotRefreshKey ?? 'none'}`,
-        [lineSelectionFingerprint, snapshotRefreshKey],
-    );
-    const lastFingerprintRef = React.useRef<string | null>(null);
-    React.useEffect(() => {
-        const fingerprint = fileRefreshFingerprint;
-        if (lastFingerprintRef.current === null) {
-            lastFingerprintRef.current = fingerprint;
-            return;
-        }
-        if (!hasLoadedOnceRef.current) {
-            lastFingerprintRef.current = fingerprint;
-            return;
-        }
-        if (lastFingerprintRef.current === fingerprint) return;
-        lastFingerprintRef.current = fingerprint;
-        void refreshAll({ background: true });
-    }, [fileRefreshFingerprint, refreshAll]);
 
     React.useEffect(() => {
         if (!deepLinkAnchor) {
@@ -345,7 +294,6 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         && fileContent?.isBinary !== true
         && typeof fileContent?.content === 'string';
     const syntaxHighlighting = useCodeLinesSyntaxHighlighting(filePath);
-    const reviewScope = useWorkspaceScopeForSession(sessionId);
     const reviewCommentsEnabled = reviewCommentsFeatureEnabled === true && Boolean(reviewScope);
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(reviewScope);
     const reviewDraftHandlers = useWorkspaceReviewCommentDraftHandlers(reviewScope);
@@ -394,12 +342,15 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const {
         markdownEditMode,
         richEligible: markdownRichEligible,
+        richEligibilityPending: markdownRichEligibilityPending,
         richDisabledReason: markdownRichDisabledReason,
         seedText: markdownSeedText,
         resetKey: markdownResetKey,
         onToggle: onMarkdownEditMode,
         onUnavailable: onMarkdownEditorUnavailable,
     } = useMarkdownFileEditMode({
+        isActive,
+        isEditing: isEditingFile,
         filePath,
         editorSeedText,
         editorResetKey,
@@ -427,13 +378,14 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
             fileIsBinary: isBinaryFile,
         });
         setDisplayMode(resolveFileDetailsDisplayMode({
+            requestedMode: requestedDisplayMode,
             persistedEditing: isEditingFile || persistedDraft?.isEditingFile === true,
             deepLinkSource: deepLinkAnchor?.source ?? null,
             hasRenderableDiff,
             hasFileContent: Boolean(fileContent),
             markdownPreviewAvailable,
         }));
-    }, [deepLinkAnchor?.source, diffContent, fileContent, filePath, hasIncludedDelta, hasPendingDelta, isBinaryFile, isEditingFile, persistedDraft?.isEditingFile]);
+    }, [requestedDisplayMode, deepLinkAnchor?.source, diffContent, fileContent, filePath, hasIncludedDelta, hasPendingDelta, isBinaryFile, isEditingFile, persistedDraft?.isEditingFile]);
 
     const handleStartEditingFile = React.useCallback(() => {
         props.onStartEditingFile?.();
@@ -494,20 +446,22 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
             fullPath: fileEntry.path,
             status: fileEntry.kind,
             isIncluded: useIncludedStats,
+            hasIncludedDelta: fileEntry.hasIncludedDelta,
             linesAdded: useIncludedStats ? fileEntry.stats.includedAdded : fileEntry.stats.pendingAdded,
             linesRemoved: useIncludedStats ? fileEntry.stats.includedRemoved : fileEntry.stats.pendingRemoved,
             oldPath: fileEntry.previousPath ?? undefined,
             isBinary: fileEntry.stats.isBinary,
+            isComplete: fileEntry.stats.isComplete,
         };
     }, [fileEntry]);
 
     const previewTooLarge = error === t('files.fileTooLargeToPreview');
-    const fatalError = Boolean(error) && !previewTooLarge;
+    const fatalError = Boolean(error) && !previewTooLarge && !diffContent && !fileContent;
     const binaryImagePreview = useSessionImagePreview({
         sessionId,
         filePath,
-        enabled: fileContent?.isBinary === true && typeof fileContent.binaryMime === 'string' && fileContent.binaryMime.startsWith('image/'),
-        cacheKey: lineSelectionFingerprint,
+        enabled: isActive && fileContent?.isBinary === true && typeof fileContent.binaryMime === 'string' && fileContent.binaryMime.startsWith('image/'),
+        cacheKey: snapshotSignature ?? lineSelectionFingerprint,
         mimeType: fileContent?.binaryMime ?? null,
         sizeBytes: fileContent?.binarySizeBytes ?? null,
     });
@@ -515,6 +469,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     React.useEffect(() => {
         if (!previewTooLarge) return;
         if (displayMode !== 'file' && displayMode !== 'markdown') return;
+        setDisplayRequest(null);
         setDisplayMode('diff');
     }, [displayMode, previewTooLarge]);
 
@@ -529,8 +484,14 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const imagePreviewUri = binaryImagePreview.status === 'loaded' ? binaryImagePreview.uri : null;
     const imagePreviewSvgXml = binaryImagePreview.status === 'loaded' ? binaryImagePreview.svgXml : null;
     const fileHeaderRightElement =
-        showDownloadAction || (fileStatusForHeaderActions && scmWriteEnabled && (scmSnapshot?.capabilities?.writeDiscard === true)) ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
+                <FileBrowserToolbarIconButton testID="file-header-reveal" accessibilityRole="button" accessibilityLabel={t('files.revealInFiles')} onPress={() => openTarget({ kind: 'fileBrowser', revealPath: filePath })}>
+                    <Icon name="folder" size={16} color={theme.colors.text.secondary} />
+                </FileBrowserToolbarIconButton>
+                <FileBrowserToolbarIconButton testID="file-header-open-changes" accessibilityRole="button" accessibilityLabel={t('files.openChanges')} onPress={() => openTarget({ kind: 'sourceControl' })}>
+                    <Icon name="git-branch" size={16} color={theme.colors.text.secondary} />
+                </FileBrowserToolbarIconButton>
                 {showDownloadAction ? (
                     <FileDownloadButton
                         testID="file-header-download"
@@ -552,7 +513,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     />
                 ) : null}
             </View>
-        ) : null;
+        );
 
     return (
         <View style={[styles.container, { backgroundColor: theme.colors.surface.base }]}>
@@ -568,10 +529,10 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     filePathDir={filePathDir}
                     rightElement={fileHeaderRightElement}
                     displayMode={displayMode}
-                    onDisplayMode={setDisplayMode}
+                    onDisplayMode={onDisplayMode}
                     showDiffToggle={resolveShowDiffToggle({ diffContent, hasPendingDelta, hasIncludedDelta, fileIsBinary: isBinaryFile })}
-                    showFileToggle={Boolean(fileContent)}
-                    showMarkdownToggle={markdownPreviewAvailable}
+                    showFileToggle={!previewTooLarge && fileEntry?.kind !== 'deleted'}
+                    showMarkdownToggle={(language === 'markdown' || language === 'mdx') && !isBinaryFile && !previewTooLarge && fileEntry?.kind !== 'deleted'}
                     showWrapLinesToggle={!isBinaryFile && !previewTooLarge && displayMode !== 'markdown'}
                     diffMode={diffMode}
                     onDiffMode={setDiffMode}
@@ -596,7 +557,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     onClearSelection={onClearSelection}
                     onStartLineSelection={onStartLineSelection}
                     onToggleCommentMode={onToggleReviewCommentMode}
-                    fileEditorEnabled={editorSurfaceEnabled && !editorTooLarge && !editorChunkTooLarge && !isBinaryFile}
+                    fileEditorEnabled={editorSurfaceEnabled && !editorTooLarge && !editorChunkTooLarge && !isBinaryFile && fileEntry?.kind !== 'deleted'}
                     isEditingFile={isEditingFile}
                     fileEditorDirty={editorDirty}
                     fileEditorBusy={isSavingEdits}
@@ -609,7 +570,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     markdownRichEligible={markdownRichEligible}
                     markdownRichDisabledReason={markdownRichDisabledReason}
                 />
-                {previewTooLarge && error ? (
+                {error ? (
                     <View
                         testID="file-preview-unavailable-banner"
                         style={styles.noticeBanner}
@@ -617,6 +578,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                         <Text style={styles.noticeBannerText}>
                             {error}
                         </Text>
+                        <Pressable accessibilityRole="button" onPress={onRefresh}>
+                            <Text style={styles.noticeBannerText}>{t('common.retry')}</Text>
+                        </Pressable>
                     </View>
                 ) : null}
                 {fileChangedExternally ? (
@@ -639,7 +603,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     ...(constrainWidth ? { maxWidth: layout.maxWidth, alignSelf: 'center' } : { maxWidth: '100%' }),
                 }}
             >
-                {displayMode === 'file' && isEditingFile && showMarkdownEditToggle ? (
+                {(displayMode === 'diff' && !diffContent && isDiffLoading) || (displayMode !== 'diff' && !fileContent && !error) ? (
+                    <FileLoadingState theme={theme} filePath={filePath} />
+                ) : displayMode === 'file' && isEditingFile && showMarkdownEditToggle ? (
                     // Plain `.md` editing: Raw<->Rich can swap, so crossfade the body
                     // switch keyed on `markdownEditMode` (R-A20 / §4.5). Only the active
                     // child mounts while not transitioning, so the surface tree stays
@@ -648,15 +614,21 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                         contentKey={markdownEditMode}
                         direction={markdownEditMode === 'rich' ? 'forward' : 'backward'}
                     >
-                        {useRichMarkdownEditor ? (
-                            <RichMarkdownEditorPanel
-                                resetKey={markdownResetKey}
-                                editorRef={editorHandleRef}
-                                value={markdownSeedText}
-                                onChange={onEditorChange}
-                                onUnavailable={onMarkdownEditorUnavailable}
-                                changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}
-                                bridgeMaxChunkBytes={typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined}
+                        {markdownEditMode === 'rich' && markdownRichEligibilityPending ? (
+                            <FileLoadingState theme={theme} filePath={filePath} />
+                        ) : useRichMarkdownEditor ? (
+                            <SessionPaneLazyLoader
+                                testID="file-details-rich-editor-loading"
+                                load={loadRichMarkdownEditorPanel}
+                                props={{
+                                    resetKey: markdownResetKey,
+                                    editorRef: editorHandleRef,
+                                    value: markdownSeedText,
+                                    onChange: onEditorChange,
+                                    onUnavailable: onMarkdownEditorUnavailable,
+                                    changeDebounceMs: typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined,
+                                    bridgeMaxChunkBytes: typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined,
+                                }}
                             />
                         ) : (
                             <FileEditorPanel

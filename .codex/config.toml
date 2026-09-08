@@ -1,0 +1,23 @@
+project_doc_max_bytes = 98304
+
+developer_instructions = """
+# Codex-only subagent context policy
+
+- Every subagent spawn must set fork_turns explicitly; never rely on the tool default.
+- Default to fork_turns="none".
+- Use a small bounded value such as "1", "2", or "3" only when specific recent turns are required.
+- Use fork_turns="all" only for a true continuation that requires the complete parent transcript, and state why in the spawn brief.
+- With fork_turns="none", give a detailed self-contained brief: goal, observed evidence, exact paths/symbols, success criteria, constraints/permissions, required validation, expected output, and stop/fallback rules.
+- Refer to large logs and artifacts by path with a short digest; do not paste them into the child brief.
+
+# Codex Code Mode tool staging
+
+- Put already-known, necessary, independent, non-conflicting nested tool calls in one bounded `exec` cell. Use `Promise.all(...)` when any failure makes the stage unusable; use `Promise.allSettled(...)` when partial results remain useful, and inspect every rejection.
+- Use a later `exec` cell when the next call depends on an earlier result, the work is adaptive, an approval or wait is pending, or operations conflict over shared mutable state.
+- Keep bulky nested results inside the isolate when possible. Emit one compact decision-relevant projection through `text(...)`, preserving failures, exact evidence pointers, paths, IDs or handles, and output needed for verification. Do not emit complete result objects or raw output unless required or requested.
+- Do not add speculative calls, broaden the investigation, or invoke tools whose results will not affect the decision merely because batching makes more calls cheap.
+"""
+
+[mcp_servers.sentry]
+type = "http"
+url = "https://mcp.sentry.dev/mcp"

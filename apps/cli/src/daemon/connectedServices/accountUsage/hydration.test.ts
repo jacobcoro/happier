@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildProviderAccountUsageRecordId,
   ProviderAccountUsageSnapshotV1Schema,
+  sealProviderAccountUsageSnapshot,
   type ConnectedServiceUsageSourceV1,
   type ProviderAccountUsageSnapshotV1,
 } from '@happier-dev/protocol';
@@ -71,6 +72,31 @@ describe('hydrateProviderAccountUsageStoreFromCurrentSources', () => {
     groupId: 'team',
     groupGeneration: 4,
   } as const satisfies ConnectedServiceUsageSourceV1;
+
+  it('hydrates independently encrypted subscription observations for the proven current source', async () => {
+    const snapshot = {
+      ...createUsageSnapshot(),
+      subscription: { status: 'none' as const, renewal: 'unknown' as const, observedAtMs: 1_700_000_000_000, staleAfterMs: 60_000 },
+    };
+    const store = createProviderAccountUsageStore();
+    const sealed = sealProviderAccountUsageSnapshot({
+      snapshot,
+      material: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
+      randomBytes: (length) => new Uint8Array(length).fill(9),
+    });
+    await hydrateProviderAccountUsageStoreFromCurrentSources({
+      sources: [source],
+      resolveRecordIdForSource: async () => createSourceResolution(snapshot),
+      api: {
+        getAccountEncryptionMode: async () => 'e2ee',
+        getProviderAccountUsageSnapshotSealed: async () => ({ sealed, sources: [source] }),
+      },
+      credentials: createCredentials(),
+      store,
+      nowMs: snapshot.fetchedAtMs + 1,
+    });
+    expect(store.resolveBySource(source)?.subscription).toEqual(snapshot.subscription);
+  });
 
   it('passively hydrates a fresh canonical record only after exact current-source proof', async () => {
     const snapshot = createUsageSnapshot();

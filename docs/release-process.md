@@ -85,6 +85,16 @@ separate approval input must remain false. That go-ahead must name the selected 
 candidate whose evidence was reviewed. Do not substitute a branch name or a
 moving channel pointer for the exact SHA.
 
+Run private release authority on the configured macOS host, where Keychain and
+native release prerequisites live. An agent already operating on that host may
+invoke the provisioned `hmaint` executable directly even when the repository
+path is a mounted VM workspace. An agent operating inside the managed Linux VM
+must keep source work in the VM and use the configured Stack `mac-host`
+execution/broker path; credentials must never be copied into the VM. Confirm
+the transport with `yarn ghops auth status` and confirm repository identity with
+real paths and exact Git SHAs—similarly named host and VM checkouts are not
+interchangeable.
+
 Before changelog/version materialization, the release agent runs
 `node scripts/pipeline/run.mjs release-analyze ...` over the actual source
 range and completes the semantic compatibility review while inspecting that
@@ -125,7 +135,28 @@ Notes:
 
 - Urgent path (avoid preview): `confirm=release dev to main` (or `reset main from dev`). Because that candidate comes from `dev`, it advances only snapshotted `stage:source` and `stage:dev` issues to `stage:stable`; it does not claim that unrelated preview-only corrections were included.
 
-Issue availability is tracked by the mutually exclusive `stage:source`, `stage:dev`, `stage:preview`, and `stage:stable` labels documented in `docs/issue-triage.md`. Ordinary current-`dev` nightlies perform `source → dev`; preview and production releases perform the transitions above. Failed and dry-run releases move nothing. The reconciler re-reads each snapshotted issue, preserves unrelated labels, and skips closed or manually restaged issues. It never comments on or closes an issue.
+### Combined preview and production release (dev → both)
+
+When the same approved source must ship to preview and production without a
+second operator cycle, use the private conductor target
+`preview-and-production`. The target dispatches
+`release-preview-and-production.yml`, which snapshots source/dev issue
+eligibility once and invokes the canonical `release.yml` for both channels in
+parallel.
+
+The two calls share the exact authorized source, release notes, and successful
+CI run. They deliberately do not share built artifacts: preview and production
+embed different feature-policy environments and therefore require distinct
+candidate bytes. Same-channel releases still serialize, while the two channel
+calls use separate non-cancelling concurrency groups. Issues advance directly
+to `stage:stable` only after both channel workflows succeed.
+
+Use GitHub's failed-job rerun when workflow control is unchanged. If control
+changes, resume the combined operation from its prior run; each channel reads
+its own terminal status artifact and reuses only the verified work for that
+channel.
+
+Issue availability is tracked by the mutually exclusive `stage:source`, `stage:dev`, `stage:preview`, and `stage:stable` labels documented in `docs/issue-triage.md`. Ordinary current-`dev` nightlies perform `source → dev`; preview, production, and combined releases perform the transitions above. Failed and dry-run releases move nothing. The reconciler re-reads each snapshotted issue, preserves unrelated labels, and skips closed or manually restaged issues. It never comments on or closes an issue.
 
 Deploy branches typically include `deploy/<env>/ui`, `deploy/<env>/server`, `deploy/<env>/website`, and `deploy/<env>/docs` (depending on what changed and which options you select).
 

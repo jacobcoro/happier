@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,6 +23,7 @@ import type { createUserScopedSocket } from './sockets';
 type SessionSocketTransportResult = ReturnType<typeof createSessionSocketTransport>;
 type UserScopedSocket = ReturnType<typeof createUserScopedSocket>;
 let sessionSocketStub: ApiSessionSocketStub | null = null;
+let sessionSocketStubFactory: (() => ApiSessionSocketStub) | null = null;
 let userSocketStub: ApiSessionSocketStub | null = null;
 let supervisorConnect: null | (() => Promise<void>) = null;
 let supervisorControl: null | Readonly<{
@@ -30,6 +32,10 @@ let supervisorControl: null | Readonly<{
   stop(): Promise<void>;
 }> = null;
 let supervisorConnectedTransitions = 0;
+let useRealSupervisor = false;
+let transportCreationCount = 0;
+let sessionConnectionGate: Promise<void> | null = null;
+let disconnectSessionTransport: (() => void) | null = null;
 let tempHomeDir: string | null = null;
 const originalHappyHomeDir = process.env.HAPPIER_HOME_DIR;
 
@@ -55,16 +61,33 @@ vi.mock('./sockets', () => ({
 
 vi.mock('./connection/createSessionSocketTransport', () => ({
   createSessionSocketTransport: () => {
-    if (!sessionSocketStub) throw new Error('Missing session socket stub');
+    transportCreationCount += 1;
+    const transportSocketStub = sessionSocketStubFactory?.() ?? sessionSocketStub;
+    if (!transportSocketStub) throw new Error('Missing session socket stub');
+    sessionSocketStub = transportSocketStub;
+    let connectedListener: (() => void) | null = null;
     const transportResult: SessionSocketTransportResult = {
-      socket: sessionSocketStub as unknown as SessionSocketTransportResult['socket'],
+      socket: transportSocketStub as unknown as SessionSocketTransportResult['socket'],
       transport: {
-        connect: async () => {},
+        connect: async () => {
+          if (sessionConnectionGate) await sessionConnectionGate;
+          transportSocketStub.connected = true;
+          connectedListener?.();
+        },
         disconnect: async () => {},
         destroy: async () => {},
-        isConnected: () => sessionSocketStub?.connected === true,
-        onConnected: () => () => {},
-        onDisconnected: () => () => {},
+        isConnected: () => transportSocketStub.connected === true,
+        onConnected: (listener) => {
+          connectedListener = listener;
+          return () => { connectedListener = null; };
+        },
+        onDisconnected: (listener) => {
+          disconnectSessionTransport = () => {
+            transportSocketStub.connected = false;
+            listener({ reason: 'transport close' });
+          };
+          return () => { disconnectSessionTransport = null; };
+        },
         onError: () => () => {},
       },
     };
@@ -72,30 +95,36 @@ vi.mock('./connection/createSessionSocketTransport', () => ({
   },
 }));
 
-vi.mock('@happier-dev/connection-supervisor', () => ({
-  DEFAULT_MANAGED_CONNECTION_POLICY: {},
-  createManagedConnectionSupervisor: (params: { createTransport: () => unknown; onConnected?: () => Promise<void> | void }) => {
-    let phase = 'idle';
-    supervisorConnect = async () => {
-      params.createTransport();
-      phase = 'online';
-      supervisorConnectedTransitions += 1;
-      await params.onConnected?.();
-    };
-    supervisorControl = {
-      start: async () => {
-        if (phase === 'online' || phase === 'connecting') return;
-        phase = 'connecting';
-        await supervisorConnect?.();
-      },
-      getState: () => ({ phase }),
-      stop: async () => {
-        phase = 'shutting_down';
-      },
-    };
-    return supervisorControl;
-  },
-}));
+vi.mock('@happier-dev/connection-supervisor', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@happier-dev/connection-supervisor')>();
+  return {
+    DEFAULT_MANAGED_CONNECTION_POLICY: actual.DEFAULT_MANAGED_CONNECTION_POLICY,
+    createManagedConnectionSupervisor: (params: { createTransport: () => unknown; onConnected?: () => Promise<void> | void }) => {
+      if (useRealSupervisor) {
+        return actual.createManagedConnectionSupervisor(params as Parameters<typeof actual.createManagedConnectionSupervisor>[0]);
+      }
+      let phase = 'idle';
+      supervisorConnect = async () => {
+        params.createTransport();
+        phase = 'online';
+        supervisorConnectedTransitions += 1;
+        await params.onConnected?.();
+      };
+      supervisorControl = {
+        start: async () => {
+          if (phase === 'online' || phase === 'connecting') return;
+          phase = 'connecting';
+          await supervisorConnect?.();
+        },
+        getState: () => ({ phase }),
+        stop: async () => {
+          phase = 'shutting_down';
+        },
+      };
+      return supervisorControl;
+    },
+  };
+});
 
 async function useTempHappyHome(): Promise<string> {
   tempHomeDir = await mkdtemp(join(tmpdir(), 'happier-cli-session-outbox-'));
@@ -149,7 +178,12 @@ describe('ApiSessionClient durable mutation outbox', () => {
     supervisorConnect = null;
     supervisorControl = null;
     supervisorConnectedTransitions = 0;
+    useRealSupervisor = false;
+    transportCreationCount = 0;
+    sessionConnectionGate = null;
+    disconnectSessionTransport = null;
     sessionSocketStub = null;
+    sessionSocketStubFactory = null;
     userSocketStub = null;
     await useTempHappyHome();
   });
@@ -179,11 +213,20 @@ describe('ApiSessionClient durable mutation outbox', () => {
     await client.close();
   });
 
-  it('withholds current pending materialization until the initial Runtime Activity publisher snapshot is acknowledged', async () => {
+  it.each([
+    { recoverFeatures: false, bindLifecycleBeforeConnection: false, replaceSocketOnReconnect: false },
+    { recoverFeatures: true, bindLifecycleBeforeConnection: false, replaceSocketOnReconnect: false },
+    { recoverFeatures: false, bindLifecycleBeforeConnection: true, replaceSocketOnReconnect: false },
+    { recoverFeatures: false, bindLifecycleBeforeConnection: true, replaceSocketOnReconnect: true },
+  ])('withholds pending materialization until Runtime Activity acknowledgement ($recoverFeatures transient failure, $bindLifecycleBeforeConnection early lifecycle, $replaceSocketOnReconnect replacement socket)', async ({ recoverFeatures, bindLifecycleBeforeConnection, replaceSocketOnReconnect }) => {
+    useRealSupervisor = true;
+    const connectionReady = createDeferred<void>();
+    if (bindLifecycleBeforeConnection) sessionConnectionGate = connectionReady.promise;
     const featuresResponse = createDeferred<Response>();
     const fetchFeatures = vi.fn(async () => await featuresResponse.promise);
+    if (recoverFeatures) fetchFeatures.mockRejectedValueOnce(new TypeError('temporary network failure'));
     vi.stubGlobal('fetch', fetchFeatures);
-    const currentFeaturesResponse = new Response(JSON.stringify({
+    const currentFeaturesResponseBody = JSON.stringify({
       features: {
         sharing: {
           pendingQueueV2: { enabled: true },
@@ -193,10 +236,10 @@ describe('ApiSessionClient durable mutation outbox', () => {
       capabilities: {
         session: {
           runtimeActivity: { protocolVersion: 2 },
-          pendingInput: { protocolVersion: 1 },
+          pendingInput: { protocolVersion: bindLifecycleBeforeConnection ? 2 : 1 },
         },
       },
-    }), { status: 200 });
+    });
 
     const runtimeActivityAck = createDeferred<void>();
     const runtimeActivityRequest = createDeferred<Readonly<{
@@ -206,9 +249,10 @@ describe('ApiSessionClient durable mutation outbox', () => {
     }>>();
     let pendingMaterializeCount = 0;
     let publisherRegistered = false;
-    sessionSocketStub = createApiSessionSocketStub({
-      id: 'session-socket-current',
-      connected: true,
+    let activitySnapshotCount = 0;
+    const createSessionSocket = (id: string, connected: boolean) => createApiSessionSocketStub({
+      id,
+      connected,
       emit: (event, args) => {
         if (event !== 'ping') return;
         const callback = args[0];
@@ -217,11 +261,12 @@ describe('ApiSessionClient durable mutation outbox', () => {
       emitWithAck: async (event, payload) => {
         if (event === 'ping') return { v: 1 };
         if (event === 'session-runtime-activity-snapshot') {
+          activitySnapshotCount += 1;
           const request = payload as Awaited<typeof runtimeActivityRequest.promise>;
           runtimeActivityRequest.resolve(request);
           await runtimeActivityAck.promise;
           return {
-            status: 'applied',
+            status: activitySnapshotCount === 1 ? 'applied' : 'unchanged',
             sessionId: request.sessionId,
             mutationId: request.mutationId,
             projection: {
@@ -250,9 +295,25 @@ describe('ApiSessionClient durable mutation outbox', () => {
         throw new Error(`Unexpected session socket ACK event: ${event}`);
       },
     });
+    const initialSessionSocketStub = createSessionSocket(
+      'session-socket-initial',
+      !bindLifecycleBeforeConnection,
+    );
+    const replacementSessionSocketStub = createSessionSocket('session-socket-replacement', false);
+    sessionSocketStub = initialSessionSocketStub;
+    if (replaceSocketOnReconnect) {
+      sessionSocketStubFactory = () => (
+        transportCreationCount === 1
+          ? initialSessionSocketStub
+          : replacementSessionSocketStub
+      );
+    }
     userSocketStub = createApiSessionSocketStub({ id: 'user-socket', connected: false });
 
     const { ApiSessionClient } = await import('./sessionClient');
+    const lifecycle = bindLifecycleBeforeConnection
+      ? await (await import('@/agent/runtime/initializeBackendRunSession')).createBackendRunRuntimeActivityLifecycle(undefined)
+      : null;
     const fixture = createPlainSessionFixture({
       id: 's1',
       pendingCount: 1,
@@ -262,19 +323,35 @@ describe('ApiSessionClient durable mutation outbox', () => {
     const client = new ApiSessionClient('tok', {
       ...fixture,
       metadata: { ...fixture.metadata, machineId: 'machine-1' },
-    });
+    }, lifecycle?.clientConfig());
 
+    if (lifecycle) {
+      await lifecycle.attachSession(client);
+      expect(fetchFeatures).not.toHaveBeenCalled();
+      connectionReady.resolve();
+    } else {
+      await expect.poll(() => fetchFeatures).toHaveBeenCalledTimes(1);
+      await client.getRuntimeActivitySnapshotPublisher().publish({ state: 'idle', activeCount: 0 });
+    }
     await expect.poll(() => fetchFeatures).toHaveBeenCalledTimes(1);
-    await client.getRuntimeActivitySnapshotPublisher().publish({
-      state: 'idle',
-      activeCount: 0,
-    });
-    featuresResponse.resolve(currentFeaturesResponse);
+    if (recoverFeatures) {
+      await expect.poll(() => (
+        (client as unknown as {
+          sessionSyncPendingInputServerContract: { mode?: unknown } | null;
+        }).sessionSyncPendingInputServerContract?.mode
+      )).toBe('indeterminate');
+    }
+    featuresResponse.resolve(new Response(currentFeaturesResponseBody, { status: 200 }));
+    const recoveryMaterialization = recoverFeatures
+      ? client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })
+      : null;
     await expect.poll(() => sessionSocketStub?.emitWithAck.mock.calls.map((call) => call[0]), {
       timeout: 5_000,
     }).toContain('session-runtime-activity-snapshot');
     await runtimeActivityRequest.promise;
-    const beforePublisherAck = await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
+    const beforePublisherAck = recoverFeatures
+      ? null
+      : await client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
     const materializationsBeforePublisherAck = pendingMaterializeCount;
 
     publisherRegistered = true;
@@ -284,13 +361,36 @@ describe('ApiSessionClient durable mutation outbox', () => {
         sessionSyncPendingInputServerContract: { mode?: unknown } | null;
       }).sessionSyncPendingInputServerContract?.mode
     )).toBe('session_sync_v2_pending_input_v1');
-    await expect(client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' }))
+    if (lifecycle) {
+      const axiosBoundary = (await import('axios')).default;
+      vi.mocked(axiosBoundary.get).mockResolvedValue({ status: 200, data: {} });
+      fetchFeatures.mockImplementation(async () => new Response(currentFeaturesResponseBody, { status: 200 }));
+      expect(disconnectSessionTransport).not.toBeNull();
+      disconnectSessionTransport?.();
+      await expect.poll(() => activitySnapshotCount, { timeout: 10_000 }).toBe(2);
+      await expect.poll(() => (
+        (client as unknown as {
+          sessionSyncPendingInputServerContract: { sessionConnectionEpoch?: number } | null;
+        }).sessionSyncPendingInputServerContract?.sessionConnectionEpoch
+      ), { timeout: 10_000 }).toBe(2);
+      expect((client as unknown as { sessionMutationOutbox: {
+        readRuntimeActivitySnapshotTail(): unknown;
+      } }).sessionMutationOutbox.readRuntimeActivitySnapshotTail()).toMatchObject({
+        custody: null,
+        settlement: { result: 'unchanged', committedRevision: 1 },
+      });
+      expect(await readPersistedOutboxMutationCount('s1')).toBe(0);
+    }
+    await expect(recoveryMaterialization ?? client.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' }))
       .resolves.toEqual({ type: 'no_pending' });
 
+    await lifecycle?.dispose();
     await client.close();
-    expect(beforePublisherAck).toMatchObject({ type: 'retryable_transport' });
+    if (!recoverFeatures) expect(beforePublisherAck).toMatchObject({ type: 'retryable_transport' });
     expect(materializationsBeforePublisherAck).toBe(0);
     expect(pendingMaterializeCount).toBe(1);
+    expect(transportCreationCount).toBe(lifecycle ? 2 : 1);
+    expect(fetchFeatures).toHaveBeenCalledTimes(recoverFeatures || lifecycle ? 2 : 1);
   });
 
   it('does not queue a terminal session turn mutation when no turn is active', async () => {
@@ -1148,20 +1248,22 @@ describe('ApiSessionClient durable mutation outbox', () => {
     await client.close();
   });
 
-  it('keeps unsupported old-preview session turn mutations queued without emitting update-state', async () => {
+  it('keeps unsupported old-preview session turn mutations queued without a lifecycle state fallback', async () => {
     const originalBaseRetryMs = process.env.HAPPIER_SESSION_MUTATION_OUTBOX_BASE_RETRY_MS;
     const originalJitterMs = process.env.HAPPIER_SESSION_MUTATION_OUTBOX_JITTER_MS;
     process.env.HAPPIER_SESSION_MUTATION_OUTBOX_BASE_RETRY_MS = '60000';
     process.env.HAPPIER_SESSION_MUTATION_OUTBOX_JITTER_MS = '0';
     vi.mocked(axios.post).mockRejectedValue({ response: { status: 404 } });
     const deliveredEvents: string[] = [];
+    const agentStateUpdates: unknown[] = [];
+    const questionCapability = { capabilities: { structuredQuestionAnswersV1Supported: true } };
     let sessionTurnMutationAttempts = 0;
     const { logger } = await import('@/ui/logger');
     const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
     sessionSocketStub = createApiSessionSocketStub({
       connected: true,
       emitWithAck: async (event: string, payload: unknown) => {
-        deliveredEvents.push(event);
+        if (event !== 'update-state') deliveredEvents.push(event);
         if (event === 'session-turn-mutation') {
           sessionTurnMutationAttempts += 1;
           if (sessionTurnMutationAttempts === 1) return { ok: true };
@@ -1169,6 +1271,11 @@ describe('ApiSessionClient durable mutation outbox', () => {
         }
         if (event === 'update-state') {
           const updateStatePayload = payload as { agentState: unknown; expectedVersion: number };
+          const agentState: unknown = JSON.parse(String(updateStatePayload.agentState));
+          agentStateUpdates.push(agentState);
+          // Session permission setup independently publishes this capability. Every
+          // other state write remains forbidden by the lifecycle fallback assertion.
+          if (!isDeepStrictEqual(agentState, questionCapability)) deliveredEvents.push(event);
           return {
             result: 'success',
             agentState: updateStatePayload.agentState,
@@ -1211,10 +1318,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
           && mutations[0].attempts >= 1
         );
       });
-      expect(sessionSocketStub.emitWithAck).not.toHaveBeenCalledWith(
-        'update-state',
-        expect.anything(),
-      );
+      expect(agentStateUpdates).toEqual([questionCapability]);
       const unsupportedDiagnostics = debugSpy.mock.calls.filter(([message]) =>
         message === '[API] Session turn mutation unsupported by server; keeping durable outbox mutation queued'
       );

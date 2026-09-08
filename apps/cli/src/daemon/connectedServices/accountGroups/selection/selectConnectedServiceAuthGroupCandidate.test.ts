@@ -9,10 +9,48 @@ import {
   reconcileMemberRuntimeStateWithFreshQuotaEvidence,
   reconcileMemberRuntimeStateWithPositiveEvidence,
   selectConnectedServiceAuthGroupCandidate,
+  resolveConnectedServiceAuthGroupQuotaResetCandidates,
   type ConnectedServiceAuthGroupMemberRuntimeState,
 } from './selectConnectedServiceAuthGroupCandidate';
 
 const basePolicy = DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1;
+
+describe('quota reset admission', () => {
+  const exhausted: ConnectedServiceAuthGroupMemberRuntimeState = {
+    quotaSnapshot: {
+      capturedAtMs: 900,
+      effectiveRemainingPercent: 0,
+      meters: [{ meterId: 'weekly', limitCategory: 'usage_limit', remainingPct: 0, resetAtMs: 100_000, providerLimitId: null }],
+    },
+  };
+  const resolve = (backup: ConnectedServiceAuthGroupMemberRuntimeState) => resolveConnectedServiceAuthGroupQuotaResetCandidates({
+    nowMs: 1_000,
+    quotaFreshnessMs: 60_000,
+    activeProfileId: 'primary',
+    policy: basePolicy,
+    members: [member('primary', 1, 1), member('backup', 2, 2)],
+    memberStatesByProfileId: new Map([['primary', exhausted], ['backup', backup]]),
+  });
+
+  it('admits exhausted usable accounts including the current member, but not reconnect-required members', () => {
+    expect(resolve(exhausted).map((candidate) => candidate.profileId)).toEqual(['primary', 'backup']);
+    expect(resolve({ ...exhausted, credentialHealthStatus: 'needs_reauth' }).map((candidate) => candidate.profileId)).toEqual(['primary']);
+  });
+
+  it('does not turn unknown evidence, transient cooldown, or capacity backoff into quota exhaustion', () => {
+    expect(resolve({})).toEqual([]);
+    expect(resolve({ cooldownUntilMs: 2_000 })).toEqual([]);
+    expect(resolve({ capacityLimitedUntilMs: 2_000 })).toEqual([]);
+    expect(resolve({ ...exhausted, quotaSnapshot: { ...exhausted.quotaSnapshot!, capturedAtMs: 0 } })).toHaveLength(2);
+    expect(resolve({ ...exhausted, quotaSnapshot: { ...exhausted.quotaSnapshot!, capturedAtMs: -100_000 } })).toEqual([]);
+  });
+
+  it('does not spend a usage reset for a rate-limit-only exhausted member', () => {
+    expect(resolve({ quotaSnapshot: { capturedAtMs: 900, effectiveRemainingPercent: 0, meters: [
+      { meterId: 'requests', limitCategory: 'rate_limit', remainingPct: 0, resetAtMs: 2_000, providerLimitId: null },
+    ] } })).toEqual([]);
+  });
+});
 
 function member(profileId: string, priority: number, createdAtMs: number) {
   return {

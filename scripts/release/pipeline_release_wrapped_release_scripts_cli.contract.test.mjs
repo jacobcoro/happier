@@ -111,3 +111,33 @@ test('release-sync-installers check is hermetic and never reads release secrets'
   assert.match(out, /"ok": true/);
   assert.match(out, /"checkOnly": true/);
 });
+
+test('release component planning is hermetic and never reads release secrets', () => {
+  const out = execFileSync(
+    process.execPath,
+    [
+      resolve(repoRoot, 'scripts', 'pipeline', 'run.mjs'),
+      'release-compute-versioned-component-changes',
+      '--secrets-source',
+      'keychain',
+      '--keychain-service',
+      'happier-test-missing-keychain-bundle',
+      '--environment',
+      'production',
+      '--head',
+      'HEAD',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    },
+  );
+
+  const result = JSON.parse(out);
+  assert.match(result.changed_app, /^(?:true|false)$/);
+  assert.match(result.changed_cli, /^(?:true|false)$/);
+  assert.match(result.changed_stack, /^(?:true|false)$/);
+  assert.match(result.changed_server, /^(?:true|false)$/);
+});

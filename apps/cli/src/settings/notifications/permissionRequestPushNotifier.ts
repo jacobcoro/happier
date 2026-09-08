@@ -1,4 +1,4 @@
-import type { AccountSettings } from '@happier-dev/protocol';
+import { summarizeToolInputForNotification, type AccountSettings } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
 import { resolveAgentRequestKind, type AgentRequestKind } from '@/agent/permissions/requestKind';
@@ -8,7 +8,6 @@ import { setBoundedMap } from '@/utils/collections/lru';
 import {
   sendAgentRequestPushNotificationAsync,
   type PermissionRequestPushSender,
-  summarizeToolInputForPushNotification,
 } from './permissionRequestPush';
 import { shouldSendPermissionRequestPushNotification, shouldSendUserActionRequestPushNotification } from './notificationsPolicy';
 
@@ -95,7 +94,7 @@ export class PermissionRequestPushNotifier {
     const now = this.nowMs();
     const createdAtMs = typeof params.createdAtMs === 'number' ? params.createdAtMs : now;
     const kind = params.requestKind ?? resolveAgentRequestKind(params.toolName);
-    const toolDetails = summarizeToolInputForPushNotification(params.toolName, params.toolInput);
+    const toolDetails = summarizeToolInputForNotification(params.toolName, params.toolInput);
 
     const existing = this.entries.get(params.permissionId) ?? null;
     if (existing) {

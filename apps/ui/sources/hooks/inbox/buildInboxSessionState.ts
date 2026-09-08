@@ -120,6 +120,7 @@ export function buildInboxSessionState(input: BuildInboxSessionStateInput): Inbo
     const attentionSessionIds = new Set<string>();
 
     for (const session of sessions) {
+        if (session.archivedAt != null) continue;
         if (!isUserFacingSession(session)) continue;
         const messages = readMessagesForInboxSession(sessionMessagesById, session.id);
         const pendingPermissions = listPendingPermissionRequests(session, messages);
@@ -163,6 +164,7 @@ export function hasInboxSessionContent(input: BuildInboxSessionStateInput): bool
     const attentionSessionIds = new Set<string>();
 
     for (const session of sessions) {
+        if (session.archivedAt != null) continue;
         if (!isUserFacingSession(session)) continue;
         const messages = readMessagesForInboxSession(sessionMessagesById, session.id);
         const pendingPermissions = listPendingPermissionRequests(session, messages);
@@ -198,6 +200,7 @@ export function hasInboxSessionContentForRecords(input: InboxSessionContentRecor
     const attentionSessionIds = new Set<string>();
 
     forEachRecordValue(input.sessionsById, (session) => {
+        if (session.archivedAt != null) return;
         if (!isUserFacingSession(session)) return;
         const messages = readMessagesForInboxSession(input.sessionMessagesById, session.id);
         const pendingPermissions = listPendingPermissionRequests(session, messages);

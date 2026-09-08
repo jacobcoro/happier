@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { ConnectedServiceAuthGroupPolicyV1Schema, type ConnectedServiceAuthGroupV1 } from '@happier-dev/protocol';
 
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
-import { buildConnectedServiceAuthGroupSwitchState } from './buildConnectedServiceAuthGroupSwitchState';
+import {
+  buildConnectedServiceAuthGroupSwitchState,
+  mergePersistedMemberRuntimeState,
+} from './buildConnectedServiceAuthGroupSwitchState';
 
 function groupWithPersistedState(state: ConnectedServiceAuthGroupV1['members'][number]['state']): ConnectedServiceAuthGroupV1 {
   return {
@@ -34,6 +37,24 @@ function groupWithPersistedState(state: ConnectedServiceAuthGroupV1['members'][n
 }
 
 describe('buildConnectedServiceAuthGroupSwitchState', () => {
+  it('preserves the failure-associated reset boundary when a healthy snapshot reports the next window', () => {
+    expect(mergePersistedMemberRuntimeState({
+      providerResetsAtMs: 20_000,
+      quotaSnapshot: {
+        capturedAtMs: 11_000,
+        effectiveRemainingPercent: 60,
+      },
+    }, {
+      providerResetsAtMs: 10_000,
+      lastFailureKind: 'usage_limit',
+      lastObservedAtMs: 9_000,
+    })).toMatchObject({
+      providerResetsAtMs: 10_000,
+      lastFailureKind: 'usage_limit',
+      lastObservedAtMs: 9_000,
+    });
+  });
+
   it('preserves recognized persisted member runtime state used by candidate selection', () => {
     const switchState = buildConnectedServiceAuthGroupSwitchState({
       group: groupWithPersistedState({

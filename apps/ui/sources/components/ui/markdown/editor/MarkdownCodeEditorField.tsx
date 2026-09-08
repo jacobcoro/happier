@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { CodeEditor } from '@/components/ui/code/editor/CodeEditor';
 import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
@@ -95,6 +96,7 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
     const {
         markdownEditMode,
         richEligible,
+        richEligibilityPending,
         richDisabledReason,
         resetKey,
         showToggle,
@@ -108,7 +110,11 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
         onValueChange: props.onChange,
     });
 
-    const showRich = markdownEditMode === 'rich' && richEligible;
+    // Keep an already-mounted rich surface through an asynchronous HTML check;
+    // replacing it with loading could drop its still-debounced input.
+    const committedRich = React.useRef(false);
+    const showRich = markdownEditMode === 'rich' && (richEligible || (richEligibilityPending && committedRich.current));
+    React.useEffect(() => { committedRich.current = showRich; }, [showRich]);
 
     // Live controller of the embedded rich surface — set when the rich panel
     // mounts, cleared when it unmounts (or when we switch to raw). Drives the
@@ -166,7 +172,9 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                 </View>
             ) : null}
             <View style={{ flex: 1 }}>
-                {showRich ? (
+                {markdownEditMode === 'rich' && richEligibilityPending && !showRich ? (
+                    <ActivitySpinner size="small" />
+                ) : showRich ? (
                     <RichMarkdownEditorPanel
                         resetKey={resetKey}
                         editorRef={editorHandleRef}

@@ -5,6 +5,7 @@ import { backoff } from '@/utils/timing/time';
 
 import {
   ProviderAccountUsageRecordIdSchema,
+  PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
   SealedProviderAccountUsageSnapshotV1Schema,
   type ProviderAccountUsageRecordId,
   type SealedProviderAccountUsageSnapshotV1,
@@ -50,6 +51,7 @@ export async function getProviderAccountUsageSnapshotSealed(
         headers: {
           Authorization: `Bearer ${credentials.token}`,
           'Content-Type': 'application/json',
+          Accept: PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
         },
       },
       { includeAuth: false },

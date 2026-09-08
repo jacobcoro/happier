@@ -12,6 +12,7 @@ import { useSetting } from '@/sync/domains/state/storage';
 import type { UnifiedDiffViewerProps } from '../diffViewerTypes';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 
+import { mapCodeReadingAnchors } from '@/components/ui/code/model/mapCodeReadingAnchor';
 import { collapseUnifiedDiffContext } from './collapseUnifiedDiffContext';
 import { UnifiedDiffFoldToggleRow } from './UnifiedDiffFoldToggleRow';
 
@@ -24,12 +25,6 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
     const contextRadius = useSetting('filesDiffFoldingContextRadius') ?? 0;
     const intraLineDiff = useIntraLineWordDiffConfig();
 
-    const [expandedRegionIds, setExpandedRegionIds] = React.useState<Set<string>>(() => new Set());
-
-    React.useEffect(() => {
-        setExpandedRegionIds(new Set());
-    }, [props.unifiedDiff]);
-
     const lines = React.useMemo(() => {
         if (props.precomputedLines) return props.precomputedLines;
         return buildCodeLinesFromUnifiedDiff({
@@ -38,6 +33,23 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
             intraLineDiff,
         });
     }, [intraLineDiff, props.precomputedLines, props.unifiedDiff]);
+
+    const [expansion, setExpansion] = React.useState(() => ({
+        filePath: props.filePath,
+        lines,
+        indices: new Set<number>(),
+    }));
+    // Reconcile before committing children so refreshed context never flashes closed.
+    if (expansion.filePath !== props.filePath || expansion.lines !== lines) {
+        const indices = expansion.filePath === props.filePath && expansion.indices.size > 0
+            ? new Set(mapCodeReadingAnchors(
+                expansion.lines.map((line) => `${line.kind}:${line.renderCodeText}`),
+                lines.map((line) => `${line.kind}:${line.renderCodeText}`),
+                [...expansion.indices],
+            ).filter((index): index is number => index !== null))
+            : new Set<number>();
+        setExpansion({ filePath: props.filePath, lines, indices });
+    }
 
     const canFold = foldingEnabled
         && !props.onPressAddComment
@@ -50,14 +62,14 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
             lines,
             contextThreshold,
             contextRadius,
-            expandedRegionIds,
+            expandedLineIndices: expansion.indices,
         });
-    }, [canFold, contextRadius, contextThreshold, expandedRegionIds, lines]);
+    }, [canFold, contextRadius, contextThreshold, expansion.indices, lines]);
 
     const foldRegionsByAfterLineId = React.useMemo(() => {
-        const map = new Map<string, { id: string; hiddenCount: number }>();
+        const map = new Map<string, { hiddenStartIndex: number; hiddenCount: number }>();
         for (const region of folded.regions) {
-            map.set(region.afterLineId, { id: region.id, hiddenCount: region.hiddenCount });
+            map.set(region.afterLineId, { hiddenStartIndex: region.hiddenStartIndex, hiddenCount: region.hiddenCount });
         }
         return map;
     }, [folded.regions]);
@@ -69,10 +81,12 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
             <UnifiedDiffFoldToggleRow
                 hiddenCount={region.hiddenCount}
                 onPressExpand={() => {
-                    setExpandedRegionIds((prev) => {
-                        const next = new Set(prev);
-                        next.add(region.id);
-                        return next;
+                    setExpansion((prev) => {
+                        const indices = new Set(prev.indices);
+                        for (let index = region.hiddenStartIndex; index < region.hiddenStartIndex + region.hiddenCount; index += 1) {
+                            indices.add(index);
+                        }
+                        return { ...prev, indices };
                     });
                 }}
             />
@@ -98,6 +112,8 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 showLineNumbers={props.showLineNumbers}
                 showPrefix={props.showPrefix}
                 scrollToLineId={props.scrollToLineId}
+                onScrollToLine={props.onScrollToLine}
+                externalScrollView={props.externalScrollView}
                 highlightLineId={props.highlightLineId}
                 highlightLineIds={props.highlightLineIds}
                 syntaxHighlighting={syntaxHighlighting}

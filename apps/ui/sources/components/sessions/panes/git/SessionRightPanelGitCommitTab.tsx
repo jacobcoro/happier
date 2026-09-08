@@ -354,12 +354,6 @@ const COMMIT_CHANGED_FILES_WINDOW_SIZE = 5;
 const repositoryChangedFileKeyExtractor = (file: ScmFileStatus) => `repo-all-${file.fullPath}`;
 const selectedChangedFileKeyExtractor = (file: ScmFileStatus) => `selected-${file.fullPath}`;
 
-const compactScmChangeRowWebItemLayout = (_data: unknown, index: number) => {
-    // ScmChangeRow in compact density is effectively fixed-height on web.
-    // Providing a layout hint improves RN-web VirtualizedList performance with large diffs.
-    const length = 38;
-    return { length, offset: length * index, index };
-};
 
 const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
     const themeBorderDefault = props.theme.colors.border?.default ?? props.theme.colors.divider;
@@ -778,7 +772,6 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                 onContentSizeChange={scrollFades.onContentSizeChange}
                 onScroll={scrollFades.onScroll}
                 scrollEventThrottle={16}
-                getItemLayout={Platform.OS === 'web' ? compactScmChangeRowWebItemLayout : undefined}
             />
 
             <ScrollEdgeFades

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+import { AppPaneProvider, useAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
 
@@ -20,12 +21,12 @@ installSessionDetailsPanelCommonModuleMocks({
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
     },
-    storage: async (importOriginal) => {
-        const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
-        return {
-            ...actual,
+    storage: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
+            useLocalSetting: () => 'preview',
             useSettings: () => ({}),
-        };
+        });
     },
 });
 
@@ -37,34 +38,30 @@ vi.mock('@/components/sessions/panes/git/SessionRightPanelGitView', () => ({
     SessionRightPanelGitView: (props: any) => React.createElement('SessionRightPanelGitView', props),
 }));
 
-const scopeState: any = {
-    right: {
-        isOpen: true,
-        activeTabId: 'git',
-    },
-};
+function InitializedPaneProvider(props: React.PropsWithChildren) {
+    return (
+        <AppPaneProvider>
+            <InitializePaneScope>{props.children}</InitializePaneScope>
+        </AppPaneProvider>
+    );
+}
 
-vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
-    useAppPaneScope: () => {
-        const [, bump] = React.useState(0);
-        return {
-            scopeState,
-            openRight: vi.fn(),
-            setRightTab: (tabId: string) => {
-                scopeState.right.activeTabId = tabId;
-                bump((v) => v + 1);
-            },
-            closeRight: vi.fn(),
-            openDetailsTab: vi.fn(),
-        };
-    },
-}));
+function InitializePaneScope(props: React.PropsWithChildren) {
+    const { dispatch } = useAppPaneContext();
+    React.useLayoutEffect(() => {
+        dispatch({ type: 'openRight', scopeId: 'session:s1', tabId: 'git' });
+    }, [dispatch]);
+    return props.children;
+}
 
 describe('SessionRightPanel (keep mounted tabs)', () => {
     it('keeps Git and Files tab surfaces mounted so switching tabs preserves state', async () => {
         const { SessionRightPanel } = await import('./SessionRightPanel');
 
-        const screen = await renderScreen(<SessionRightPanel sessionId="s1" scopeId="session:s1" />);
+        const screen = await renderScreen(
+            <SessionRightPanel sessionId="s1" scopeId="session:s1" />,
+            { wrapper: InitializedPaneProvider },
+        );
 
         const getStyleValue = (node: ReactTestInstance, key: string) => {
             const styles = Array.isArray(node.props.style) ? node.props.style : [node.props.style];

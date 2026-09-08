@@ -12,6 +12,7 @@ import type {
   TerminalPromptWriteBoundaryV1,
 } from '../terminalHost/_types';
 import { delay } from '@/utils/time';
+import { logger } from '@/ui/logger';
 
 import { createTmuxTerminalControlPort } from './control';
 import { resolveTmuxPromptSubmitDelayMs } from './env';
@@ -93,10 +94,19 @@ export function createTmuxTerminalHostAdapter(params?: Readonly<{
 
   async function evaluateLiveness(handle: TerminalHostHandle) {
     const handleTmux = tmuxForHandle(handle);
-    return evaluateTmuxPaneLiveness({
-      target: targetFromHandle(handle),
+    const target = targetFromHandle(handle);
+    logger.debug('[TMUX] Liveness probe starting', { target });
+    const result = await evaluateTmuxPaneLiveness({
+      target,
       executor: (args) => handleTmux.executeTmuxCommand([...args]),
     });
+    logger.debug('[TMUX] Liveness probe completed', {
+      target,
+      paneAlive: result.paneAlive,
+      paneDead: result.paneDead ?? null,
+      probeInconclusive: result.probeInconclusive ?? false,
+    });
+    return result;
   }
 
   async function captureInputState(handle: TerminalHostHandle): Promise<TerminalInputState> {
@@ -107,19 +117,28 @@ export function createTmuxTerminalHostAdapter(params?: Readonly<{
     // the bottom line.
     const target = targetFromHandle(handle);
     const handleTmux = tmuxForHandle(handle);
+    logger.debug('[TMUX] Input capture starting', { target });
     try {
       const firstInput = await handleTmux.captureCurrentInput(target);
       const firstCursor = await handleTmux.captureCursorPosition(target);
       await delay(INPUT_STABILITY_DELAY_MS);
       const currentInput = await handleTmux.captureCurrentInput(target);
       const cursor = await handleTmux.captureCursorPosition(target);
-      return {
+      const result = {
         stable: firstInput === currentInput && cursorPositionsEqual(firstCursor, cursor),
         currentInput,
         ...(cursor !== null ? { cursor } : {}),
         observedAt: Date.now(),
       };
+      logger.debug('[TMUX] Input capture completed', {
+        target,
+        stable: result.stable,
+        textLength: result.currentInput.length,
+        hasCursor: cursor !== null,
+      });
+      return result;
     } catch {
+      logger.warn('[TMUX] Input capture failed', { target });
       return {
         stable: false,
         currentInput: '',

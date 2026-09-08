@@ -629,6 +629,7 @@ export interface Machine {
 //
 
 export interface ScmStatus {
+    isComplete?: boolean;
     branch: string | null;
     isDirty: boolean;
     modifiedCount: number;
@@ -661,6 +662,7 @@ export type ScmEntryKind =
     | 'conflicted';
 
 export interface ScmPathStats {
+    isComplete?: boolean;
     includedAdded: number;
     includedRemoved: number;
     pendingAdded: number;
@@ -784,6 +786,7 @@ export interface ScmWorkingSnapshot {
     hasConflicts: boolean;
     entries: ScmWorkingEntry[];
     totals: {
+        isComplete?: boolean;
         includedFiles: number;
         pendingFiles: number;
         untrackedFiles: number;

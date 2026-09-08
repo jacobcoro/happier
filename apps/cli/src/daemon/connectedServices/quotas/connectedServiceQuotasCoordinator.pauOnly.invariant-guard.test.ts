@@ -221,4 +221,86 @@ describe('ConnectedServiceQuotasCoordinator PAU-only invariant guard', () => {
       },
     });
   });
+
+  it('lets the canonical selector evaluate primary restoration while the active backup is above threshold', async () => {
+    const now = 1_000_000;
+    const accountUsageStore = createProviderAccountUsageStore();
+    for (const [profileId, remainingPct] of [['primary', 60], ['backup', 80]] as const) {
+      accountUsageStore.recordSnapshot(buildProviderAccountUsageSnapshot({
+        profileId,
+        now,
+        remainingPct,
+      }), {
+        sources: [{
+          serviceId: 'openai-codex',
+          profileId,
+          bindingKind: 'group_member',
+          groupId: 'team',
+          groupGeneration: 1,
+        }],
+      });
+    }
+    const group = buildGroup();
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api: {
+        getConnectedServiceAuthGroup: vi.fn(async () => ({
+          ...group,
+          activeProfileId: 'backup',
+          policy: {
+            ...group.policy,
+            strategy: 'priority',
+            autoRestorePrimaryWhenReset: true,
+            softSwitchRemainingPercent: 2,
+          },
+          members: group.members.map((member) => member.profileId === 'active'
+            ? {
+                ...member,
+                profileId: 'primary',
+                state: {
+                  providerResetsAtMs: now - 1,
+                  lastFailureKind: 'usage_limit',
+                  lastObservedAtMs: now - 2,
+                },
+              }
+            : member),
+        })),
+      } as unknown as QuotaApi,
+      credentials: {
+        token: 'happy-token',
+        encryption: { type: 'legacy', secret: randomBytes(32) },
+      },
+      quotaFetchers: [],
+      accountUsageStore,
+      now: () => now,
+      randomBytes,
+      discoveryEnabled: false,
+    });
+    const resolveGroupSwitchTargetEligibility = (coordinator as unknown as {
+      resolveGroupSwitchTargetEligibility(input: Readonly<{
+        serviceId: 'openai-codex';
+        groupId: string;
+      }>): Promise<Readonly<{
+        status: string;
+        sourceProfileId?: string;
+        sourceRemainingPercent?: number;
+        sourceThresholdPercent?: number;
+        decisionTrace?: unknown;
+      }>>;
+    }).resolveGroupSwitchTargetEligibility.bind(coordinator);
+
+    await expect(resolveGroupSwitchTargetEligibility({
+      serviceId: 'openai-codex',
+      groupId: 'team',
+    })).resolves.toEqual({
+      status: 'eligible',
+      sourceProfileId: 'backup',
+      sourceRemainingPercent: 80,
+      sourceThresholdPercent: 2,
+      sourceProjected: false,
+      decisionTrace: {
+        activeProfileId: 'backup',
+        reason: 'primary_restore_evaluation',
+      },
+    });
+  });
 });

@@ -1,5 +1,6 @@
 import { buildHappyCliSubprocessLaunchSpec, type HappyCliSubprocessLaunchOptions } from '@/utils/spawnHappyCLI';
 import type { CatalogAgentId } from '@/backends/types';
+import { buildCgroupSelfMigratingHappyCliLaunchSpec } from '../linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
 
 type TmuxSpawnAgentId = CatalogAgentId | 'acp-catalog';
 
@@ -19,6 +20,8 @@ export function buildTmuxWindowEnv(
     'TSX_TSCONFIG_PATH',
     'USER',
     'LOGNAME',
+    'DBUS_SESSION_BUS_ADDRESS',
+    'XDG_RUNTIME_DIR',
   ] as const;
 
   const filteredDaemonEnv = Object.fromEntries(
@@ -30,19 +33,19 @@ export function buildTmuxWindowEnv(
   return { ...filteredDaemonEnv, ...extraEnv };
 }
 
-export function buildTmuxSpawnConfig(params: {
+export async function buildTmuxSpawnConfig(params: {
   agent: TmuxSpawnAgentId;
   directory: string;
   extraEnv: Record<string, string>;
   tmuxCommandEnv?: Record<string, string>;
   extraArgs?: string[];
   launchOptions?: HappyCliSubprocessLaunchOptions;
-}): {
+}): Promise<{
   commandTokens: string[];
   tmuxEnv: Record<string, string>;
   tmuxCommandEnv: Record<string, string>;
   directory: string;
-} {
+}> {
   const args = [
     params.agent,
     '--happy-starting-mode',
@@ -53,9 +56,12 @@ export function buildTmuxSpawnConfig(params: {
   ];
 
   const launchSpec = buildHappyCliSubprocessLaunchSpec(args, params.launchOptions);
-  const commandTokens = [launchSpec.filePath, ...launchSpec.args];
-
   const tmuxEnv = buildTmuxWindowEnv(process.env, { ...params.extraEnv, ...(launchSpec.env ?? {}) });
+  const scopedLaunchSpec = process.platform === 'linux'
+    ? await buildCgroupSelfMigratingHappyCliLaunchSpec({ launchSpec, environment: tmuxEnv })
+    : null;
+  const effectiveLaunchSpec = scopedLaunchSpec ?? launchSpec;
+  const commandTokens = [effectiveLaunchSpec.filePath, ...effectiveLaunchSpec.args];
 
   const tmuxCommandEnv: Record<string, string> = { ...(params.tmuxCommandEnv ?? {}) };
   const tmuxTmpDir = tmuxCommandEnv.TMUX_TMPDIR;
@@ -65,7 +71,7 @@ export function buildTmuxSpawnConfig(params: {
 
   return {
     commandTokens,
-    tmuxEnv,
+    tmuxEnv: { ...tmuxEnv, ...(effectiveLaunchSpec.env ?? {}) },
     tmuxCommandEnv,
     directory: params.directory,
   };

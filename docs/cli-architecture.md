@@ -237,6 +237,28 @@ flowchart TD
 3. It starts a local **control server** for IPC.
 4. It keeps a map of tracked child sessions and updates daemon state on the server.
 
+In current development, `createOnChildExited` releases session-marker evidence only
+through the tracked exit lifecycle. An exit notification for an untracked PID does
+not authorize marker deletion. Failed terminal-exit staging retains tracking and
+marker evidence; visible-console startup awaits that cleanup and reports an
+incomplete retirement rather than allowing its rejection to escape.
+
+### Model-capacity recovery (development)
+
+`TemporaryThrottleRecoveryScheduler` owns scheduling after a terminal capacity failure.
+The Codex adapter reports that terminal failure to host recovery without an extra
+immediate retry; native Codex retry-in-progress notifications remain nonterminal.
+Consecutive capacity failures wait 5, 10, 20, 40, 80, 160, then 300 seconds before
+jitter of ±20%. Provider retry/reset timing is a minimum, not a replacement for
+the backoff. The delay is capped, not the number of attempts.
+
+The capacity streak survives continuation handoff. Pending acceptance, a new turn
+id, or reconnection is not evidence of model recovery. Only an accepted completed
+turn resets the streak. A handed-off continuation has no second retry timer while
+its outcome is pending; user cancellation remains authoritative. Authentication,
+quota, and non-capacity transport recovery retain their own classifications and
+policies.
+
 ### Control server (local IPC)
 
 ```mermaid

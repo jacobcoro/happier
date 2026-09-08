@@ -1,6 +1,7 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetBrowserSessionDraftPersistenceForTest } from '@/dev/testkit';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import type { AgentInputLocalUiStateV1 } from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
@@ -170,11 +171,12 @@ async function importSessionDraftValuesPersistence() {
 }
 
 describe('useSessionAgentInputComposerPersistence', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         mmkvStore.clear();
         appStateListeners.clear();
         activeScopeState.value = { serverId: 'server-a', accountId: 'account-a' };
         vi.resetModules();
+        await resetBrowserSessionDraftPersistenceForTest();
     });
 
     afterEach(() => {

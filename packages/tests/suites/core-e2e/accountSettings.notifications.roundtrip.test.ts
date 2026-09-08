@@ -129,6 +129,7 @@ describe('core e2e: account settings notifications roundtrip', () => {
           connectedServiceQuotaRecovered: true,
         },
         readyIncludeMessageText: false,
+        requestIncludeMessageText: true,
       },
     ]);
 

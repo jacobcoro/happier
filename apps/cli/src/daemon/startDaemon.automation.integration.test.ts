@@ -680,8 +680,12 @@ vi.mock('./connectedServices/quotas/ConnectedServiceQuotasCoordinator', () => ({
   })),
 }));
 
-vi.mock('./connectedServices/quotas/createConnectedServiceQuotaFetchers', () => ({
-  createConnectedServiceQuotaFetchers: vi.fn(() => []),
+vi.mock('./connectedServices/quotas/createConnectedServiceQuotaFetchers', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./connectedServices/quotas/createConnectedServiceQuotaFetchers')>(),
+  createConnectedServiceAccountFetchers: vi.fn(() => ({
+    quotaFetchers: [],
+    subscriptionFetchers: [],
+  })),
 }));
 
 vi.mock('./connectedServices/quotas/resolveConnectedServiceQuotasDaemonOptions', () => ({

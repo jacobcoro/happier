@@ -87,12 +87,14 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
                 quotas: {
                     enabled: overrides.connectedServicesQuotasEnabled ?? false,
                 },
+                subscription: { enabled: false },
                 accountGroups: {
                     enabled: false,
                 },
                 accountFallback: {
                     enabled: false,
                 },
+                autoQuotaReset: { enabled: false },
             },
             channelBridges: {
                 enabled: false,

@@ -17,6 +17,8 @@
  * Contract pinned here: "restore-with-unmounted-anchor must materialize/wait, not no-op to top."
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { Platform } from 'react-native';
 
 import { createDeferred, renderHook } from '@/dev/testkit';
@@ -410,7 +412,7 @@ describe('useTranscriptEntryHost fallback guard', () => {
             name: 'target absent',
             result: { status: 'not_found', targetPresent: false },
         },
-    ])('does not retry durable entry restore when exact target materialization is $name', async ({ result }) => {
+    ])('does not issue a viewport command when exact target materialization is $name', async ({ result }) => {
         const originalPlatformOS = Platform.OS;
         Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
         const anchor = {
@@ -464,7 +466,93 @@ describe('useTranscriptEntryHost fallback guard', () => {
         }
     });
 
-    it('does not publish or retry an exact target result after the host session changes', async () => {
+    it('finishes an empty web entry when the saved target is conclusively absent', async () => {
+        const originalPlatformOS = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });
+        const members = createStableMembers({
+            sessionEntryViewportRef: { current: {
+                sessionId: 's1', entryKind: 'anchored', shouldFollowBottom: false, offsetY: 120,
+                anchor: { kind: 'message', messageId: 'missing', itemId: 'missing', itemOffsetPx: 0, seq: 20, capturedAtMs: 1000 },
+                sourceLastUpdatedAt: 1000, effects: [],
+            } },
+            resolveWebScrollMetrics: () => ({ clientHeight: 600, scrollHeight: 0, scrollTop: 0, element: {} as HTMLElement }),
+        });
+        members.resolveEntryRestoreOwnerAnchor.mockReturnValue({ kind: 'message', messageId: 'missing', itemId: 'missing', itemOffsetPx: 0, seq: 20 });
+        members.resolveSeqForViewportAnchor = vi.fn(() => 20);
+        members.sessionOpenLatch.arm({
+            entryKind: 'anchored', platform: 'web', sessionId: 's1', shouldFollowBottom: false,
+            isNativeFlashListBottomMaintenanceEnabled: false,
+            nowMs: Date.now(), nativeFirstPaintFallbackDelayMs: 450,
+            webInitialPinRetryDelaysMs: [], webInitialPinStabilizeMs: 0, webOpenPhaseDeadlineDelayMs: 10_000,
+        });
+        members.sessionOpenLatch.onInitialFillSettled({ sessionId: 's1', nowMs: Date.now() });
+        syncMockState.loadTargetWindowMessages.mockResolvedValue({ status: 'not_found', targetPresent: false });
+        try {
+            const hook = await renderHook((deps: EntryHostDeps) => useTranscriptEntryHost(deps), {
+                initialProps: { ...buildDeps(members), isLoaded: true, listLayoutHeight: 600 },
+            });
+            await vi.waitFor(() => expect(members.entryRestoreOwner.telemetryState('s1')).toBe('closed'));
+            expect(members.anchorLookupExhaustedRef.current).toBe(true);
+            expect(syncMockState.loadTargetWindowMessages).toHaveBeenCalledTimes(1);
+            expect(members.loadOlder).not.toHaveBeenCalled();
+            await hook.unmount();
+        } finally {
+            Object.defineProperty(Platform, 'OS', { value: originalPlatformOS, configurable: true });
+        }
+    });
+
+    it('re-drives final-page restoration after React commits its rows, not from the loading callback', async () => {
+        const originalPlatformOS = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });
+        let committedHeight = 0;
+        const page = createDeferred<NonNullable<Awaited<ReturnType<EntryHostDeps['loadOlder']>>>>();
+        const members = createStableMembers({
+            sessionEntryViewportRef: { current: {
+                sessionId: 's1', entryKind: 'anchored', shouldFollowBottom: false, offsetY: 120,
+                anchor: null, sourceLastUpdatedAt: 1000, effects: [],
+            } },
+            // DOM geometry changes with the commit, as it does for mounted web rows.
+            resolveWebScrollMetrics: () => ({ clientHeight: 600, scrollHeight: committedHeight, scrollTop: 0, element: {} as HTMLElement }),
+        });
+        const loadOlder = vi.fn(() => page.promise);
+        members.sessionOpenLatch.arm({
+            entryKind: 'anchored', platform: 'web', sessionId: 's1', shouldFollowBottom: false,
+            isNativeFlashListBottomMaintenanceEnabled: false,
+            nowMs: Date.now(), nativeFirstPaintFallbackDelayMs: 450,
+            webInitialPinRetryDelaysMs: [], webInitialPinStabilizeMs: 0, webOpenPhaseDeadlineDelayMs: 10_000,
+        });
+        members.sessionOpenLatch.onInitialFillSettled({ sessionId: 's1', nowMs: Date.now() });
+        try {
+            const hook = await renderHook(() => {
+                const [items, setItems] = React.useState<readonly ChatTranscriptListItem[]>([]);
+                React.useLayoutEffect(() => {
+                    committedHeight = items.length > 0 ? 2400 : 0;
+                    members.listDataRef.current = items;
+                }, [items]);
+                useTranscriptEntryHost({
+                    ...buildDeps(members), loadOlder, isLoaded: true, listLayoutHeight: 600,
+                    decomposedItems: items, listDataLength: items.length, displayItemsLength: items.length,
+                });
+                return setItems;
+            });
+            expect(loadOlder).toHaveBeenCalledTimes(1);
+            await act(async () => {
+                hook.getCurrent()([{ kind: 'message', id: 'tail', messageId: 'tail', createdAt: 1, seq: 20 }]);
+                page.resolve({ status: 'loaded', loaded: 1, hasMore: false });
+                // Complete the async loader while React is still batching the row update.
+                for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+                expect(members.entryRestoreOwner.telemetryState('s1')).toBe('none');
+            });
+            expect(members.executeViewportCommand).toHaveBeenCalled();
+            expect(members.closeEntryViewportOwnership).not.toHaveBeenCalled();
+            expect(loadOlder).toHaveBeenCalledTimes(1);
+            await hook.unmount();
+        } finally {
+            Object.defineProperty(Platform, 'OS', { value: originalPlatformOS, configurable: true });
+        }
+    });
+
+    it('does not publish an old exact target or release a new lookup after the session changes', async () => {
         const originalPlatformOS = Platform.OS;
         Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
         const anchor = {
@@ -514,6 +602,7 @@ describe('useTranscriptEntryHost fallback guard', () => {
             await Promise.resolve();
 
             expect(members.activeTargetWindowTargetRef.current).toBeNull();
+            expect(members.anchorLookupInFlightRef.current).toBe(true);
             expect(executeViewportCommand).not.toHaveBeenCalled();
             expect(syncMockState.loadTargetWindowMessages).toHaveBeenCalledTimes(1);
 
@@ -552,10 +641,10 @@ describe('useTranscriptEntryHost fallback guard', () => {
             userScrollObserved: false,
         });
 
-        hook.getCurrent().applyEntryRestoreOwnerEffects(effects);
-        await vi.waitFor(() => {
-            expect(members.loadOlder).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            hook.getCurrent().applyEntryRestoreOwnerEffects(effects);
         });
+        expect(members.loadOlder).toHaveBeenCalledTimes(1);
         expect(members.recordRestoreDecisionTelemetry).toHaveBeenCalledWith('not-ready', expect.any(Object));
         expect(members.recordEntryOwnerOutcome).not.toHaveBeenCalled();
         expect(syncMockState.loadTargetWindowMessages).not.toHaveBeenCalled();

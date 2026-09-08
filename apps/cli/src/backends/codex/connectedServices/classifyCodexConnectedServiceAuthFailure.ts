@@ -9,6 +9,7 @@ import {
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { classifyProviderLimitEvidence } from '@/daemon/connectedServices/quotas/normalization';
 import { normalizeConnectedServiceAccessTokenFingerprint } from '@/daemon/connectedServices/refresh/credentialFreshness/tokenFingerprint';
+import { readCodexProviderErrorRecord } from '../utils/readCodexProviderErrorRecord';
 
 export type CodexConnectedServiceRuntimeFailureKind =
   | 'usage_limit'
@@ -72,10 +73,6 @@ const refreshFailedProviderCodes = new Set([
   'refresh_token_revoked',
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
@@ -89,18 +86,10 @@ function readNonNegativeInteger(value: unknown): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function readErrorRecord(value: unknown): Record<string, unknown> | null {
-  const root = isRecord(value) ? value : null;
-  const direct = isRecord(root?.error) ? root.error : null;
-  const turn = isRecord(root?.turn) ? root.turn : null;
-  const turnError = isRecord(turn?.error) ? turn.error : null;
-  return direct ?? turnError ?? root;
-}
-
 function readErrorText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value instanceof Error) return value.message;
-  const record = readErrorRecord(value);
+  const record = readCodexProviderErrorRecord(value);
   if (!record) return '';
   return [record.message, record.additionalDetails, record.additional_details, record.error, record.code, record.codexErrorInfo, record.codex_error_info]
     .filter((part): part is string => typeof part === 'string')
@@ -110,7 +99,7 @@ function readErrorText(value: unknown): string {
 export function isCodexProviderCapacityFailure(value: unknown): boolean {
   const evidence = value instanceof Error
     ? { message: value.message }
-    : readErrorRecord(value) ?? value;
+    : readCodexProviderErrorRecord(value) ?? value;
   return classifyProviderLimitEvidence(evidence) === 'capacity';
 }
 
@@ -218,7 +207,7 @@ const codexUsageLimitRecoveryAction = { kind: 'quota_recovery_required' } as con
 export function classifyCodexConnectedServiceAuthFailure(
   input: ClassifyCodexConnectedServiceAuthFailureInput,
 ): CodexConnectedServiceRuntimeFailureClassification | null {
-  const record = readErrorRecord(input.error);
+  const record = readCodexProviderErrorRecord(input.error);
   const codexErrorInfo = readString(record?.codexErrorInfo ?? record?.codex_error_info);
   const structuredCode = readString(record?.code ?? record?.type ?? record?.reason);
   if (isStructuredUsageLimitCode(codexErrorInfo) || isStructuredUsageLimitCode(structuredCode)) {

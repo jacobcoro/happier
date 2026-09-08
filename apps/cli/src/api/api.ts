@@ -47,6 +47,8 @@ import {
 } from './client/offlineErrors';
 import {
   buildProviderAccountUsageRecordId,
+  CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER,
+  CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
   ConnectedServiceAuthGroupErrorResponseV1Schema,
   ConnectedServiceAuthGroupResponseV1Schema,
   ConnectedServiceCredentialHealthV1Schema,
@@ -62,6 +64,8 @@ import {
   SealedConnectedServiceQuotaSnapshotV1Schema,
   SealedProviderAccountUsageSnapshotV1Schema,
   StoredJsonContentEnvelopeSchema,
+  splitProviderAccountUsageSubscription,
+  PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
 } from '@happier-dev/protocol';
 import type {
   ConnectedServiceCredentialRecordV1,
@@ -1010,6 +1014,7 @@ export class ApiClient {
           headers: {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json',
+            [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
           },
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
         },
@@ -1074,6 +1079,7 @@ export class ApiClient {
           headers: {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json',
+            [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
           },
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
         },
@@ -1138,6 +1144,7 @@ export class ApiClient {
           headers: {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json',
+            [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
           },
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
         },
@@ -1195,6 +1202,7 @@ export class ApiClient {
           headers: {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json',
+            [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
           },
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
         },
@@ -1245,6 +1253,7 @@ export class ApiClient {
           headers: {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json',
+            [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
           },
           params: { expectedGeneration },
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
@@ -1524,6 +1533,7 @@ export class ApiClient {
           headers: {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json',
+            Accept: PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
           },
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
         },
@@ -1684,7 +1694,9 @@ export class ApiClient {
   }): Promise<void> {
     const serverUrl = resolveServerHttpBaseUrl();
     const recordId = ProviderAccountUsageRecordIdSchema.parse(params.recordId);
-    const snapshot = ProviderAccountUsageSnapshotV1Schema.parse(params.content.v);
+    const { snapshot, subscription } = splitProviderAccountUsageSubscription(
+      ProviderAccountUsageSnapshotV1Schema.parse(params.content.v),
+    );
     const source = params.source ? ConnectedServiceUsageSourceV1Schema.parse(params.source) : undefined;
 
     try {
@@ -1692,7 +1704,7 @@ export class ApiClient {
         `${serverUrl}/v3/connect/provider-account-usage/${encodeURIComponent(recordId)}`,
         {
           content: { t: 'plain', v: snapshot },
-          metadata: params.metadata,
+          metadata: { ...params.metadata, ...(subscription ? { subscription } : {}) },
           ...(source ? { source } : {}),
         },
         {
@@ -1815,6 +1827,7 @@ export class ApiClient {
           headers: {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json',
+            Accept: PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
           },
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
         },
@@ -1839,7 +1852,10 @@ export class ApiClient {
         );
       }
 
-      const snapshotParsed = ProviderAccountUsageSnapshotV1Schema.safeParse(contentParsed.data.v);
+      const baseSnapshot = ProviderAccountUsageSnapshotV1Schema.safeParse(contentParsed.data.v);
+      const snapshotParsed = baseSnapshot.success && rawRecord.subscription !== undefined
+        ? ProviderAccountUsageSnapshotV1Schema.safeParse({ ...baseSnapshot.data, subscription: rawRecord.subscription })
+        : baseSnapshot;
       if (!snapshotParsed.success || snapshotParsed.data.recordId !== recordId) {
         throw createConnectedServiceQuotaProtocolError(
           'Invalid provider account usage snapshot response',

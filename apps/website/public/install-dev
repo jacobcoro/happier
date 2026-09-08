@@ -53,6 +53,11 @@ if supports_color; then
   COLOR_GREEN=$'\033[32m'
   COLOR_YELLOW=$'\033[33m'
   COLOR_CYAN=$'\033[36m'
+  COLOR_ART_YELLOW=$'\033[93m'
+  COLOR_ART_RED=$'\033[91m'
+  COLOR_ART_MAGENTA=$'\033[95m'
+  COLOR_ART_CYAN=$'\033[96m'
+  COLOR_ART_BLUE=$'\033[94m'
 else
   COLOR_RESET=""
   COLOR_BOLD=""
@@ -60,6 +65,11 @@ else
   COLOR_GREEN=""
   COLOR_YELLOW=""
   COLOR_CYAN=""
+  COLOR_ART_YELLOW=""
+  COLOR_ART_RED=""
+  COLOR_ART_MAGENTA=""
+  COLOR_ART_CYAN=""
+  COLOR_ART_BLUE=""
 fi
 
 say() {
@@ -101,6 +111,60 @@ installer_has_tty_output() {
   [[ -t 1 ]] && [[ -t 2 ]]
 }
 
+installer_should_animate() {
+  installer_has_tty_output \
+    && [[ "${TERM:-}" != "dumb" ]] \
+    && [[ "${HAPPIER_NO_ANIMATION:-0}" != "1" ]]
+}
+
+installer_terminal_is_wide() {
+  local columns="${COLUMNS:-}"
+  if [[ ! "${columns}" =~ ^[0-9]+$ ]] || [[ "${columns}" == "0" ]]; then
+    columns="$(tput cols 2>/dev/null || true)"
+  fi
+  if [[ ! "${columns}" =~ ^[0-9]+$ ]] || [[ "${columns}" == "0" ]]; then
+    columns="80"
+  fi
+  [[ "${columns:-0}" =~ ^[0-9]+$ ]] && [[ "${columns}" -ge 58 ]]
+}
+
+INSTALLER_WELCOME_SHOWN="0"
+HAPPIER_INSTALLER_ART_ROWS=(
+  '          3443'
+  '       343333334'
+  '     433221112334'
+  '    43211000112334'
+  '    32100000011233'
+  '    32100000112334'
+  '     321111223344'
+  '       33223344'
+  '          3344'
+)
+
+print_installer_welcome() {
+  INSTALLER_WELCOME_SHOWN="1"
+  if installer_has_tty_output && [[ "${TERM:-}" != "dumb" ]] && installer_terminal_is_wide; then
+    printf '%s%-24s%s    %sHappier%s\n' "${COLOR_ART_YELLOW}" "${HAPPIER_INSTALLER_ART_ROWS[0]}" "${COLOR_RESET}" "${COLOR_BOLD}" "${COLOR_RESET}"
+    printf '%s%-24s%s    Secure installer\n' "${COLOR_ART_YELLOW}" "${HAPPIER_INSTALLER_ART_ROWS[1]}" "${COLOR_RESET}"
+    printf '%s%-24s%s    Download -> Verify -> Install\n' "${COLOR_ART_RED}" "${HAPPIER_INSTALLER_ART_ROWS[2]}" "${COLOR_RESET}"
+    printf '%s%-24s%s\n' "${COLOR_ART_RED}" "${HAPPIER_INSTALLER_ART_ROWS[3]}" "${COLOR_RESET}"
+    printf '%s%-24s%s\n' "${COLOR_ART_MAGENTA}" "${HAPPIER_INSTALLER_ART_ROWS[4]}" "${COLOR_RESET}"
+    printf '%s%-24s%s\n' "${COLOR_ART_MAGENTA}" "${HAPPIER_INSTALLER_ART_ROWS[5]}" "${COLOR_RESET}"
+    printf '%s%-24s%s\n' "${COLOR_ART_CYAN}" "${HAPPIER_INSTALLER_ART_ROWS[6]}" "${COLOR_RESET}"
+    printf '%s%-24s%s\n' "${COLOR_ART_CYAN}" "${HAPPIER_INSTALLER_ART_ROWS[7]}" "${COLOR_RESET}"
+    printf '%s%-24s%s\n' "${COLOR_ART_BLUE}" "${HAPPIER_INSTALLER_ART_ROWS[8]}" "${COLOR_RESET}"
+  else
+    say "${COLOR_BOLD}Happier${COLOR_RESET}"
+    say "Secure installer"
+    say "Download -> Verify -> Install"
+  fi
+  echo
+}
+
+installer_phase() {
+  say "${COLOR_BOLD}[$1]${COLOR_RESET}"
+}
+
 installer_step_pending_symbol() {
   printf '%s' "${COLOR_CYAN}..${COLOR_RESET}"
 }
@@ -117,11 +181,28 @@ run_installer_step() {
   local label="$1"
   shift
 
-  if ! installer_has_tty_output; then
+  if ! installer_should_animate; then
+    local tmp_output=""
+    if [[ -n "${TMP_DIR:-}" ]]; then
+      tmp_output="${TMP_DIR}/installer-step.$$.log"
+    else
+      tmp_output="$(mktemp)"
+    fi
     say "- [..] ${label}"
-    "$@"
-    say "- [$(installer_step_success_symbol)] ${label}"
-    return
+    if "$@" >"${tmp_output}" 2>&1; then
+      say "- [ok] ${label}"
+      if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_output}" ]]; then
+        cat "${tmp_output}"
+      fi
+      rm -f "${tmp_output}" >/dev/null 2>&1 || true
+      return 0
+    fi
+    say "- [x] ${label}"
+    if [[ -s "${tmp_output}" ]]; then
+      cat "${tmp_output}" >&2
+    fi
+    rm -f "${tmp_output}" >/dev/null 2>&1 || true
+    return 1
   fi
 
   local spinner_frames=('|' '/' '-' '\')
@@ -143,10 +224,17 @@ run_installer_step() {
     sleep 0.12
   done
 
-  wait "${step_pid}"
-  local status=$?
+  local status=0
+  if wait "${step_pid}"; then
+    status=0
+  else
+    status=$?
+  fi
   if [[ "${status}" -eq 0 ]]; then
     printf '\r- [%s] %s\n' "$(installer_step_success_symbol)" "${label}" >&2
+    if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_output}" ]]; then
+      cat "${tmp_output}"
+    fi
     rm -f "${tmp_output}" >/dev/null 2>&1 || true
     return 0
   fi
@@ -174,15 +262,18 @@ capture_installer_step_output() {
     tmp_error="$(mktemp)"
   fi
 
-  if ! installer_has_tty_output; then
+  if ! installer_should_animate; then
     say "- [..] ${label}"
     if "$@" >"${tmp_output}" 2>"${tmp_error}"; then
-      say "- [$(installer_step_success_symbol)] ${label}"
+      say "- [ok] ${label}"
       printf -v "${__resultvar}" '%s' "$(cat "${tmp_output}")"
+      if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_error}" ]]; then
+        cat "${tmp_error}" >&2
+      fi
       rm -f "${tmp_output}" "${tmp_error}" >/dev/null 2>&1 || true
       return 0
     fi
-    say "- [$(installer_step_failure_symbol)] ${label}" >&2
+    say "- [x] ${label}" >&2
     cat "${tmp_error}" >&2
     rm -f "${tmp_output}" "${tmp_error}" >/dev/null 2>&1 || true
     return 1
@@ -204,6 +295,9 @@ capture_installer_step_output() {
   if wait "${step_pid}"; then
     printf '\r- [%s] %s\n' "$(installer_step_success_symbol)" "${label}" >&2
     printf -v "${__resultvar}" '%s' "$(cat "${tmp_output}")"
+    if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_error}" ]]; then
+      cat "${tmp_error}" >&2
+    fi
     rm -f "${tmp_output}" "${tmp_error}" >/dev/null 2>&1 || true
     return 0
   fi
@@ -1211,6 +1305,37 @@ background_service_inventory_is_empty() {
   background_service_inventory_json_is_empty "${services_json}"
 }
 
+doctor_repair_report_is_expected_guided_setup_state() {
+  local services_json="$1"
+  background_service_inventory_is_empty "${services_json}" || return 1
+
+  local compact_json=""
+  compact_json="$(printf '%s' "${services_json}" | tr '\n' ' ')"
+  printf '%s' "${compact_json}" | grep -Eq '"report"[[:space:]]*:' || return 1
+  printf '%s' "${compact_json}" | grep -Eq '"findings"[[:space:]]*:' || return 1
+  printf '%s' "${compact_json}" | grep -Eq '"manualWarnings"[[:space:]]*:[[:space:]]*\[[[:space:]]*"' && return 1
+
+  local saw_guided_setup_finding="0"
+  local kind=""
+  local kinds=""
+  kinds="$(printf '%s' "${compact_json}" | grep -oE '"kind"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/' || true)"
+  while IFS= read -r kind; do
+    [[ -n "${kind}" ]] || continue
+    case "${kind}" in
+      no_active_stack_yet|no_servers_configured|auth_missing_for_profile|machine_not_registered_for_profile)
+        saw_guided_setup_finding="1"
+        ;;
+      automatic_startup_missing|run-setup|run-auth-login|register-machine|background-service-plan|install-default-following-service)
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done <<< "${kinds}"
+
+  [[ "${saw_guided_setup_finding}" == "1" ]]
+}
+
 background_service_inventory_json_is_empty() {
   local services_json="$1"
   if [[ -z "${services_json}" ]]; then
@@ -1946,6 +2071,10 @@ run_post_install_action() {
     command_args+=("${args[@]}")
   fi
 
+  if [[ "${op}" == "setup" ]] && [[ "${INSTALLER_WELCOME_SHOWN}" == "1" ]]; then
+    HAPPIER_INSTALLER_WELCOME_SHOWN="1" invoke_installer_command_with_daemon_service_context "${cli_bin}" "${command_args[@]}"
+    return
+  fi
   invoke_installer_command_with_daemon_service_context "${cli_bin}" "${command_args[@]}"
 }
 
@@ -2163,6 +2292,37 @@ write_minisign_public_key() {
   curl -fsSL "${MINISIGN_PUBKEY_URL}" -o "${target_path}"
 }
 
+verify_archive_checksum() {
+  local expected_sha=""
+  expected_sha="$(grep -E "  $(basename "${ASSET_SOURCE}")$" "${CHECKSUMS_PATH}" | awk '{print $1}' | head -n 1)"
+  if [[ -z "${expected_sha}" ]]; then
+    echo "Failed to resolve checksum for $(basename "${ASSET_SOURCE}")" >&2
+    return 1
+  fi
+  local actual_sha=""
+  actual_sha="$(sha256_file "${ARCHIVE_PATH}")"
+  printf 'Expected SHA-256: %s\n' "${expected_sha}"
+  printf 'Actual SHA-256:   %s\n' "${actual_sha}"
+  if [[ "${expected_sha}" != "${actual_sha}" ]]; then
+    echo "Checksum verification failed." >&2
+    return 1
+  fi
+}
+
+verify_release_signature() {
+  if ! ensure_minisign; then
+    echo "minisign is required for installer signature verification." >&2
+    echo "Install minisign manually and rerun, or set HAPPIER_MINISIGN_PUBKEY with a trusted key." >&2
+    return 1
+  fi
+  write_minisign_public_key "${PUBKEY_PATH}"
+  "${MINISIGN_BIN}" -Vm "${CHECKSUMS_PATH}" -x "${SIG_PATH}" -p "${PUBKEY_PATH}" >/dev/null
+  say "minisign verification passed."
+}
+
+PATH_CONFIG_UPDATED="0"
+PATH_RELOAD_FILE=""
+
 append_path_hint() {
   if [[ "${NO_PATH_UPDATE}" == "1" ]]; then
     return
@@ -2233,9 +2393,11 @@ append_path_hint() {
     zsh)
       rc_files+=("$HOME/.zshrc")
       rc_files+=("$HOME/.zprofile")
+      PATH_RELOAD_FILE="$HOME/.zshrc"
       ;;
     bash)
       rc_files+=("$HOME/.bashrc")
+      PATH_RELOAD_FILE="$HOME/.bashrc"
       if [[ -f "$HOME/.bash_profile" ]]; then
         rc_files+=("$HOME/.bash_profile")
       else
@@ -2244,6 +2406,7 @@ append_path_hint() {
       ;;
     *)
       rc_files+=("$HOME/.profile")
+      PATH_RELOAD_FILE="$HOME/.profile"
       ;;
   esac
 
@@ -2251,53 +2414,41 @@ append_path_hint() {
   for rc_file in "${rc_files[@]}"; do
     if [[ ! -f "${rc_file}" ]] || ! grep -Fq "${export_line}" "${rc_file}"; then
       printf '\n%s\n' "${export_line}" >> "${rc_file}"
-      info "Added ${BIN_DIR} to PATH in ${rc_file}"
       updated=1
     fi
     if [[ -n "${home_export_line}" ]]; then
       if [[ ! -f "${rc_file}" ]] || ! grep -Eq "^[[:space:]]*export[[:space:]]+HAPPIER_HOME_DIR=" "${rc_file}"; then
         printf '\n%s\n' "${home_export_line}" >> "${rc_file}"
-        info "Persisted HAPPIER_HOME_DIR=${INSTALL_DIR} in ${rc_file}"
         updated=1
       elif ! grep -Fxq "${home_export_line}" "${rc_file}" || [[ "$(grep -Ec "^[[:space:]]*export[[:space:]]+HAPPIER_HOME_DIR=" "${rc_file}")" -ne 1 ]]; then
         upsert_shell_export_line "${rc_file}" "HAPPIER_HOME_DIR" "${home_export_line}"
-        info "Persisted HAPPIER_HOME_DIR=${INSTALL_DIR} in ${rc_file}"
         updated=1
       fi
     elif [[ -f "${rc_file}" ]] && grep -Eq "^[[:space:]]*export[[:space:]]+HAPPIER_HOME_DIR=" "${rc_file}"; then
       remove_shell_export_line "${rc_file}" "HAPPIER_HOME_DIR"
-      info "Removed stale HAPPIER_HOME_DIR from ${rc_file}"
       updated=1
     fi
   done
 
-  if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
-    echo
-    say "${COLOR_BOLD}Next steps${COLOR_RESET}"
-    say "To use ${EXE_NAME} in your current shell:"
-    say "  export PATH=\"${BIN_DIR}:\$PATH\""
-    if [[ -n "${home_export_line}" ]]; then
-      say "  export HAPPIER_HOME_DIR=\"${INSTALL_DIR}\""
-    fi
-    if [[ "${shell_name}" == "bash" ]]; then
-      say "  source \"$HOME/.bashrc\""
-      if [[ -f "$HOME/.bash_profile" ]]; then
-        say "  source \"$HOME/.bash_profile\""
-      else
-        say "  source \"$HOME/.profile\""
-      fi
-    elif [[ "${shell_name}" == "zsh" ]]; then
-      say "  source \"$HOME/.zshrc\""
-    else
-      say "  source \"$HOME/.profile\""
-    fi
-    say "If your shell still can't find ${EXE_NAME}, run:"
-    shell_command_cache_hint
-    say "Or open a new terminal."
-  elif [[ "${updated}" == "1" ]]; then
-    echo
-    say "PATH is already configured in this shell."
+  PATH_CONFIG_UPDATED="${updated}"
+}
+
+print_path_guidance() {
+  if [[ "${NO_PATH_UPDATE}" == "1" ]]; then
+    section "PATH"
+    say "PATH updates were skipped. Run the installed command directly:"
+    say "  ${DISPLAY_SHIM_PATH}"
+    return
   fi
+
+  if [[ ":${PATH}:" == *":${BIN_DIR}:"* ]] && [[ "${PATH_CONFIG_UPDATED}" != "1" ]]; then
+    return
+  fi
+
+  section "PATH"
+  say "Reload this shell to use $(basename "${DISPLAY_SHIM_PATH}"):"
+  say "  source \"${PATH_RELOAD_FILE}\""
+  say "Or open a new terminal."
 }
 
 OS="$(detect_os)"
@@ -2355,6 +2506,9 @@ TAG="$(resolve_release_tag "${PRODUCT}" "${CHANNEL}")" || {
   echo "Unsupported product/channel combination: ${PRODUCT}/${CHANNEL}" >&2
   exit 1
 }
+
+print_installer_welcome
+installer_phase "Download"
 
 API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG}"
 curl_auth() {
@@ -2421,31 +2575,15 @@ CHECKSUMS_PATH="${TMP_DIR}/checksums.txt"
 stage_release_asset "Downloading release archive" "${ARCHIVE_PATH}" "${ASSET_SOURCE}"
 stage_release_asset "Downloading checksums" "${CHECKSUMS_PATH}" "${CHECKSUMS_SOURCE}"
 
-EXPECTED_SHA="$(grep -E "  $(basename "${ASSET_SOURCE}")$" "${CHECKSUMS_PATH}" | awk '{print $1}' | head -n 1)"
-if [[ -z "${EXPECTED_SHA}" ]]; then
-  echo "Failed to resolve checksum for $(basename "${ASSET_URL}")" >&2
-  exit 1
-fi
-ACTUAL_SHA="$(sha256_file "${ARCHIVE_PATH}")"
-if [[ "${EXPECTED_SHA}" != "${ACTUAL_SHA}" ]]; then
-  echo "Checksum verification failed." >&2
-  exit 1
-fi
-success "Checksum verified."
-
-if ! ensure_minisign; then
-  echo "minisign is required for installer signature verification." >&2
-  echo "Install minisign manually and rerun, or set HAPPIER_MINISIGN_PUBKEY with a trusted key." >&2
-  exit 1
-fi
-
 PUBKEY_PATH="${TMP_DIR}/minisign.pub"
 SIG_PATH="${TMP_DIR}/checksums.txt.minisig"
-write_minisign_public_key "${PUBKEY_PATH}"
 stage_release_asset "Downloading minisign signature" "${SIG_PATH}" "${SIG_SOURCE}"
-"${MINISIGN_BIN}" -Vm "${CHECKSUMS_PATH}" -x "${SIG_PATH}" -p "${PUBKEY_PATH}" >/dev/null
-success "Signature verified."
 
+installer_phase "Verify"
+run_installer_step "Verifying archive checksum" verify_archive_checksum
+run_installer_step "Verifying release signature" verify_release_signature
+
+installer_phase "Install"
 EXTRACT_DIR="${TMP_DIR}/extract"
 mkdir -p "${EXTRACT_DIR}"
 run_installer_step "Extracting payload" tar_extract_gz "${ARCHIVE_PATH}" "${EXTRACT_DIR}"
@@ -2591,7 +2729,7 @@ append_path_hint
 	      DAEMON_RUNNING_FROM_PREFLIGHT="1"
 	    fi
 	  fi
-	  if [[ "${NONINTERACTIVE}" != "1" ]]; then
+	  if [[ "${NONINTERACTIVE}" != "1" ]] && ! doctor_repair_report_is_expected_guided_setup_state "${services_json}"; then
 	    print_background_service_report_text_if_supported "${DISPLAY_SHIM_PATH}"
     fi
   fi
@@ -2678,36 +2816,14 @@ echo
 echo "${INSTALL_NAME} installed:"
 echo "  binary: ${DISPLAY_BINARY_PATH}"
 echo "  shim:   ${DISPLAY_SHIM_PATH}"
-
-# PATH reload guidance. The shim dir may already be on PATH from a previous
-# install (common), in which case the user can run `happier`/`hdev` right
-# away. If it is NOT yet on PATH (fresh install), we direct the user to a
-# simple shell reload or provide the absolute path.
-display_shim_dir="$(dirname "${DISPLAY_SHIM_PATH}")"
-display_shim_basename="$(basename "${DISPLAY_SHIM_PATH}")"
-shim_on_current_path="0"
-case ":${PATH}:" in
-  *":${display_shim_dir}:"*)
-    shim_on_current_path="1"
-    ;;
-esac
-echo
-if [[ "${shim_on_current_path}" == "1" ]]; then
-  echo "You can run \`${display_shim_basename}\` right away."
-else
-  echo "To use \`${display_shim_basename}\` from any new shell, ${display_shim_dir} has been added to your PATH."
-  echo "In THIS shell, reload with one of:"
-  echo "  source ~/.bashrc   # bash"
-  echo "  source ~/.zshrc    # zsh"
-  echo "Or run directly using the absolute path: ${DISPLAY_SHIM_PATH}"
-fi
+echo "  version: ${VERSION}"
 echo
 
 if [[ "${NONINTERACTIVE}" != "1" ]]; then
   if [[ "${PRODUCT}" == "server" ]]; then
     "${DISPLAY_BINARY_PATH}" --help >/dev/null 2>&1 || true
   else
-    "${DISPLAY_BINARY_PATH}" --version || true
+    "${DISPLAY_BINARY_PATH}" --version >/dev/null 2>&1 || true
   fi
 fi
 
@@ -2736,6 +2852,8 @@ elif should_hand_off_to_guided_setup "${DISPLAY_SHIM_PATH}"; then
     POST_INSTALL_SETUP_IS_DONE="1"
   fi
 fi
+
+print_path_guidance
 
 if [[ "${PRODUCT}" == "cli" && "${ACTION}" == "install" ]]; then
   print_post_install_get_started "$(basename "${DISPLAY_SHIM_PATH}")"

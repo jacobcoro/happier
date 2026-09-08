@@ -62,6 +62,36 @@ describe("sessionPendingRoutes (requested action)", () => {
         }).success).toBe(false);
     });
 
+    it("forwards the separate resume authorization command", async () => {
+        updatePendingRequestedAction.mockResolvedValueOnce({
+            ok: true,
+            didUpdate: false,
+            pendingCount: 1,
+            pendingBlockedCount: 0,
+            pendingVersion: 4,
+            participantCursors: [],
+            badgeAttentionChanged: false,
+        });
+        const route = await createActionRoute();
+
+        await route.invoke({
+            userId: "actor",
+            params: { sessionId: "s1", localId: "l1" },
+            body: {
+                requestedAction: { v: 1, kind: "enqueue" },
+                resumeWhenAvailable: true,
+            },
+        });
+
+        expect(updatePendingRequestedAction).toHaveBeenCalledWith({
+            actorUserId: "actor",
+            sessionId: "s1",
+            localId: "l1",
+            requestedAction: { v: 1, kind: "enqueue" },
+            resumeWhenAvailable: true,
+        });
+    });
+
     it("maps an action conflict to 409 with the action-specific code", async () => {
         updatePendingRequestedAction.mockResolvedValueOnce({ ok: false, error: "action-conflict" });
         const route = await createActionRoute();

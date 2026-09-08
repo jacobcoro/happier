@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -889,6 +889,14 @@ vi.mock('./connectedServices/quotas/resolveConnectedServicesQuotasDaemonEnabled'
 }));
 
 describe('startDaemon spawn resume wiring (integration)', () => {
+  beforeEach(() => {
+    if (ORIGINAL_PLATFORM_DESCRIPTOR) {
+      // Most cases exercise platform-independent daemon lifecycle behavior. Keep their
+      // launch adapter deterministic; dedicated cases below opt into Linux/macOS behavior.
+      Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'darwin' });
+    }
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     harness.resetControlRefs();
@@ -911,6 +919,11 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     orphanedStartupSessionEndsCapture.publishOrphanedStartupSessionEnds.mockClear();
     providerActivityRecorderCapture.createConnectedServiceProviderActivityProofRecorder.mockClear();
     providerActivityRecorderCapture.record.mockClear();
+    updateSessionMetadataWithRetryMock.mockReset();
+    updateSessionMetadataWithRetryMock.mockImplementation(async (params) => ({
+      version: (params.rawSession.metadataVersion ?? 0) + 1,
+      metadata: params.updater({}),
+    }));
     vi.mocked(materializeNextPendingQueueV2MessageViaHttp).mockClear();
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockReset();
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('missing');
@@ -1009,7 +1022,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     }
   });
 
-  it('activates one exact inactive Pending row after the UI disappears, coalesces a duplicate, and does not restart an active neighbor', async () => {
+  it('activates one exact Pending row after the UI disappears and delegates stale active state to runner serviceability', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
     process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
@@ -1039,7 +1052,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
 
     try {
       const activationModule = await import('./sessions/activatePendingInactiveSession');
-      const activationSpy = vi.spyOn(activationModule, 'activatePendingInactiveSession');
+      const activationSpy = vi.spyOn(activationModule, 'activatePendingSessionRuntime');
       const { startDaemon } = await import('./startDaemon');
       run = startDaemon();
       await waitForSpawnSessionRegistration();
@@ -1088,10 +1101,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         source: 'live',
       });
       expect(activationSpy).toHaveBeenCalledTimes(3);
-      await expect(activationSpy.mock.results[2]?.value).resolves.toEqual({
-        status: 'not-needed',
-        reason: 'active',
-      });
+      await expect(activationSpy.mock.results[2]?.value).resolves.toMatchObject({ status: 'activated' });
 
       harness.requestShutdown('happier-cli');
       await run;
@@ -1149,7 +1159,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
 
     try {
       const activationModule = await import('./sessions/activatePendingInactiveSession');
-      const activationSpy = vi.spyOn(activationModule, 'activatePendingInactiveSession');
+      const activationSpy = vi.spyOn(activationModule, 'activatePendingSessionRuntime');
       const { startDaemon } = await import('./startDaemon');
       run = startDaemon();
       await vi.waitFor(() => expect(fetchSessionsPage).toHaveBeenCalled(), { timeout: 10_000 });
@@ -2620,7 +2630,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     }
   });
 
-  it('applies linux spawned-child OOM score adjustment for manual daemon session spawns', async () => {
+  it('wraps manual Linux daemon session spawns for cgroup self-migration and adjusts their OOM score', async () => {
     if (!ORIGINAL_PLATFORM_DESCRIPTOR) {
       throw new Error('Expected process.platform to be configurable for this test');
     }
@@ -2646,7 +2656,9 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         codexBackendMode: 'acp',
       });
 
-      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
+      expect(spawnHappyCLI).not.toHaveBeenCalled();
+      expect(buildCgroupSelfMigratingHappyCliLaunchSpec).toHaveBeenCalledTimes(1);
+      expect(spawnChildProcess).toHaveBeenCalledTimes(1);
       expect(applySpawnedChildOomScoreAdjustmentMock).toHaveBeenCalledWith(expect.objectContaining({
         pid: 12345,
         startupSource: 'manual',
@@ -4175,7 +4187,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         metadata: JSON.stringify({ sessionUsageLimitRecoveryV1: recovery }),
         dataEncryptionKey: null,
       }));
-      updateSessionMetadataWithRetryMock.mockImplementationOnce(async (params) => ({
+      updateSessionMetadataWithRetryMock.mockImplementation(async (params) => ({
         version: (params.rawSession.metadataVersion ?? 0) + 1,
         metadata: params.updater({ sessionUsageLimitRecoveryV1: recovery }),
       }));
@@ -4194,17 +4206,19 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       expect(usageLimitCancelSpy).toHaveBeenCalledWith({ sessionId });
       expect(runtimeAuthCancelSpy).toHaveBeenCalledWith({ sessionId });
       expect(temporaryThrottleCancelSpy).toHaveBeenCalledWith({ sessionId });
-      const metadataUpdate = updateSessionMetadataWithRetryMock.mock.calls.find(
-        ([call]) => (call as { sessionId?: string }).sessionId === sessionId,
-      )?.[0];
-      expect(metadataUpdate?.updater({ sessionUsageLimitRecoveryV1: recovery })).toMatchObject({
-        sessionUsageLimitRecoveryV1: {
-          issueFingerprint: recovery.issueFingerprint,
-          armedAtMs: recovery.armedAtMs,
-          status: 'cancelled',
-          nextCheckAtMs: null,
-        },
-      });
+      const persistedMetadataCandidates = updateSessionMetadataWithRetryMock.mock.calls
+        .filter(([call]) => (call as { sessionId?: string }).sessionId === sessionId)
+        .map(([call]) => call.updater({ sessionUsageLimitRecoveryV1: recovery }));
+      expect(persistedMetadataCandidates).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          sessionUsageLimitRecoveryV1: expect.objectContaining({
+            issueFingerprint: recovery.issueFingerprint,
+            armedAtMs: recovery.armedAtMs,
+            status: 'cancelled',
+            nextCheckAtMs: null,
+          }),
+        }),
+      ]));
 
       usageLimitCancelSpy.mockRejectedValueOnce(new Error('durable recovery store unavailable'));
       await expect(stopSession(sessionId)).resolves.toEqual({ status: 'stopped' });

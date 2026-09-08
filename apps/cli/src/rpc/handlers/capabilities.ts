@@ -41,6 +41,9 @@ import { configuration } from '@/configuration';
 import { createConnectedServiceMaterializationIdentity } from '@/daemon/connectedServices/materialize/createConnectedServiceMaterializationIdentity';
 import { resolveConnectedServiceAuthForSpawn } from '@/daemon/connectedServices/resolveConnectedServiceAuthForSpawn';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { buildProfileEnvOverlay } from '@/settings/profiles/buildProfileEnvOverlay';
+import { readProfilesFromAccountSettings } from '@/settings/profiles/readProfilesFromAccountSettings';
+import { resolveProfileForAgent } from '@/settings/profiles/resolveProfileForAgent';
 
 const DEFAULT_PROBE_MODELS_TIMEOUT_MS = 30_000;
 type CliProbeMethod = 'probeModels' | 'probeModes' | 'probeConfigOptions';
@@ -112,7 +115,11 @@ async function resolveProbeBackendContext(
     const agentId = typeof params?.agentId === 'string' ? params.agentId : null;
     const needsAccountSettingsForProbes =
         agentId && (AGENTS[agentId as keyof typeof AGENTS] as AgentCatalogEntry | undefined)?.needsAccountSettingsForProbes === true;
-    const shouldLoadAccountSettings = backendTarget?.kind === 'configuredAcpBackend' || needsAccountSettingsForProbes;
+    const profileId = parseProbeProfileId(params);
+    const shouldLoadAccountSettings =
+        backendTarget?.kind === 'configuredAcpBackend'
+        || needsAccountSettingsForProbes
+        || profileId !== null;
     if (!shouldLoadAccountSettings && options.requireCredentials !== true) {
       return { backendTarget, credentials: null, accountSettings: null };
     }
@@ -154,6 +161,36 @@ type ConnectedServiceProbeEnvironment = Readonly<{
     cleanup: (() => Promise<void>) | null;
 }>;
 
+async function resolveProfileProbeEnvironment(params: Readonly<{
+    agentId: AgentCatalogEntry['id'];
+    profileId: string | null;
+    credentials: Awaited<ReturnType<typeof readCredentials>> | null;
+    accountSettings: Record<string, unknown> | null;
+    processEnv: NodeJS.ProcessEnv;
+}>): Promise<NodeJS.ProcessEnv> {
+    if (!params.profileId) return params.processEnv;
+    if (!params.credentials || !params.accountSettings) {
+        throw new Error('Profile credentials or account settings are unavailable for this preflight probe');
+    }
+
+    const { customProfiles } = readProfilesFromAccountSettings(params.accountSettings);
+    const profile = resolveProfileForAgent({
+        agentId: params.agentId as AgentId,
+        query: params.profileId,
+        customProfiles,
+    });
+    const overlay = await buildProfileEnvOverlay({
+        agentId: params.agentId,
+        profile,
+        accountSettings: params.accountSettings,
+        credentials: params.credentials,
+        processEnv: params.processEnv,
+        promptSecretFn: null,
+        startedBy: 'daemon',
+    });
+    return { ...params.processEnv, ...overlay.envOverlayExpanded };
+}
+
 async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
     agentId: AgentCatalogEntry['id'];
     cwd: string;
@@ -161,10 +198,11 @@ async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
     credentials: Awaited<ReturnType<typeof readCredentials>> | null;
     accountSettings: Record<string, unknown> | null;
     requiresMaterializedAuth: boolean;
+    processEnv: NodeJS.ProcessEnv;
 }>): Promise<ConnectedServiceProbeEnvironment> {
     if (!params.requiresMaterializedAuth || !params.connectedServices) {
         return {
-            processEnv: process.env,
+            processEnv: params.processEnv,
             connectedServiceSelectionCacheKey: null,
             cleanup: null,
         };
@@ -186,7 +224,7 @@ async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
         credentials: params.credentials,
         api: await (await import('@/api/api')).ApiClient.create(params.credentials),
         accountSettings: params.accountSettings,
-        processEnv: process.env,
+        processEnv: params.processEnv,
         // A model/control probe observes current group authority but must never mutate the selected
         // group or trigger credential refresh. Actual spawn owns those lifecycle transitions.
         authGroupSwitchCoordinator: null,
@@ -197,7 +235,7 @@ async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
     }
 
     return {
-        processEnv: { ...process.env, ...resolved.env },
+        processEnv: { ...params.processEnv, ...resolved.env },
         connectedServiceSelectionCacheKey:
             resolved.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] ?? null,
         cleanup: async () => {
@@ -292,6 +330,24 @@ async function invokeCliProbeMethod(
     const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : DEFAULT_PROBE_MODELS_TIMEOUT_MS;
     const cwd = resolveProbeCwd((params ?? {}).cwd);
     const profileId = parseProbeProfileId(params);
+    let profileProcessEnv: NodeJS.ProcessEnv;
+    try {
+        profileProcessEnv = await resolveProfileProbeEnvironment({
+            agentId,
+            profileId,
+            credentials: probeContext.credentials,
+            accountSettings: probeContext.accountSettings,
+            processEnv: process.env,
+        });
+    } catch {
+        return {
+            ok: false,
+            error: {
+                code: 'profile-preflight-failed',
+                message: 'Could not prepare the selected backend profile for this probe.',
+            },
+        };
+    }
     let connectedServiceProbeEnvironment: ConnectedServiceProbeEnvironment;
     try {
         connectedServiceProbeEnvironment = await resolveConnectedServiceProbeEnvironment({
@@ -301,6 +357,7 @@ async function invokeCliProbeMethod(
             credentials: probeContext.credentials,
             accountSettings: probeContext.accountSettings,
             requiresMaterializedAuth,
+            processEnv: profileProcessEnv,
         });
     } catch {
         return {

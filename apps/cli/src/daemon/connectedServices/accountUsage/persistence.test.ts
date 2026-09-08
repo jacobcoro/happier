@@ -1,5 +1,7 @@
 import {
   buildProviderAccountUsageRecordId,
+  openProviderAccountUsageSnapshotCiphertext,
+  type SealedProviderAccountUsageSnapshotV1,
   type ConnectedServiceUsageSourceV1,
   type ProviderAccountUsageRecordKeyV1,
   type ProviderAccountUsageSnapshotV1,
@@ -104,6 +106,57 @@ function createCredentials(): Credentials {
 }
 
 describe('provider account usage persistence', () => {
+  it('omits subscription but preserves usage when the server subscription decision is absent', async () => {
+    const { createProviderAccountUsagePersistenceScheduler } = await import('./persistence');
+    const base = createSnapshot();
+    let persisted: ProviderAccountUsageSnapshotV1 | undefined;
+    const scheduler = createProviderAccountUsagePersistenceScheduler({
+      api: {
+        getAccountEncryptionMode: async () => 'plain',
+        registerProviderAccountUsageSnapshotPlain: async ({ content }) => { persisted = content.v; },
+      },
+      fingerprintKey: new Uint8Array(32).fill(4),
+      now: () => 1_000,
+    });
+    try {
+      await scheduler.recordInBandSnapshot({
+        ...base,
+        subscription: { status: 'none', renewal: 'unknown', observedAtMs: 900, staleAfterMs: 60_000 },
+      });
+      await scheduler.flush(1_000);
+      expect(persisted).toEqual(base);
+    } finally {
+      scheduler.dispose();
+    }
+  });
+  it('seals subscription separately so released usage readers retain their strict base snapshot', async () => {
+    const { createProviderAccountUsagePersistenceScheduler } = await import('./persistence');
+    const credentials = createCredentials();
+    const base = createSnapshot();
+    const snapshot = { ...base, subscription: { status: 'none' as const, renewal: 'unknown' as const, observedAtMs: 900, staleAfterMs: 60_000 } };
+    let persisted: SealedProviderAccountUsageSnapshotV1 | undefined;
+    const scheduler = createProviderAccountUsagePersistenceScheduler({
+      api: {
+        getAccountEncryptionMode: async () => 'e2ee',
+        registerProviderAccountUsageSnapshotSealed: async ({ sealed }) => { persisted = sealed; },
+      },
+      credentials,
+      isSubscriptionEnabled: () => true,
+      now: () => 1_000,
+      randomBytes: (length) => new Uint8Array(length).fill(8),
+    });
+    try {
+      await scheduler.recordInBandSnapshot(snapshot);
+      await scheduler.flush(1_000);
+      expect(persisted).toHaveProperty('subscription');
+      expect(openProviderAccountUsageSnapshotCiphertext({
+        material: { type: 'legacy', secret: new Uint8Array(32).fill(3) },
+        ciphertext: persisted!.ciphertext,
+      })?.value).toEqual(base);
+    } finally {
+      scheduler.dispose();
+    }
+  });
   it('builds canonical provider-account-usage snapshot routes by record id', async () => {
     const module = await loadPersistenceModule();
     expect(module).not.toBeNull();

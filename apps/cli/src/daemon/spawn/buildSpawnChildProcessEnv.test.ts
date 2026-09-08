@@ -126,7 +126,7 @@ describe('buildSpawnChildProcessEnv', () => {
     expect(env[HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY]).toBe('1');
   });
 
-  it('does not enable self-migration for child runners spawned outside a background-service daemon', () => {
+  it('enables Linux self-migration for child runners spawned by a manual stack daemon', () => {
     const env = buildSpawnChildProcessEnv({
       processEnv: {
         PATH: '/bin',
@@ -135,7 +135,7 @@ describe('buildSpawnChildProcessEnv', () => {
       extraEnv: {},
     });
 
-    expect(env[HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY]).toBeUndefined();
+    expect(env[HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY]).toBe('1');
   });
 
   it('does not leak daemon lifecycle ownership env into child runners', () => {

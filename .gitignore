@@ -51,6 +51,7 @@ apps/server/output/
 
 # macOS
 .DS_Store
+._*
 *.pem
 
 # local env files

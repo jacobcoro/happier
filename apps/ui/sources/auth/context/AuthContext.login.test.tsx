@@ -103,7 +103,7 @@ describe('AuthContext.login', () => {
         const seenAt = 1_789_222_000_000;
         const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
         const { clearPersistence, loadLocalSettings, saveLocalSettings } = await import('@/sync/domains/state/persistence');
-        clearPersistence();
+        await clearPersistence();
         saveLocalSettings({
             ...localSettingsDefaults,
             brandHeroSeenAt: seenAt,
@@ -129,7 +129,7 @@ describe('AuthContext.login', () => {
             expect(loadLocalSettings().brandHeroSeenAt).toBe(seenAt);
         } finally {
             await screen.unmount();
-            clearPersistence();
+            await clearPersistence();
         }
     });
 });

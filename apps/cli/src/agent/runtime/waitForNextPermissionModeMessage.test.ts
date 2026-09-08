@@ -55,7 +55,9 @@ describe('waitForNextPermissionModeMessage', () => {
     });
 
     expect(result?.message).toBe('from-safe-materialize');
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'skip' });
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith(expect.objectContaining({
+      reconcileWhenEmpty: 'skip',
+    }));
     expect(popPendingMessage).not.toHaveBeenCalled();
   });
 
@@ -90,7 +92,9 @@ describe('waitForNextPermissionModeMessage', () => {
     abortController.abort();
 
     await expect(resultPromise).resolves.toBeNull();
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith({ reconcileWhenEmpty: 'skip' });
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalledWith(expect.objectContaining({
+      reconcileWhenEmpty: 'skip',
+    }));
     expect(popPendingMessage).not.toHaveBeenCalled();
   });
 

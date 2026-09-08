@@ -10,8 +10,10 @@ let executionRunsEnabledState = false;
 let guidanceEntriesState: any[] = [];
 let guidanceEnabledState: boolean | null = null;
 let guidanceMaxCharsState: number | null = null;
+let notifyParentOnCompletionState: boolean | null = null;
 let providerSubagentSectionsState: any[] = [];
 const routerPushSpy = vi.fn();
+const notifyParentOnCompletionSetter = vi.fn();
 
 installSettingsViewCommonModuleMocks({
     icons: () => ({
@@ -41,6 +43,7 @@ installSettingsViewCommonModuleMocks({
                 if (key === 'executionRunsGuidanceEnabled') return [guidanceEnabledState, vi.fn()];
                 if (key === 'executionRunsGuidanceMaxChars') return [guidanceMaxCharsState, vi.fn()];
                 if (key === 'executionRunsGuidanceEntries') return [guidanceEntriesState, vi.fn()];
+                if (key === 'executionRunsNotifyParentOnCompletionDefault') return [notifyParentOnCompletionState, notifyParentOnCompletionSetter];
                 return [null, vi.fn()];
             },
             useSetting: () => ({
@@ -100,10 +103,9 @@ vi.mock('@/components/ui/forms/Switch', () => ({
     Switch: 'Switch',
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: {
-        mono: () => ({}),
-    },
+vi.mock('@/constants/Typography', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/constants/Typography')>(),
+    Typography: new Proxy({}, { get: () => () => ({}) }),
 }));
 
 vi.mock('@/sync/domains/settings/executionRunsGuidance', () => ({
@@ -153,9 +155,11 @@ describe('SubAgentSettingsView', () => {
         executionRunsEnabledState = false;
         guidanceEnabledState = null;
         guidanceMaxCharsState = null;
+        notifyParentOnCompletionState = null;
         guidanceEntriesState = [];
         providerSubagentSectionsState = [];
         routerPushSpy.mockReset();
+        notifyParentOnCompletionSetter.mockReset();
     });
 
     it('renders an execution-runs-disabled state when execution runs are not enabled', async () => {
@@ -177,6 +181,17 @@ describe('SubAgentSettingsView', () => {
         screen.pressRowByTitle('subAgentGuidance.settings.overview.happierStatusTitle');
 
         expect(routerPushSpy).toHaveBeenCalledWith('/settings/features');
+    });
+
+    it('updates the canonical parent-completion notification setting', async () => {
+        executionRunsEnabledState = true;
+        notifyParentOnCompletionState = false;
+        const { SubAgentSettingsView } = await import('./SubAgentSettingsView');
+
+        const screen = await renderSettingsView(React.createElement(SubAgentSettingsView));
+        screen.pressRowByTitle('subAgentGuidance.settings.notifyParentOnCompletion.title');
+
+        expect(notifyParentOnCompletionSetter).toHaveBeenCalledWith(true);
     });
 
     it('explains that disabling Happier run instructions removes routing and mechanics', async () => {

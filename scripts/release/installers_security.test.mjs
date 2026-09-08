@@ -20,7 +20,7 @@ test('release-owned installer scripts enforce minisign verification defaults', a
   assert.match(installSh, /HAPPIER_MINISIGN_PUBKEY_URL/);
   assert.match(installSh, /HAPPIER_RELEASE_ASSETS_DIR/);
   assert.match(installSh, /https:\/\/happier\.dev\/happier-release\.pub/);
-  assert.match(installSh, /Signature verified\./);
+  assert.match(installSh, /verify_release_signature/);
   assert.doesNotMatch(installSh, /skipped signature verification/i);
   assert.ok(publicKeyPayload.length > 10);
   assert.ok(installSh.includes(publicKeyPayload), 'install.sh should embed the release minisign public key payload');

@@ -158,16 +158,18 @@ describe('cursorPreflightSessionControlsProbeAdapter', () => {
     const fixture = await createProbeTempDir('happier-cursor-preflight-models');
     try {
       process.env.PATH = '';
-      process.env.HAPPIER_CURSOR_PATH = await writeFakeCursorAgent({
+      const cursorPath = await writeFakeCursorAgent({
         dir: fixture.dir,
         sdkEntry: resolveAcpSdkEntryFromCwd(process.cwd()),
       });
+      delete process.env.HAPPIER_CURSOR_PATH;
 
       const raw = await cursorPreflightSessionControlsProbeAdapter.probeModelsRaw?.({
         cwd: fixture.dir,
         timeoutMs: 5_000,
         backendTarget: undefined,
         accountSettings: null,
+        processEnv: { ...process.env, HAPPIER_CURSOR_PATH: cursorPath },
       });
 
       const models = Array.isArray(raw) ? raw : [];

@@ -19,7 +19,28 @@ export type ScmDiffCacheOptions = Readonly<{
     now: () => number;
 }>;
 
+export type ScmDiffLoadResult = Readonly<{ success: true; diff: string }> | Readonly<{ success: false; error: string }>;
+
 export class ScmDiffCache {
+    private readonly inFlight = new Map<string, { key: ScmDiffCacheKey; promise: Promise<ScmDiffLoadResult> }>();
+
+    async getOrLoad(key: ScmDiffCacheKey, load: () => Promise<ScmDiffLoadResult>): Promise<ScmDiffLoadResult> {
+        const cached = this.get(key);
+        if (cached) return { success: true, diff: cached.diff };
+        const storageKey = this.toStorageKey(key);
+        const pending = this.inFlight.get(storageKey);
+        if (pending) return pending.promise;
+        const promise = load();
+        this.inFlight.set(storageKey, { key, promise });
+        try {
+            const result = await promise;
+            if (result.success && this.inFlight.get(storageKey)?.promise === promise) this.set(key, result.diff);
+            return result;
+        } finally {
+            if (this.inFlight.get(storageKey)?.promise === promise) this.inFlight.delete(storageKey);
+        }
+    }
+
     private readonly entries = new Map<string, ScmDiffCacheEntry & Readonly<{ sessionId: string; path: string }>>();
     private totalBytes = 0;
     private maxEntries: number;
@@ -73,6 +94,9 @@ export class ScmDiffCache {
 
     invalidateSession(sessionId: string): void {
         if (!sessionId) return;
+        for (const [storageKey, pending] of this.inFlight) {
+            if (pending.key.sessionId === sessionId) this.inFlight.delete(storageKey);
+        }
         for (const [storageKey, entry] of this.entries) {
             if (entry.sessionId !== sessionId) continue;
             this.entries.delete(storageKey);
@@ -83,7 +107,9 @@ export class ScmDiffCache {
     invalidatePaths(input: Readonly<{ sessionId: string; paths: ReadonlySet<string> }>): void {
         const sessionId = input.sessionId;
         if (!sessionId) return;
-        if (!(input.paths instanceof Set) && typeof (input.paths as any)?.has !== 'function') return;
+        for (const [storageKey, pending] of this.inFlight) {
+            if (pending.key.sessionId === sessionId && input.paths.has(pending.key.path)) this.inFlight.delete(storageKey);
+        }
 
         for (const [storageKey, entry] of this.entries) {
             if (entry.sessionId !== sessionId) continue;

@@ -20,6 +20,7 @@ import {
   openMarkdownFileInRichEditor,
   saveOpenFileDetails,
 } from '../../src/testkit/uiE2e/markdownRichEditorFlow';
+import { appendBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const originalUrl = 'https://github.com';
@@ -234,7 +235,7 @@ test.describe('UI e2e: markdown rich editor link bubble', () => {
         .poll(async () => await readFile(absoluteFilePath, 'utf8'), { timeout: 60_000 })
         .toContain('GitHub');
     } catch (error) {
-      throw new Error(`${String(error)}\n\n${browserDiagnostics()}`);
+      throw appendBrowserDiagnostics(error, browserDiagnostics());
     }
   });
 });

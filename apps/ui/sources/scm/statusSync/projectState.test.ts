@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 
+import { buildScmDiffSnapshotSignature } from '../diffCache/scmDiffCacheKey';
+
 import { EMPTY_SCM_CAPABILITIES } from '../core/snapshotMappers';
 import { buildSnapshotSignature, clearSearchCacheForProject, getRepoScopeSessionIds } from './projectState';
 
@@ -65,6 +67,12 @@ function snapshot(defaultBranch?: string | null): ScmWorkingSnapshot {
 }
 
 describe('buildSnapshotSignature', () => {
+  it('keeps diff acquisition fresh when status shape is unchanged', () => {
+    expect(buildScmDiffSnapshotSignature({ ...snapshot(), fetchedAt: 1 })).not.toBe(
+      buildScmDiffSnapshotSignature({ ...snapshot(), fetchedAt: 2 }),
+    );
+  });
+
   it('changes when the repository default branch is detected later', () => {
     expect(buildSnapshotSignature(snapshot())).not.toBe(
       buildSnapshotSignature(snapshot('release/2026')),

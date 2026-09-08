@@ -3,13 +3,14 @@ import { randomUUID } from 'node:crypto';
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId, StartSessionResult } from '@/agent/core/AgentBackend';
 import { PushableAsyncIterable } from '@/utils/PushableAsyncIterable';
 import { query } from '@/backends/claude/sdk/query';
-import type { SDKAssistantMessage, SDKMessage, SDKResultMessage, SDKSystemMessage } from '@/backends/claude/sdk/types';
+import type { CanCallToolCallback, SDKAssistantMessage, SDKMessage, SDKResultMessage, SDKSystemMessage } from '@/backends/claude/sdk/types';
 import { createSubprocessStderrAppender, type BoundedTextFileAppender } from '@/agent/runtime/subprocessArtifacts';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
 import { ensureClaudeJsRuntimeExecutable } from '@/backends/claude/utils/ensureClaudeJsRuntimeExecutable';
 import { ClaudeTurnChangeTracker } from '../utils/ClaudeTurnChangeTracker';
 import { isClaudeExplicitDiffToolInput } from '../utils/isClaudeExplicitDiffToolInput';
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
+import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers';
 import {
   createClaudeProviderActivityLedger,
   normalizeClaudeProviderTaskEvent,
@@ -318,18 +319,30 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
     return trimmed;
   }
 
-  private buildCanCallTool() {
-    return async (toolName: string, input: unknown) => {
-      const result = await this.opts.permissionHandler.handleToolCall(
-        'claude-sdk-execution-run',
-        toolName,
-        input,
-      );
-      if (result.decision === 'denied' || result.decision === 'abort') {
-        return { behavior: 'deny', message: `Tool denied by execution-run policy: ${toolName}`, interrupt: true } as const;
+  private buildCanCallTool(): CanCallToolCallback {
+    return async (toolName, input, options) => {
+      const toolUseId = readNonBlankOpaqueIdentifier(options.toolUseId);
+      if (!toolUseId) {
+        throw new Error('Cannot apply a permission decision without a canonical tool-use ID');
       }
-      const updatedInput = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-      return { behavior: 'allow', updatedInput } as const;
+      const cancelPendingRequest = () => {
+        this.opts.permissionHandler.cancelPendingRequest?.(toolUseId, 'Claude permission request cancelled');
+      };
+      options.signal.addEventListener('abort', cancelPendingRequest, { once: true });
+      try {
+        if (options.signal.aborted) {
+          cancelPendingRequest();
+          throw new Error('Claude permission request cancelled');
+        }
+        const result = await this.opts.permissionHandler.handleToolCall(toolUseId, toolName, input);
+        if (result.decision === 'denied' || result.decision === 'abort') {
+          return { behavior: 'deny', message: `Tool denied by execution-run policy: ${toolName}`, interrupt: true };
+        }
+        const updatedInput = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+        return { behavior: 'allow', updatedInput };
+      } finally {
+        options.signal.removeEventListener('abort', cancelPendingRequest);
+      }
     };
   }
 

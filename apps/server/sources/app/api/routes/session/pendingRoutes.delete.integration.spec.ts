@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createDbMocks, installDbModuleMock } from "../../testkit/dbMocks";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 
 const deletePendingMessage = vi.fn();
 const discardPendingMessage = vi.fn();
+const dbMocks = createDbMocks({ session: ["findUnique"] } as const);
+
+installDbModuleMock({ db: dbMocks.db });
 
 vi.mock("@/app/session/pending/pendingMessageService", () => ({
     deletePendingMessage,
@@ -13,6 +17,8 @@ vi.mock("@/app/session/pending/pendingMessageService", () => ({
 describe("sessionPendingRoutes (delete) (status mapping)", () => {
     beforeEach(() => {
         vi.resetModules();
+        dbMocks.reset();
+        dbMocks.db.session.findUnique.mockResolvedValue(null);
         deletePendingMessage.mockReset();
         discardPendingMessage.mockReset();
     });

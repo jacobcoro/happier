@@ -13,6 +13,75 @@ import {
 import { createTestRpcManager, runGit as git } from './testRpcHarness';
 
 describe('git RPC handlers', () => {
+    it.skipIf(process.platform === 'win32').each([false, true])('synchronizes Git-derived colon filenames literally after all-pending commit (nested=%s)', async (nested) => {
+        const workspace = mkdtempSync(join(tmpdir(), 'happier-git-rpc-'));
+        git(workspace, ['init']);
+        git(workspace, ['config', 'user.email', 'test@example.com']);
+        git(workspace, ['config', 'user.name', 'Test User']);
+        writeFileSync(join(workspace, 'base.txt'), 'base\n');
+        git(workspace, ['add', 'base.txt']);
+        git(workspace, ['commit', '-m', 'base']);
+        const cwd = nested ? join(workspace, 'sub') : workspace;
+        if (nested) mkdirSync(cwd);
+        writeFileSync(join(cwd, ':(literal)new.txt'), 'new\n');
+        const { call } = createTestRpcManager({ workingDirectory: cwd });
+        const response = await call<{ success: boolean }, { message: string; scope: { kind: 'all-pending' } }>(
+            RPC_METHODS.SCM_COMMIT_CREATE, { message: 'root', scope: { kind: 'all-pending' } },
+        );
+        expect(response.success).toBe(true);
+        expect(git(workspace, ['status', '--porcelain'])).toBe('');
+    });
+
+    it.each(['paths', 'all-pending'] as const)('creates %s root commit for an untracked file and synchronizes the live index', async (kind) => {
+        const workspace = mkdtempSync(join(tmpdir(), 'happier-git-rpc-'));
+        git(workspace, ['init']);
+        git(workspace, ['config', 'user.email', 'test@example.com']);
+        git(workspace, ['config', 'user.name', 'Test User']);
+        writeFileSync(join(workspace, 'root.txt'), 'root\n');
+
+        const { call } = createTestRpcManager({ workingDirectory: workspace });
+        const response = await call<{ success: boolean }, { cwd?: string; message: string; scope: { kind: 'paths'; include: string[] } | { kind: 'all-pending' } }>(
+            RPC_METHODS.SCM_COMMIT_CREATE,
+            {
+                cwd: '.',
+                message: 'root path-scoped commit',
+                scope: kind === 'paths' ? { kind, include: ['root.txt'] } : { kind },
+            },
+        );
+
+        expect(response.success).toBe(true);
+        expect(git(workspace, ['show', '--pretty=', '--name-only', 'HEAD'])).toBe('root.txt');
+        expect(git(workspace, ['status', '--porcelain=v2'])).toBe('');
+        expect(git(workspace, ['diff', '--cached', '--name-only'])).toBe('');
+    });
+
+
+    it('preserves HEAD and the live index when staged-path inspection fails', async () => {
+        const workspace = mkdtempSync(join(tmpdir(), 'happier-git-rpc-'));
+        git(workspace, ['init']);
+        git(workspace, ['config', 'user.email', 'test@example.com']);
+        git(workspace, ['config', 'user.name', 'Test User']);
+        writeFileSync(join(workspace, 'a.txt'), 'base\n');
+        git(workspace, ['add', 'a.txt']);
+        git(workspace, ['commit', '-m', 'base']);
+        const head = git(workspace, ['rev-parse', 'HEAD']);
+        writeFileSync(join(workspace, 'a.txt'), 'next\n');
+        const indexPath = join(workspace, '.git', 'index');
+        writeFileSync(indexPath, 'not-a-valid-index');
+        const indexBefore = readFileSync(indexPath);
+
+        const { call } = createTestRpcManager({ workingDirectory: workspace });
+        const response = await call<{ success: boolean; errorCode?: string }, { cwd: string; message: string; scope: { kind: 'paths'; include: string[] } }>(
+            RPC_METHODS.SCM_COMMIT_CREATE,
+            { cwd: '.', message: 'must not commit', scope: { kind: 'paths', include: ['a.txt'] } },
+        );
+        expect(response.success).toBe(false);
+        expect(response.errorCode).toBe(SCM_OPERATION_ERROR_CODES.COMMAND_FAILED);
+        expect(git(workspace, ['rev-parse', 'HEAD'])).toBe(head);
+        expect(readFileSync(indexPath)).toEqual(indexBefore);
+        expect(readFileSync(join(workspace, 'a.txt'), 'utf8')).toBe('next\n');
+    });
+
     it('rejects commit creation when message exceeds max length', async () => {
         const workspace = mkdtempSync(join(tmpdir(), 'happier-git-rpc-'));
         git(workspace, ['init']);

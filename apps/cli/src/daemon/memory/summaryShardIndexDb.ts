@@ -1,4 +1,4 @@
-import { openSqliteDatabaseSync, type SqliteDatabaseSync } from './sqliteSync';
+import { openSqliteDatabaseSync, type SqliteDatabaseSync } from '@/utils/sqlite/sqliteSync';
 import {
   createMemoryIndexQueueDb,
   ensureMemoryIndexQueueSchema,

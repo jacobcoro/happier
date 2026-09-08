@@ -22,6 +22,43 @@ function createDeferred<T>(): Deferred<T> {
 const CREDENTIALS: AuthCredentials = { token: 'token-1', secret: 'secret-1' };
 
 describe('runAppBootSequence', () => {
+    it.each(['authenticated', 'signed-out', 'deferred'] as const)('waits for authoritative drafts before restore or first paint: %s', async (mode) => {
+        const drafts = createDeferred<void>();
+        const credentials = createDeferred<AuthCredentials | null>();
+        const events: string[] = [];
+        const run = runAppBootSequence({
+            loadFonts: async () => {},
+            sodiumReady: Promise.resolve(),
+            resolveCredentials: () => mode === 'deferred' ? credentials.promise : Promise.resolve(mode === 'authenticated' ? CREDENTIALS : null),
+            prepareWarmCache: async () => {},
+            prepareSessionDrafts: () => drafts.promise,
+            restoreSync: async () => { events.push('restore'); },
+            onReady: () => { events.push('ready'); },
+        });
+        await vi.runAllTimersAsync();
+        expect(events).toEqual([]);
+        drafts.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        if (mode === 'deferred') credentials.resolve(CREDENTIALS);
+        await run;
+        expect(events).toEqual(mode === 'authenticated' ? ['restore', 'ready'] : mode === 'deferred' ? ['ready', 'restore', 'ready'] : ['ready']);
+    });
+
+    it('rejects failed authoritative draft preparation without restoring or painting empty state', async () => {
+        const failure = new Error('IndexedDB unavailable');
+        const events: string[] = [];
+        await expect(runAppBootSequence({
+            loadFonts: async () => {},
+            sodiumReady: Promise.resolve(),
+            resolveCredentials: async () => CREDENTIALS,
+            prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => { throw failure; },
+            restoreSync: async () => { events.push('restore'); },
+            onReady: () => { events.push('ready'); },
+        })).rejects.toBe(failure);
+        expect(events).toEqual([]);
+    });
+
     beforeEach(() => {
         vi.useFakeTimers();
         vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -51,6 +88,7 @@ describe('runAppBootSequence', () => {
                 return CREDENTIALS;
             },
             prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => {},
             restoreSync: async () => {},
             onReady: () => {},
             fontLoadTimeoutMs: 5_000,
@@ -76,6 +114,7 @@ describe('runAppBootSequence', () => {
             sodiumReady: Promise.resolve(),
             resolveCredentials: async () => CREDENTIALS,
             prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => {},
             restoreSync: async () => {},
             onReady: (state) => ready.push(state),
             fontLoadTimeoutMs: 500,
@@ -98,6 +137,7 @@ describe('runAppBootSequence', () => {
             sodiumReady: Promise.resolve(),
             resolveCredentials: () => credentials.promise,
             prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => {},
             restoreSync: async (value) => {
                 restored.push(value);
             },
@@ -130,6 +170,7 @@ describe('runAppBootSequence', () => {
             sodiumReady: Promise.resolve(),
             resolveCredentials: () => credentials.promise,
             prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => {},
             restoreSync: async () => {},
             onReady: (state) => ready.push(state),
             fontLoadTimeoutMs: 500,
@@ -151,6 +192,7 @@ describe('runAppBootSequence', () => {
             sodiumReady: Promise.resolve(),
             resolveCredentials: async () => CREDENTIALS,
             prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => {},
             restoreSync: async () => {
                 order.push('restore');
             },
@@ -170,6 +212,7 @@ describe('runAppBootSequence', () => {
             sodiumReady: Promise.resolve(),
             resolveCredentials: async () => CREDENTIALS,
             prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => {},
             restoreSync: async () => {},
             onReady: (state) => ready.push(state),
         });
@@ -185,6 +228,7 @@ describe('runAppBootSequence', () => {
             sodiumReady: Promise.resolve(),
             resolveCredentials: async () => CREDENTIALS,
             prepareWarmCache: async () => {},
+            prepareSessionDrafts: async () => {},
             restoreSync: async () => {
                 throw new Error('restore failed');
             },
@@ -206,6 +250,7 @@ describe('runAppBootSequence', () => {
                 started.push('credentials');
                 return CREDENTIALS;
             },
+            prepareSessionDrafts: async () => {},
             prepareWarmCache: () => {
                 started.push('warm-cache-key');
                 return warmCacheKey.promise;
@@ -237,6 +282,7 @@ describe('runAppBootSequence', () => {
             sodiumReady: Promise.resolve(),
             resolveCredentials: async () => CREDENTIALS,
             prepareWarmCache: () => new Promise<void>(() => {}),
+            prepareSessionDrafts: async () => {},
             restoreSync: async () => {
                 order.push('restore');
             },

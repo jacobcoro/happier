@@ -9,6 +9,8 @@
  * PURE — NO `@tiptap/*` import.
  */
 
+import * as React from 'react';
+
 import {
     evaluateMarkdownRichEligibility,
     type MarkdownRichEligibility,
@@ -23,9 +25,16 @@ export type ResolveRichEligibilityOptions = Readonly<{
 /**
  * Resolves rich-eligibility on native (no HTML round-trip adapter).
  */
-export function resolveRichEligibility(
+export function useRichEligibility(
     raw: string,
     opts: ResolveRichEligibilityOptions,
 ): MarkdownRichEligibility {
-    return evaluateMarkdownRichEligibility(raw, { ...opts, htmlRoundTrip: undefined });
+    return React.useMemo(
+        () => evaluateMarkdownRichEligibility(raw, {
+            language: opts.language,
+            maxBytes: opts.maxBytes,
+            htmlRoundTripMaxBytes: opts.htmlRoundTripMaxBytes,
+        }),
+        [raw, opts.language, opts.maxBytes, opts.htmlRoundTripMaxBytes],
+    );
 }

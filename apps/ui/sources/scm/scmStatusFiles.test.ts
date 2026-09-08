@@ -42,6 +42,7 @@ describe('snapshotToScmStatusFiles', () => {
                     stats: {
                         includedAdded: 2,
                         includedRemoved: 1,
+                        isComplete: false,
                         pendingAdded: 4,
                         pendingRemoved: 0,
                         isBinary: false,
@@ -76,6 +77,9 @@ describe('snapshotToScmStatusFiles', () => {
         };
 
         const files = snapshotToScmStatusFiles(snapshot);
+        expect(files.pendingFiles.find((file) => file.fullPath === "src/a.ts")?.hasIncludedDelta).toBe(true);
+        expect(files.pendingFiles.find((file) => file.fullPath === "new.txt")?.hasIncludedDelta).toBe(false);
+        expect(files.pendingFiles.find((file) => file.fullPath === "src/a.ts")?.isComplete).toBe(false);
 
         expect(files.branch).toBe('main');
         expect(files.upstream).toBe('origin/main');

@@ -109,7 +109,56 @@ Every retained compatibility path records:
 
 Remove the path when its support window has ended and evidence shows no supported reader, writer, or stored shape still requires it. Do not remove a released-data reader merely because current writers stopped producing that shape.
 
+### Account-pool quota-reset opt-in (development)
+
+`autoUseQuotaResetsWhenExhausted` is optional in the V1 pool policy; absence means
+false. Do not materialize a default in the wire schema. The `connectedServices.autoQuotaReset`
+server feature bit negotiates authoring; older servers do not advertise it, so updated
+clients do not offer the opt-in there.
+
+Updated group readers send `Accept: application/json; happier-connected-service-auto-quota-reset=1`.
+This uses a CORS-safelisted header so updated browsers can still reach older relays.
+The existing V3 group-route response boundary omits only this field for readers without
+that header. Policy PATCH remains a merge, so older clients can edit the fields they
+understand without erasing the opt-in. This projection preserves the strict readers in
+`cli-v0.2.11` and `server-v0.2.11` (commit `98ea8fb76733b1dd785d38c31360179cafa84824`);
+it can be removed when those strict response readers are no longer supported.
+
+The same response boundary masks the opt-in while its server feature or dependencies
+are disabled, without changing the stored policy. Existing recovery reads therefore
+observe automatic spending as disabled; re-enabling the feature restores the saved choice.
+
+This is forward coexistence, not an old-server rollback guarantee. An older server's
+persisted-policy parser rejects the new field and falls back to its complete default
+policy. Do not roll back a database containing this opt-in to that reader without a
+separately validated, authorized data reconciliation. No database rewrite is performed
+by the response projection.
+
 ### Session draft rollout
+
+The current development UI stores browser draft repositories and pending-message outboxes in
+IndexedDB, outside Web Storage's small synchronous quota. Native clients retain MMKV. Browser
+startup prepares drafts before restoring Sync or rendering draft consumers; a failed preparation
+uses the existing app recovery boundary rather than treating saved drafts as absent.
+
+The draft repository writes a compact local v2 envelope and reads both v1 and v2. Equal base/local
+documents and pending fields are stored once and reconstructed on read; independent conflict
+values are retained. This does not change the synchronized draft document or server wire format.
+Older UI binaries cannot read this local v2 representation.
+
+Legacy browser values are removed only after their IndexedDB transaction commits. Migration
+preserves conflicting copies and reports a failure instead of silently choosing one. Reload older
+open tabs when updating the UI so they stop writing the retired Web Storage records. Concurrent
+editing from an unupgraded tab during migration is not supported: old Web Storage writers cannot
+participate in IndexedDB transactions. Browser
+outbox operations await local transaction completion before reporting local custody; enqueue
+acknowledgements cannot retire a concurrently recorded cancellation.
+
+Draft autosaves retain failed writes in memory, expose the existing error status, and retry through
+the repository's flush owner. Browser draft updates preserve unrelated replicas written by another
+tab and reject conflicting changes to the same replica. IndexedDB still has browser/disk limits:
+an error is not permission to discard drafts or pending messages, and unsaved in-memory edits must
+be preserved before reloading. These device-local stores are not substitutes for server acknowledgement.
 
 Synchronized Session drafts are negotiated through the `sessions.drafts` server feature bit. A new
 client fails closed when that bit or the typed routes are unavailable and retains the incumbent
@@ -137,6 +186,24 @@ Draft documents preserve unknown extension fields as JSON. This lets a client wi
 composer contribution edit fields it understands without deleting newer semantic data; it does not
 authorize that client to execute the unknown contribution. Raw files, handles, secrets, and other
 device-only state remain outside the compatibility shape.
+
+### Request notification previews (development)
+
+`requestIncludeMessageText` extends the existing account notification preferences and
+notification-channel objects. Remote readers default a missing field to true;
+an explicit false omits request content. The device-local preview setting
+is independent of account writeback and defaults to true. No session, permission
+response, or webhook payload shape changes: richer text uses the existing body and
+`request.toolDetails`, and disabling previews omits details from both.
+
+The released `ui-mobile-v0.2.11` and `ui-web-v0.2.11-preview.186` readers at
+`98ea8fb76733b1dd785d38c31360179cafa84824` strip unknown nested notification fields.
+Their notification editor rebuilds both preference objects, and raw settings
+writeback replaces those objects rather than merging their members. An old-client
+edit can therefore erase this flag. The user-selected default is to show previews, so losing an explicit
+opt-out restores previews; users can disable them again from an updated client. Older CLI senders ignore
+the flag and retain their existing reduced hints. There is no new server operation,
+migration, duplicate settings owner, or client-update requirement.
 
 ## Migration history
 

@@ -130,6 +130,19 @@ export function createHappierMcpServer(
         await (client.executionRuns?.wait?.(request) ?? sessionScopedRpc('execution.run.wait', request)),
       ),
   };
+  const runForSession = async (
+    sessionId: string,
+    operation: () => Promise<unknown>,
+  ): Promise<unknown> => {
+    if (sessionId !== client.sessionId) {
+      return {
+        ok: false,
+        code: 'execution_run_target_unavailable',
+        message: 'Cross-session execution run control is unavailable from a session-scoped MCP bridge',
+      };
+    }
+    return await operation();
+  };
 
   const harness = createCliActionExecutorHarness(
     {
@@ -173,13 +186,13 @@ export function createHappierMcpServer(
 
         return { ok: true as const, sessionId: normalizedSessionId, title: normalizedTitle };
       },
-      executionRunStart: async (_sessionId, request) => await executionRuns.start(request),
-      executionRunList: async (_sessionId, request) => await executionRuns.list(request),
-      executionRunGet: async (_sessionId, request) => await executionRuns.get(request),
-      executionRunSend: async (_sessionId, request) => await executionRuns.send(request),
-      executionRunStop: async (_sessionId, request) => await executionRuns.stop(request),
-      executionRunAction: async (_sessionId, request) => await executionRuns.action(request),
-      executionRunWait: async (_sessionId, request) => await executionRuns.wait(request),
+      executionRunStart: async (sessionId, request) => await runForSession(sessionId, async () => await executionRuns.start(request)),
+      executionRunList: async (sessionId, request) => await runForSession(sessionId, async () => await executionRuns.list(request)),
+      executionRunGet: async (sessionId, request) => await runForSession(sessionId, async () => await executionRuns.get(request)),
+      executionRunSend: async (sessionId, request) => await runForSession(sessionId, async () => await executionRuns.send(request)),
+      executionRunStop: async (sessionId, request) => await runForSession(sessionId, async () => await executionRuns.stop(request)),
+      executionRunAction: async (sessionId, request) => await runForSession(sessionId, async () => await executionRuns.action(request)),
+      executionRunWait: async (sessionId, request) => await runForSession(sessionId, async () => await executionRuns.wait(request)),
 
       ...createDaemonMemoryActionDeps({
         invoke: async ({ machineId, method, request }) => {

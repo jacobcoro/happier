@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatPermissionRequestSummary } from './permissionSummary';
+import { formatPermissionRequestSummary } from './agentRequestSummary.js';
 
 describe('formatPermissionRequestSummary', () => {
     it('prefers permission title over any inferred shell/file summary', () => {

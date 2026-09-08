@@ -5,6 +5,10 @@ import { resolveConnectedServicesProviderStateSharingPolicyV1 } from './connecte
 import { isActionEnabledByActionsSettings } from '../../actions/actionSettings.js';
 
 describe('accountSettings', () => {
+  it('defaults execution-run parent completion notifications off and accepts an explicit value', () => {
+    expect(accountSettingsParse({}).executionRunsNotifyParentOnCompletionDefault).toBe(false);
+    expect(accountSettingsParse({ executionRunsNotifyParentOnCompletionDefault: true }).executionRunsNotifyParentOnCompletionDefault).toBe(true);
+  });
   it('defaults usage-limit recovery to asking before waiting', () => {
     const parsed = accountSettingsParse({});
 
@@ -517,6 +521,40 @@ describe('accountSettings', () => {
     });
 
     expect(parsed.notificationsSettingsV1.readyIncludeMessageText).toBe(false);
+  });
+
+  it('uses request previews after an older UI rewrites its known notification fields', () => {
+    // ui-mobile-v0.2.11 / ui-web-v0.2.11-preview.186, 98ea8fb76733b1dd785d38c31360179cafa84824:
+    // NotificationsSettingsV1Schema strips unknown fields before the UI replaces the stored object.
+    const parsed = accountSettingsParse({ notificationsSettingsV1: {
+      v: 1, pushEnabled: true, ready: true, readyIncludeMessageText: true,
+      permissionRequest: true, userActionRequest: true, foregroundBehavior: 'full',
+    } });
+    expect(parsed.notificationsSettingsV1.requestIncludeMessageText).toBe(true);
+    expect(parsed.notificationsSettingsV1.permissionRequest).toBe(true);
+    expect(parsed.notificationsSettingsV1.userActionRequest).toBe(true);
+  });
+
+  it('defaults request notification preview settings to enabled', () => {
+    const parsed = accountSettingsParse({});
+
+    expect(parsed.notificationsSettingsV1.requestIncludeMessageText).toBe(true);
+  });
+
+  it('accepts explicit request notification preview settings', () => {
+    const parsed = accountSettingsParse({
+      notificationsSettingsV1: {
+        v: 1,
+        pushEnabled: true,
+        ready: true,
+        requestIncludeMessageText: false,
+        permissionRequest: true,
+        userActionRequest: true,
+        foregroundBehavior: 'full',
+      },
+    });
+
+    expect(parsed.notificationsSettingsV1.requestIncludeMessageText).toBe(false);
   });
 
   it('defaults target-keyed backend settings maps', () => {

@@ -88,6 +88,51 @@ describe("connectRoutes (provider account usage canonical routes)", () => {
         });
     });
 
+    it("preserves independently fresh subscription observations without changing the legacy snapshot envelope", async () => {
+        harness.resetEnv({
+            HAPPIER_FEATURE_CONNECTED_SERVICES_QUOTAS__ENABLED: "true",
+            HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
+            HAPPIER_FEATURE_ENCRYPTION__DEFAULT_ACCOUNT_MODE: "plain",
+        });
+        const user = await db.account.create({ data: { publicKey: null, encryptionMode: "plain" }, select: { id: true } });
+        const snapshot = createUsageSnapshot({ fetchedAt: 1000 });
+        const app = createProviderAccountUsageTestApp();
+        connectRoutes(app as Parameters<typeof connectRoutes>[0]);
+        await app.ready();
+        const subscription = {
+            status: "subscribed", renewal: "off", observedAtMs: 2000, staleAfterMs: 60000,
+            currentPeriodEndAtMs: 100000,
+        };
+        const write = async (fetchedAt: number, observation?: typeof subscription | { status: string; renewal: string; observedAtMs: number; staleAfterMs: number }) => {
+            const payload = createV3ProviderAccountUsagePayload({ snapshot: createUsageSnapshot({ fetchedAt }) });
+            return await app.inject({
+                method: "POST", url: `/v3/connect/provider-account-usage/${snapshot.recordId}`,
+                headers: { "content-type": "application/json", "x-test-user-id": user.id },
+                payload: { ...payload, metadata: { ...payload.metadata, ...(observation ? { subscription: observation } : {}) } },
+            });
+        };
+        expect((await write(1000, subscription)).statusCode).toBe(200);
+        expect((await write(3000)).statusCode).toBe(200);
+        const read = async () => (await app.inject({
+            method: "GET", url: `/v3/connect/provider-account-usage/${snapshot.recordId}`,
+            headers: { "x-test-user-id": user.id, accept: "application/json; happier-account-subscription=1" },
+        })).json();
+        expect(await read()).toMatchObject({ subscription, content: { v: { fetchedAtMs: 3000 } } });
+        expect((await read()).content.v).not.toHaveProperty("subscription");
+        const legacyRead = await app.inject({ method: "GET", url: `/v3/connect/provider-account-usage/${snapshot.recordId}`, headers: { "x-test-user-id": user.id } });
+        expect(legacyRead.json()).not.toHaveProperty("subscription");
+        expect(legacyRead.json().content.v).not.toHaveProperty("subscription");
+        const row = await db.providerAccountUsageRecord.findUniqueOrThrow({ where: { accountId_recordId: { accountId: user.id, recordId: snapshot.recordId } } });
+        expect(row.snapshot).not.toHaveProperty("subscription");
+        expect(row.metadata).toMatchObject({ subscription });
+        // A fresh billing result can arrive with an older quota snapshot.
+        const none = { status: "none", renewal: "unknown", observedAtMs: 4000, staleAfterMs: 60000 };
+        expect((await write(1000, none)).statusCode).toBe(200);
+        expect(await read()).toMatchObject({ subscription: none, content: { v: { fetchedAtMs: 3000 } } });
+        expect((await write(5000, subscription)).statusCode).toBe(200);
+        expect(await read()).toMatchObject({ subscription: none, content: { v: { fetchedAtMs: 5000 } } });
+    });
+
     it("does not create plaintext provider-account usage rows from refresh requests for missing records", async () => {
         harness.resetEnv({
             HAPPIER_FEATURE_CONNECTED_SERVICES_QUOTAS__ENABLED: "true",

@@ -7,9 +7,9 @@ import {
   ActivityWebhookPayloadV1Schema,
   BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
   accountSettingsParse,
-  resolveNotificationChannelsV1FromAccountSettings,
 } from '@happier-dev/protocol';
-import { sendWebhookActivityNotificationAsync } from '../../../../apps/cli/src/activity/notifications/sendWebhookActivityNotification';
+import { dispatchActivityNotificationAsync } from '../../../../apps/cli/src/activity/notifications/dispatchActivityNotification';
+import type { ActivityNotificationEvent } from '../../../../apps/cli/src/activity/notifications/activityNotificationEvent';
 
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
@@ -163,49 +163,6 @@ async function startWebhookCaptureServer(): Promise<{
   };
 }
 
-async function dispatchWebhookActivity(params: {
-  settingsJson: string;
-  eventJson: string;
-}): Promise<{ attemptedChannels: number; deliveredChannels: number }> {
-  const settings = accountSettingsParse(JSON.parse(params.settingsJson));
-  const event = JSON.parse(params.eventJson) as
-    | Readonly<{
-        topic: 'ready';
-        sessionId: string;
-        sessionTitle?: string | null;
-        waitingForCommandLabel: string;
-        assistantPreviewText?: string | null;
-      }>
-    | Readonly<{
-        topic: 'permission_request' | 'user_action_request';
-        sessionId: string;
-        sessionTitle?: string | null;
-        agentDisplayName?: string | null;
-        requestId: string;
-        toolName: string;
-        toolInput?: unknown;
-        toolDetails?: string | null;
-      }>;
-  let attemptedChannels = 0;
-  let deliveredChannels = 0;
-
-  for (const channel of resolveNotificationChannelsV1FromAccountSettings(settings)) {
-    if (channel.kind !== 'webhook' || channel.enabled !== true) continue;
-    if (event.topic === 'ready' && channel.topics.ready !== true) continue;
-    if (event.topic === 'permission_request' && channel.topics.permissionRequest !== true) continue;
-    if (event.topic === 'user_action_request' && channel.topics.userActionRequest !== true) continue;
-
-    attemptedChannels += 1;
-    await sendWebhookActivityNotificationAsync({
-      channel,
-      event,
-    });
-    deliveredChannels += 1;
-  }
-
-  return { attemptedChannels, deliveredChannels };
-}
-
 describe('core e2e: webhook activity notifications', () => {
   let server: StartedServer | null = null;
   let webhookServer: Awaited<ReturnType<typeof startWebhookCaptureServer>> | null = null;
@@ -219,7 +176,7 @@ describe('core e2e: webhook activity notifications', () => {
 
   it('delivers ready activity to a configured webhook channel using persisted account settings', async () => {
     const testDir = run.testDir(`notifications-webhook-ready-${randomUUID()}`);
-    server = await startServerLight({ testDir });
+    server = await startServerLight({ testDir, dbProvider: 'sqlite' });
     webhookServer = await startWebhookCaptureServer();
 
     const auth = await createTestAuth(server.baseUrl);
@@ -276,19 +233,20 @@ describe('core e2e: webhook activity notifications', () => {
       token: auth.token,
     });
 
-    const dispatchResult = await dispatchWebhookActivity({
-      settingsJson: JSON.stringify(settings),
-      eventJson: JSON.stringify({
+    const dispatchResult = await dispatchActivityNotificationAsync({
+      settings,
+      event: {
         topic: 'ready',
         sessionId: 'session-ready-1',
         sessionTitle: 'Review branch',
         waitingForCommandLabel: 'Codex',
         assistantPreviewText: 'The branch is ready to review.',
-      }),
+      },
     });
     expect(dispatchResult).toEqual({
       attemptedChannels: 1,
       deliveredChannels: 1,
+      suppressedChannels: 0,
     });
 
     const webhookRequest = await webhookServer.nextPayload();
@@ -307,90 +265,77 @@ describe('core e2e: webhook activity notifications', () => {
     });
   }, 240_000);
 
-  it('sends sanitized permission-request details to the configured webhook channel', async () => {
-    const testDir = run.testDir(`notifications-webhook-permission-${randomUUID()}`);
-    server = await startServerLight({ testDir });
+  it('includes permission and question context by default and hides it when explicitly disabled', async () => {
+    const testDir = run.testDir(`notifications-webhook-request-${randomUUID()}`);
+    server = await startServerLight({ testDir, dbProvider: 'sqlite' });
     webhookServer = await startWebhookCaptureServer();
-
     const auth = await createTestAuth(server.baseUrl);
-    await writeAccountSettings({
-      baseUrl: server.baseUrl,
-      token: auth.token,
-      settings: {
-        schemaVersion: 2,
-        notificationsSettingsV1: {
-          v: 1,
-          pushEnabled: false,
-          ready: true,
-          readyIncludeMessageText: true,
-          permissionRequest: true,
-          userActionRequest: true,
-          foregroundBehavior: 'full',
+    const command = 'git status --short && git diff -- src/main.ts';
+    const rationale = 'Inspect the changed entry point before proposing a fix.';
+    const questionDetails = [
+      'Which change should I inspect?', 'Entry point', 'Inspect application startup',
+      'Tests', 'Inspect regression coverage', 'Which checks should I run?',
+      'Unit', 'Run focused unit checks', 'Integration', 'Run the composed flow',
+    ];
+
+    for (const requestIncludeMessageText of [true, false, undefined]) {
+      await writeAccountSettings({
+        baseUrl: server.baseUrl, token: auth.token,
+        settings: {
+          schemaVersion: 2,
+          notificationsSettingsV1: { v: 1, pushEnabled: false, permissionRequest: true, userActionRequest: true },
+          notificationChannelsV1: [{
+            v: 1, id: 'webhook-primary', kind: 'webhook', enabled: true, url: webhookServer.url,
+            signingSecret: { _isSecretValue: true, value: 'permission-secret' },
+            topics: { ready: false, permissionRequest: true, userActionRequest: true },
+            ...(requestIncludeMessageText === undefined ? {} : { requestIncludeMessageText }),
+          }],
         },
-        notificationChannelsV1: [
-          {
-            v: 1,
-            id: 'webhook-primary',
-            kind: 'webhook',
-            enabled: true,
-            url: webhookServer.url,
-            signingSecret: {
-              _isSecretValue: true,
-              value: 'permission-secret',
-            },
-            topics: {
-              ready: false,
-              permissionRequest: true,
-              userActionRequest: false,
-            },
-            readyIncludeMessageText: false,
-          },
-        ],
-      },
-    });
-
-    const settings = await readAccountSettings({
-      baseUrl: server.baseUrl,
-      token: auth.token,
-    });
-
-    const dispatchResult = await dispatchWebhookActivity({
-      settingsJson: JSON.stringify(settings),
-      eventJson: JSON.stringify({
-        topic: 'permission_request',
-        sessionId: 'session-perm-1',
-        sessionTitle: 'Fix prod issue',
-        agentDisplayName: 'Claude',
-        requestId: 'request-9',
-        toolName: 'Bash',
-        toolInput: {
-          command: 'git status --short && echo secret-token',
-        },
-      }),
-    });
-    expect(dispatchResult).toEqual({
-      attemptedChannels: 1,
-      deliveredChannels: 1,
-    });
-
-    const webhookRequest = await webhookServer.nextPayload();
-    expect(webhookRequest.headers['x-happier-signature-256']).toMatch(/^sha256=[a-f0-9]{64}$/);
-    const payload = webhookRequest.payload;
-    expect(payload.topic).toBe('permission_request');
-    expect(payload.navigation).toEqual({
-      sessionId: 'session-perm-1',
-      requestId: 'request-9',
-    });
-    expect(payload.content).toEqual({
-      title: 'Fix prod issue',
-      body: 'Claude asks permission to use Bash\nCommand: git',
-    });
-    expect(payload.request).toEqual({
-      requestId: 'request-9',
-      kind: 'permission',
-      toolName: 'Bash',
-      toolDetails: 'Command: git',
-    });
-    expect(JSON.stringify(payload)).not.toContain('secret-token');
+      });
+      const settings = await readAccountSettings({ baseUrl: server.baseUrl, token: auth.token });
+      const events = [{
+        topic: 'permission_request', sessionId: 'session-perm-1', sessionTitle: 'Review change',
+        agentDisplayName: 'Claude', requestId: `permission-${requestIncludeMessageText}`, toolName: 'Bash',
+        toolInput: { command, rationale },
+      }, {
+        topic: 'user_action_request', sessionId: 'session-perm-1', sessionTitle: 'Review change',
+        agentDisplayName: 'Claude', requestId: `question-${requestIncludeMessageText}`, toolName: 'AskUserQuestion',
+        toolInput: { questions: [{
+          header: 'Scope', question: questionDetails[0], multiSelect: false,
+          options: [
+            { label: questionDetails[1], description: questionDetails[2] },
+            { label: questionDetails[3], description: questionDetails[4] },
+          ],
+        }, {
+          header: 'Checks', question: questionDetails[5], multiSelect: true,
+          options: [
+            { label: questionDetails[6], description: questionDetails[7] },
+            { label: questionDetails[8], description: questionDetails[9] },
+          ],
+        }] },
+      }] satisfies ActivityNotificationEvent[];
+      for (const event of events) {
+        const result = await dispatchActivityNotificationAsync({ settings, event });
+        expect(result).toEqual({ attemptedChannels: 1, deliveredChannels: 1, suppressedChannels: 0 });
+        const request = await webhookServer.nextPayload();
+        expect(request.headers['x-happier-signature-256']).toMatch(/^sha256=[a-f0-9]{64}$/);
+        const payload = request.payload;
+        expect(payload.topic).toBe(event.topic);
+        expect(payload.navigation).toEqual({ sessionId: event.sessionId, requestId: event.requestId });
+        const details = event.topic === 'permission_request' ? [command, rationale] : questionDetails;
+        if (requestIncludeMessageText !== false) {
+          for (const detail of details) {
+            expect(payload.content.body).toContain(detail);
+            expect(payload.request?.toolDetails).toContain(detail);
+          }
+        } else {
+          expect(payload.request?.toolDetails).toBeNull();
+          for (const detail of details) expect(JSON.stringify(payload)).not.toContain(detail);
+          expect(payload.content.body).toBe(event.topic === 'permission_request'
+            ? 'Claude asks permission to use Bash'
+            : 'Claude needs your input for AskUserQuestion');
+        }
+      }
+    }
   }, 240_000);
 });

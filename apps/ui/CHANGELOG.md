@@ -1,5 +1,79 @@
 # Changelog
 
+## Release 2026-09-07.1 - 2026-09-07
+
+<!-- happier-release-note-projections:v1
+{
+  "expo": {
+    "message": "Happier 0.2.12 makes long-running work more dependable: inactive messages can resume sessions safely, provider accounts recover more cleanly from capacity limits, drafts and pending work survive reconnects, daemon and terminal recovery is stronger, and file and code-review workflows are smoother."
+  },
+  "appStore": {
+    "whatsNew": "Happier 0.2.12 makes long-running work more dependable: inactive messages can resume sessions safely, provider accounts recover more cleanly from capacity limits, drafts and pending work survive reconnects, daemon and terminal recovery is stronger, and file and code-review workflows are smoother."
+  },
+  "playStore": {
+    "whatsNew": "Happier 0.2.12 makes long-running work more dependable: inactive messages can resume sessions safely, provider accounts recover more cleanly from capacity limits, drafts and pending work survive reconnects, daemon and terminal recovery is stronger, and file and code-review workflows are smoother."
+  },
+  "storyDeck": {
+    "summary": "Safer inactive-session recovery, stronger Connected Services failover, durable drafts and pending work, more reliable daemon startup, and smoother file and code-review workflows."
+  }
+}
+-->
+
+Happier 0.2.12 focuses on keeping long-running work available and recoverable across reconnects, provider limits, daemon restarts and device changes. It also improves file and code-review workflows, terminal setup, notifications and self-hosted operation.
+
+### Sessions keep moving through interruptions
+
+- Messages sent to inactive sessions can authorize the owning daemon to resume the session and deliver the work without requiring the app to remain connected.
+- Pending messages and turn mutations are retained more reliably across reconnects, restarts and temporary delivery failures.
+- Failed activation attempts remain visible and recoverable instead of silently losing the requested work.
+- Session drafts, new-session drafts and review comments are preserved when account or server scopes change.
+- Transcript catch-up, viewport restoration and streaming Markdown remain stable while sessions reconnect or receive additional history.
+- Managed Agent launches and handoffs retain their operation state and clean up temporary transfer files after durable export.
+
+### Connected Services and provider recovery
+
+- Account pools can recover more cleanly when a provider temporarily exhausts capacity or an account reaches its usage limit.
+- Provider usage, subscription state, reset times and recovery waits are retained and shared through the existing Connected Services surfaces.
+- Account switching stays attached to the active provider runtime where supported, reducing unnecessary Agent restarts.
+- Authentication and relay interruptions no longer discard otherwise valid stored credentials.
+- Quota checks across account groups run concurrently, improving recovery responsiveness for pools with several accounts.
+
+### Daemon, terminal and Agent reliability
+
+- Daemon startup recovers from recycled process identifiers, inconclusive process probes and interrupted tmux session state.
+- Linux session resource policy now applies consistently across supported startup modes.
+- Codex sessions preserve retained thread continuity, wait for prompt steerability and recover from transient app-server database contention more reliably.
+- Claude terminal dialogs and permission routing are more consistent across interactive sessions.
+- Pi and ACP sessions settle interrupted or failed turns without leaving misleading in-progress state.
+- Setup flows add guided terminal presentation and arrow-key navigation, with clearer relay-selection and reachability guidance.
+
+### Files, Git and code review
+
+- File, review and source-control workspaces have clearer navigation and more stable selection state.
+- Diff views add wrap-line controls and improved rendering for large or streaming changes.
+- Reviews can select exact files for a commit while retaining the surrounding workspace context.
+- Literal file paths and file statistics are handled more safely across Git operations.
+- Filesystem browsing, editing and navigation remain stable when switching between workspace surfaces.
+
+### Notifications and interface polish
+
+- Agent requests can produce richer notification summaries while respecting the request-notification preference.
+- Push delivery retries only failures that can safely be retried.
+- Startup notification handoff is more resilient when the app is opened from a notification.
+- Archived sessions stay out of active attention surfaces.
+- Navigation, segmented controls, anchored tooltips and the Android composer have received additional stability and presentation fixes.
+
+### Self-hosting and delivery
+
+- Stack targets retain their own synchronization state and keep remote servers behind the target-owned proxy.
+- Relay uninstall and upgrade paths preserve persistent user data.
+- Website download counts and fallback behavior are more reliable.
+- Release publication now supports a coordinated preview-and-stable fast path while still building and verifying each channel's distinct policy-bound artifacts.
+
+### Compatibility
+
+This release adds optional protocol fields and nullable server database columns. Existing clients continue to use their established behavior, while newer clients activate daemon-owned inactive-session recovery only when both the server and daemon advertise support. No coordinated app, CLI, daemon or relay rollout is required.
+
 ## Release 2026-08-29.1 - 2026-08-29
 
 <!-- happier-release-note-projections:v1

@@ -251,6 +251,35 @@ describe('ClaudeSdkAgentBackend', () => {
     }
   });
 
+  it('uses the exact Claude tool-use id and releases its pending decision when cancelled', async () => {
+    let resolvePermission!: (result: { decision: 'abort' }) => void;
+    const handleToolCall = vi.fn(() => new Promise<{ decision: 'abort' }>((resolve) => {
+      resolvePermission = resolve;
+    }));
+    const cancelPendingRequest = vi.fn(() => {
+      resolvePermission({ decision: 'abort' });
+      return true;
+    });
+    const { ClaudeSdkAgentBackend } = await import('./ClaudeSdkAgentBackend');
+    const backend = new ClaudeSdkAgentBackend({
+      cwd: process.cwd(),
+      modelId: 'chat-model',
+      permissionHandler: { handleToolCall, cancelPendingRequest },
+    });
+    const controller = new AbortController();
+    const pending = (backend as any).buildCanCallTool()('Bash', { command: 'git status' }, {
+      signal: controller.signal,
+      toolUseId: 'toolu_permission_1',
+    });
+
+    await vi.waitFor(() => expect(handleToolCall).toHaveBeenCalled());
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ behavior: 'deny', interrupt: true });
+    expect(handleToolCall).toHaveBeenCalledWith('toolu_permission_1', 'Bash', { command: 'git status' });
+    expect(cancelPendingRequest).toHaveBeenCalledWith('toolu_permission_1', 'Claude permission request cancelled');
+  });
+
   it('holds provider membership until the exact typed session/task terminal and ignores tool-result inference', async () => {
     const { ClaudeSdkAgentBackend } = await import('./ClaudeSdkAgentBackend');
     const backend = new ClaudeSdkAgentBackend({

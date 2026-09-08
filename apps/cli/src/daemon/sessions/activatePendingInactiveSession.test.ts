@@ -5,7 +5,7 @@ import { readPendingQueueV2ActivationEligibilityFromServer } from '@/api/session
 import { reportPendingSessionActivationFailure } from '@/api/session/pendingActivationTransport';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
 
-import { activatePendingInactiveSession } from './activatePendingInactiveSession';
+import { activatePendingSessionRuntime } from './activatePendingInactiveSession';
 
 vi.mock('@/session/transport/http/sessionsHttp', () => ({
   fetchSessionByIdCompat: vi.fn(),
@@ -25,7 +25,7 @@ const credentials = {
   },
 };
 
-describe('activatePendingInactiveSession', () => {
+describe('activatePendingSessionRuntime', () => {
   beforeEach(() => {
     vi.mocked(fetchSessionByIdCompat).mockReset();
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockReset();
@@ -68,7 +68,7 @@ describe('activatePendingInactiveSession', () => {
       runnerAcceptance: 'newly_accepted' as const,
     }));
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials,
       machineId: 'machine-1',
       sessionId: 'session-1',
@@ -133,7 +133,7 @@ describe('activatePendingInactiveSession', () => {
       .mockResolvedValueOnce('eligible');
     const spawnSession = vi.fn();
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
     })).resolves.toEqual({ status: 'not-needed', reason: 'authorization-stale' });
@@ -161,7 +161,7 @@ describe('activatePendingInactiveSession', () => {
       .mockResolvedValueOnce('ineligible');
     const spawnSession = vi.fn();
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
     })).resolves.toEqual({ status: 'not-needed', reason: 'authorization-stale' });
@@ -193,7 +193,7 @@ describe('activatePendingInactiveSession', () => {
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
     const spawnSession = vi.fn(async () => ({ type: 'success' as const, sessionId: 'session-1' }));
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
     })).resolves.toMatchObject({ status: 'activated' });
@@ -203,7 +203,7 @@ describe('activatePendingInactiveSession', () => {
     }));
   });
 
-  it('does not start an active runner or a session whose exact Pending authorization resolved', async () => {
+  it('delegates an active relay projection to the canonical runner serviceability owner', async () => {
     const baseSession = {
       id: 'session-1',
       seq: 12,
@@ -230,21 +230,61 @@ describe('activatePendingInactiveSession', () => {
       machineId: 'machine-1',
       path: '/repo',
     };
-    const spawnSession = vi.fn();
+    const spawnSession = vi.fn(async () => ({
+      type: 'success' as const,
+      sessionId: 'session-1',
+      runnerAcceptance: 'preexisting_or_adopted' as const,
+    }));
 
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(baseSession);
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials,
       machineId: 'machine-1',
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
       spawnSession,
-    })).resolves.toEqual({ status: 'not-needed', reason: 'active' });
+    })).resolves.toEqual({
+      status: 'activated',
+      runnerAcceptance: 'preexisting_or_adopted',
+    });
+    expect(spawnSession).toHaveBeenCalledOnce();
+  });
 
-    vi.mocked(fetchSessionByIdCompat).mockResolvedValue({ ...baseSession, active: false });
+  it('does not start a session whose exact Pending authorization resolved', async () => {
+    const baseSession = {
+      id: 'session-1',
+      seq: 12,
+      createdAt: 1,
+      updatedAt: 1,
+      active: false,
+      activeAt: 1,
+      encryptionMode: 'plain' as const,
+      metadata: JSON.stringify({
+        machineId: 'machine-1',
+        path: '/repo',
+        flavor: 'codex',
+        codexSessionId: 'vendor-1',
+      }),
+      metadataVersion: 1,
+      agentState: null,
+      agentStateVersion: 0,
+      pendingCount: 1,
+      pendingVersion: 9,
+      pendingActivationAuthorization: {
+        requestId: 'pending-after-ui-death',
+        requestedAt: 10,
+        status: 'waiting' as const,
+      },
+      dataEncryptionKey: null,
+      machineId: 'machine-1',
+      path: '/repo',
+    };
+    const spawnSession = vi.fn();
+
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValue(baseSession);
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('missing');
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials,
       machineId: 'machine-1',
       sessionId: 'session-1',
@@ -286,7 +326,7 @@ describe('activatePendingInactiveSession', () => {
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
     const spawnSession = vi.fn();
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials,
       machineId: 'machine-2',
       sessionId: 'session-1',
@@ -313,7 +353,7 @@ describe('activatePendingInactiveSession', () => {
     });
     const spawnSession = vi.fn();
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
     })).resolves.toEqual({ status: 'not-needed', reason: 'authorization-stale' });
@@ -335,14 +375,14 @@ describe('activatePendingInactiveSession', () => {
     const spawnSession = vi.fn();
 
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue({ ...baseSession, archivedAt: 11 });
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
     })).resolves.toEqual({ status: 'rejected', reason: 'ineligible' });
 
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(baseSession);
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('ineligible');
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
     })).resolves.toEqual({ status: 'rejected', reason: 'ineligible' });
@@ -369,7 +409,7 @@ describe('activatePendingInactiveSession', () => {
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
     };
 
-    await expect(activatePendingInactiveSession(input)).resolves.toEqual({
+    await expect(activatePendingSessionRuntime(input)).resolves.toEqual({
       status: 'not-needed', reason: 'snapshot-stale',
     });
 
@@ -380,12 +420,12 @@ describe('activatePendingInactiveSession', () => {
       errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
       errorMessage: 'runner may still attach',
     });
-    await expect(activatePendingInactiveSession(input)).resolves.toEqual({
+    await expect(activatePendingSessionRuntime(input)).resolves.toEqual({
       status: 'not-needed', reason: 'spawn-ambiguous',
     });
 
     spawnSession.mockResolvedValue({ type: 'success', sessionIdStatus: 'pending' });
-    await expect(activatePendingInactiveSession(input)).resolves.toEqual({
+    await expect(activatePendingSessionRuntime(input)).resolves.toEqual({
       status: 'not-needed', reason: 'spawn-ambiguous',
     });
     expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
@@ -405,7 +445,7 @@ describe('activatePendingInactiveSession', () => {
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
     vi.mocked(reportPendingSessionActivationFailure).mockRejectedValueOnce(new Error('network unavailable'));
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9,
       spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({
@@ -432,7 +472,7 @@ describe('activatePendingInactiveSession', () => {
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
     vi.mocked(reportPendingSessionActivationFailure).mockResolvedValueOnce({ didFail: false });
 
-    await expect(activatePendingInactiveSession({
+    await expect(activatePendingSessionRuntime({
       credentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9,
       spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({

@@ -126,6 +126,7 @@ export function sessionPendingRoutes(app: Fastify) {
                             z.literal("continuation_if_no_queued_user_input"),
                         ]).optional(),
                         requestedAction: PendingRequestedActionV1Schema.optional(),
+                        resumeWhenAvailable: z.literal(true).optional(),
                     }),
                     z.object({
                         content: SessionStoredMessageContentSchema,
@@ -136,6 +137,7 @@ export function sessionPendingRoutes(app: Fastify) {
                             z.literal("continuation_if_no_queued_user_input"),
                         ]).optional(),
                         requestedAction: PendingRequestedActionV1Schema.optional(),
+                        resumeWhenAvailable: z.literal(true).optional(),
                     }),
                 ]),
             },
@@ -178,6 +180,9 @@ export function sessionPendingRoutes(app: Fastify) {
             const requestedAction = body && typeof body === "object" && "requestedAction" in body
                 ? PendingRequestedActionV1Schema.parse((body as { requestedAction?: unknown }).requestedAction)
                 : ({ v: 1, kind: "enqueue" } as const);
+            const resumeWhenAvailable = body && typeof body === "object" && "resumeWhenAvailable" in body
+                ? (body as { resumeWhenAvailable?: true }).resumeWhenAvailable
+                : undefined;
 
             const res = await (content
                 ? enqueuePendingMessage({
@@ -189,6 +194,7 @@ export function sessionPendingRoutes(app: Fastify) {
                       ...(deliveryMode ? { deliveryMode } : {}),
                       ...(admissionMode ? { admissionMode } : {}),
                       requestedAction,
+                      ...(resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
                   })
                 : enqueuePendingMessage({
                       actorUserId: request.userId,
@@ -199,6 +205,7 @@ export function sessionPendingRoutes(app: Fastify) {
                       ...(deliveryMode ? { deliveryMode } : {}),
                       ...(admissionMode ? { admissionMode } : {}),
                       requestedAction,
+                      ...(resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
                   }));
 
             if (!res.ok) {
@@ -385,7 +392,10 @@ export function sessionPendingRoutes(app: Fastify) {
             preHandler: app.authenticate,
             schema: {
                 params: z.object({ sessionId: z.string(), localId: PendingLocalIdSchema }),
-                body: z.object({ requestedAction: PendingRequestedActionV1Schema }).strict(),
+                body: z.object({
+                    requestedAction: PendingRequestedActionV1Schema,
+                    resumeWhenAvailable: z.boolean().optional(),
+                }).strict(),
             },
             config: {
                 rateLimit: resolveApiHotEndpointRateLimit(process.env, "session.pending"),
@@ -398,6 +408,9 @@ export function sessionPendingRoutes(app: Fastify) {
                 sessionId,
                 localId,
                 requestedAction: request.body.requestedAction,
+                ...(request.body.resumeWhenAvailable !== undefined
+                    ? { resumeWhenAvailable: request.body.resumeWhenAvailable }
+                    : {}),
             });
             if (!res.ok) {
                 if (res.error === "invalid-params") return reply.code(400).send({ error: res.error });

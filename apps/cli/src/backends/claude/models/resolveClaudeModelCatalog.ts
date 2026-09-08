@@ -131,6 +131,7 @@ export type ResolveClaudeModelCatalogParams = Readonly<{
   credentials?: Credentials | null;
   accountSettings?: Readonly<Record<string, unknown>> | null;
   profileId?: string | null;
+  processEnv?: NodeJS.ProcessEnv;
   nowMs?: () => number;
 }>;
 
@@ -151,6 +152,7 @@ export async function resolveClaudeModelCatalogResolution(
     credentials: params.credentials,
     accountSettings: params.accountSettings,
     profileId: params.profileId,
+    processEnv: params.processEnv,
   });
 
   // No resolvable credential is an absence of identity, not an identity of its own. Caching under a

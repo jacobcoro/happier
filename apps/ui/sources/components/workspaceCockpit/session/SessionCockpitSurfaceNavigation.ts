@@ -4,6 +4,7 @@ import type { SessionMobileSurface } from './sessionCockpitState';
 
 type SessionCockpitSurfaceNavigation = Readonly<{
     switchSurface: (surface: SessionMobileSurface) => void;
+    returnToPreviousSurface: () => void;
 }>;
 
 const SessionCockpitSurfaceNavigationContext = React.createContext<SessionCockpitSurfaceNavigation | null>(null);

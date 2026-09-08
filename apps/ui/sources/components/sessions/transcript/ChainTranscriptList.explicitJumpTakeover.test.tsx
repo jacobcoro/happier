@@ -67,7 +67,7 @@ describe('ChainTranscriptList explicit jump takeover', () => {
         const loadOlder = vi.fn(() => olderLoad.promise);
         const capture = legendListCapture.state;
         if (!capture) throw new Error('LegendList mock did not initialize');
-        capture.refHandle.cancelInitialScrollPreservation.mockClear();
+        capture.refHandle.cancelScroll.mockClear();
         capture.refHandle.scrollToIndex.mockClear();
 
         try {
@@ -83,9 +83,9 @@ describe('ChainTranscriptList explicit jump takeover', () => {
                 loadOlder={loadOlder}
             />);
 
-            expect(capture.refHandle.cancelInitialScrollPreservation).toHaveBeenCalledTimes(1);
+            expect(capture.refHandle.cancelScroll).toHaveBeenCalledTimes(1);
             expect(loadOlder).toHaveBeenCalledTimes(1);
-            expect(capture.refHandle.cancelInitialScrollPreservation.mock.invocationCallOrder[0])
+            expect(capture.refHandle.cancelScroll.mock.invocationCallOrder[0])
                 .toBeLessThan(loadOlder.mock.invocationCallOrder[0]);
 
             screen.unmount();

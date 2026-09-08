@@ -48,9 +48,6 @@ vi.mock('@/agents/catalog/permissionUiCopy', () => ({
     }),
 }));
 
-vi.mock('@/components/tools/normalization/policy/permissionSummary', () => ({
-    formatPermissionRequestSummary: () => 'SUMMARY',
-}));
 
 describe('PermissionFooter summary visibility', () => {
     it('does not render when approvals are disabled due to inactive session', async () => {
@@ -64,7 +61,7 @@ describe('PermissionFooter summary visibility', () => {
             disabledReason: 'inactive',
         }));
 
-        expect(screen.getTextContent()).not.toContain('SUMMARY');
+        expect(screen.getTextContent()).not.toContain('Permission required: Run: pwd');
     });
 
     it('does not repeat the request summary (the tool UI already shows it)', async () => {
@@ -82,7 +79,7 @@ describe('PermissionFooter summary visibility', () => {
             .flat()
             .filter((c) => typeof c === 'string') as string[];
 
-        expect(flattened).not.toContain('SUMMARY');
+        expect(flattened).not.toContain('Permission required: Run: pwd');
         expect(screen.findAllByType('TouchableOpacity')).not.toHaveLength(0);
     });
 });

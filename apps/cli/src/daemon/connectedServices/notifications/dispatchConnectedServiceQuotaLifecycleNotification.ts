@@ -2,8 +2,32 @@ import type { AccountSettings } from '@happier-dev/protocol';
 
 import { dispatchActivityNotificationAsync } from '@/activity/notifications/dispatchActivityNotification';
 import type { ExpoPushActivityNotificationSender } from '@/activity/notifications/sendExpoPushActivityNotification';
-import type { ConnectedServiceQuotaLifecycleTransition } from '../quotas/ConnectedServiceQuotasCoordinator';
+import type { AutomaticQuotaResetConsumedEvent, ConnectedServiceQuotaLifecycleTransition } from '../quotas/ConnectedServiceQuotasCoordinator';
 import { resolveConnectedServiceNotificationServiceDisplayName } from './connectedServiceNotificationLabels';
+
+export async function dispatchConnectedServiceAutomaticQuotaResetNotificationAsync(params: Readonly<{
+  settings: AccountSettings | null | undefined;
+  settingsSecretsReadKeys?: ReadonlyArray<Uint8Array | null | undefined>;
+  expoPushSender?: ExpoPushActivityNotificationSender | null;
+  event: AutomaticQuotaResetConsumedEvent;
+  nowMs?: () => number;
+  dedupeWindowMs?: number;
+}>): Promise<void> {
+  const { event } = params;
+  await dispatchActivityNotificationAsync({
+    ...params,
+    event: {
+      topic: 'connected_service_quota_recovered',
+      recoveryReason: 'automatic_quota_reset',
+      sessionId: event.sessionId,
+      serviceId: event.serviceId,
+      serviceDisplayName: resolveConnectedServiceNotificationServiceDisplayName(event.serviceId),
+      groupId: event.groupId,
+      profileId: event.profileId,
+      issueFingerprint: event.receipt.idempotencyKey,
+    },
+  });
+}
 
 /**
  * RD-QUO-13: notification producer for the quota lifecycle edges. Maps an

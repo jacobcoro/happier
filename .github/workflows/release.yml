@@ -2,6 +2,81 @@ name: RELEASE — Publish (preview + production)
 run-name: ${{ inputs.hmaint_operation_id != '' && format('RELEASE — Publish ({0}, {1})', inputs.hmaint_operation_id, inputs.hmaint_attempt_id) || 'RELEASE — Publish (manual)' }}
 
 on:
+  workflow_call:
+    inputs:
+      validation_profile:
+        required: true
+        type: string
+      dry_run:
+        required: true
+        type: boolean
+      environment:
+        required: true
+        type: string
+      deploy_targets:
+        required: true
+        type: string
+      force_deploy:
+        required: true
+        type: boolean
+      ui_expo_action:
+        required: true
+        type: string
+      desktop_mode:
+        required: true
+        type: string
+      waive_ci:
+        required: true
+        type: boolean
+      include_validation_suites:
+        required: false
+        default: ""
+        type: string
+      waive_validation_suites:
+        required: false
+        default: ""
+        type: string
+      override_reason:
+        required: false
+        default: ""
+        type: string
+      authorized_promotion_source_sha:
+        required: false
+        default: ""
+        type: string
+      workflow_control_sha:
+        required: false
+        default: ""
+        type: string
+      ci_run_id:
+        required: false
+        default: ""
+        type: string
+      resume_run_id:
+        required: false
+        default: ""
+        type: string
+      hmaint_operation_id:
+        required: false
+        default: ""
+        type: string
+      hmaint_attempt_id:
+        required: false
+        default: "attempt_1"
+        type: string
+      release_notes_id:
+        required: true
+        type: string
+      qualified_v4_activation_approval:
+        required: true
+        type: boolean
+      confirm:
+        required: true
+        type: string
+      combined_preview_production:
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       validation_profile:
@@ -124,13 +199,12 @@ on:
           - reset main from preview
           - release dev to main
           - reset main from dev
-
 permissions:
   contents: write
   actions: read
 
 concurrency:
-  group: release-unified
+  group: release-unified-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
@@ -288,14 +362,16 @@ jobs:
     uses: ./.github/workflows/resolve-release-resume.yml
     with:
       origin_run_id: ${{ inputs.resume_run_id }}
-      expected_workflow: .github/workflows/release.yml
+      expected_workflow: ${{ inputs.combined_preview_production == true && '.github/workflows/release-preview-and-production.yml' || '.github/workflows/release.yml' }}
       expected_channel: ${{ inputs.environment == 'production' && 'production' || 'preview' }}
       expected_source_sha: ${{ inputs.authorized_promotion_source_sha }}
       expected_operation_id: ${{ inputs.hmaint_operation_id }}
+      status_artifact_name: ${{ inputs.combined_preview_production == true && inputs.environment == 'preview' && 'happier-release-status-preview' || 'happier-release-status' }}
 
   snapshot_release_issues:
     name: Snapshot issues eligible for this channel release
     needs: [release_actor_guard]
+    if: ${{ inputs.combined_preview_production != true }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1365,7 +1441,7 @@ jobs:
 
   advance_release_issues:
     name: Advance issues to the released channel
-    if: ${{ needs.release_verify.result == 'success' && needs.snapshot_release_issues.outputs.eligible == 'true' }}
+    if: ${{ inputs.combined_preview_production != true && needs.release_verify.result == 'success' && needs.snapshot_release_issues.outputs.eligible == 'true' }}
     needs: [snapshot_release_issues, release_verify]
     continue-on-error: true
     runs-on: ubuntu-latest
@@ -1506,7 +1582,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: happier-release-status
+          name: ${{ inputs.combined_preview_production == true && inputs.environment == 'preview' && 'happier-release-status-preview' || 'happier-release-status' }}
           path: ${{ runner.temp }}/release-status.json
           if-no-files-found: error
           overwrite: true

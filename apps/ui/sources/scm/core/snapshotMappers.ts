@@ -62,6 +62,7 @@ export function mapProtocolEntryToUiEntry(entry: ProtocolScmWorkingSnapshot['ent
             pendingAdded: entry.stats.pendingAdded,
             pendingRemoved: entry.stats.pendingRemoved,
             isBinary: entry.stats.isBinary,
+            ...(entry.stats.isComplete === undefined ? {} : { isComplete: entry.stats.isComplete }),
         },
     };
 }
@@ -104,6 +105,7 @@ export function mapProtocolSnapshotToUiSnapshot(
             includedRemoved: snapshot.totals.includedRemoved,
             pendingAdded: snapshot.totals.pendingAdded,
             pendingRemoved: snapshot.totals.pendingRemoved,
+            ...(snapshot.totals.isComplete === undefined ? {} : { isComplete: snapshot.totals.isComplete }),
         },
     };
 }

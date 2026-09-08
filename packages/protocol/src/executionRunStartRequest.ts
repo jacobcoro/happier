@@ -168,6 +168,8 @@ export const ExecutionRunStartRequestSchema = z.object({
    * instead of failing closed. Missing stored default fails closed at the run-start owner.
    */
   connectedServicesDefaultServiceIds: z.array(z.string()).optional(),
+  /** Explicit per-run override for the account completion-notification default. */
+  notifyParentOnCompletion: z.boolean().optional(),
 }).passthrough();
 export type ExecutionRunStartRequest = z.infer<typeof ExecutionRunStartRequestSchema>;
 

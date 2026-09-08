@@ -193,6 +193,7 @@ export type AgentCore = Readonly<{
      */
     connectedServices?: Readonly<{
       supportedServiceIds: ReadonlyArray<ConnectedServiceId>;
+      quotaResetServiceIds?: ReadonlyArray<ConnectedServiceId>;
       providerStateSharing?: ConnectedServicesProviderStateSharingCapability;
       sessionAuthSwitch?: Readonly<{
         continuityMode: 'hot_apply' | 'restart_same_home' | 'restart_shared_state_required';

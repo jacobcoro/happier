@@ -207,6 +207,49 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         await db.account.deleteMany().catch(() => {});
     });
 
+    it("negotiates quota-reset policy reads while preserving the opt-in across older-client edits", async () => {
+        const user = await createAccount("pk-groups-auto-reset");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        const app = await createReadyApp();
+        const headers = { ...authHeaders(user.id), accept: "application/json; happier-connected-service-auto-quota-reset=1" };
+        const url = "/v3/connect/openai-codex/groups/reset-pool";
+        const create = await app.inject({ method: "POST", url: "/v3/connect/openai-codex/groups", headers,
+            payload: { groupId: "reset-pool", displayName: null, activeProfileId: "work", members: [{ profileId: "work", priority: 10 }], policy: { autoUseQuotaResetsWhenExhausted: true } },
+        });
+        expect(create.statusCode).toBe(200);
+        expect(create.json().group.policy.autoUseQuotaResetsWhenExhausted).toBe(true);
+        const oldRead = await app.inject({ method: "GET", url, headers: authHeaders(user.id) });
+        expect(oldRead.json().group.policy).not.toHaveProperty("autoUseQuotaResetsWhenExhausted");
+        const oldList = await app.inject({ method: "GET", url: "/v3/connect/openai-codex/groups", headers: authHeaders(user.id) });
+        expect(oldList.json().groups[0].policy).not.toHaveProperty("autoUseQuotaResetsWhenExhausted");
+        const oldEdit = await app.inject({ method: "PATCH", url, headers: authHeaders(user.id), payload: {
+            expectedGeneration: create.json().group.generation, policy: { ...oldRead.json().group.policy, cooldownMs: 1234 },
+        } });
+        expect(oldEdit.statusCode).toBe(200);
+        expect(oldEdit.json().group.policy).not.toHaveProperty("autoUseQuotaResetsWhenExhausted");
+        const newRead = await app.inject({ method: "GET", url, headers });
+        expect(newRead.json().group.policy).toMatchObject({ autoUseQuotaResetsWhenExhausted: true, cooldownMs: 1234 });
+        process.env.HAPPIER_FEATURE_CONNECTED_SERVICES_QUOTAS__ENABLED = "0";
+        const disabledRead = await app.inject({ method: "GET", url, headers });
+        expect(disabledRead.json().group.policy).not.toHaveProperty("autoUseQuotaResetsWhenExhausted");
+        process.env.HAPPIER_FEATURE_CONNECTED_SERVICES_QUOTAS__ENABLED = "1";
+        const restoredRead = await app.inject({ method: "GET", url, headers });
+        expect(restoredRead.json().group.policy.autoUseQuotaResetsWhenExhausted).toBe(true);
+    });
+
+    it.each(["claude-subscription", "openai-codex"])("rejects quota-reset opt-in when the service or quota feature cannot support it (%s)", async (serviceId) => {
+        const user = await createAccount(`pk-auto-reset-disabled-${serviceId}`);
+        await createConnectedProfile(user.id, serviceId, "work");
+        const app = await createReadyApp();
+        if (serviceId === "openai-codex") process.env.HAPPIER_FEATURE_CONNECTED_SERVICES_QUOTAS__ENABLED = "0";
+        const response = await app.inject({ method: "POST", url: `/v3/connect/${serviceId}/groups`, headers: authHeaders(user.id), payload: {
+            groupId: "disabled-reset", displayName: null, activeProfileId: "work", members: [{ profileId: "work", priority: 10 }],
+            policy: { autoUseQuotaResetsWhenExhausted: true },
+        } });
+        expect(response.statusCode).toBe(400);
+        expect(await db.connectedServiceAuthGroup.count({ where: { accountId: user.id } })).toBe(0);
+    });
+
     it("creates and lists an account-owned group with existing connected profiles", async () => {
         const user = await createAccount("pk-groups-create");
         await createConnectedProfile(user.id, "openai-codex", "work");

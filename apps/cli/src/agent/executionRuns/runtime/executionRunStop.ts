@@ -47,7 +47,7 @@ export async function stopExecutionRun(args: Readonly<{
     finishedAtMs,
   };
 
-  args.finishRun(args.runId, { status: 'cancelled', summary: 'Cancelled', finishedAtMs }, { output });
+  await args.finishRun(args.runId, { status: 'cancelled', summary: 'Cancelled', finishedAtMs }, { output });
   if (ctrl.kind === 'backend') {
     try {
       await ctrl.backend.dispose();

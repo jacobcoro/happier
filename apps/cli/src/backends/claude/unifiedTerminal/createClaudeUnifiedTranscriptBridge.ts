@@ -29,26 +29,49 @@ function readHookString(data: SessionHookData, snakeKey: string, camelKey: strin
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
 }
 
-function readSessionStartInfo(data: SessionHookData): Readonly<{
+type ClaudeUnifiedHookTranscriptInfo = Readonly<{
   sessionId: string;
   transcriptPath: string | null;
-  source: string | null;
-}> | null {
-  if (readHookEventName(data) !== 'SessionStart') return null;
+}>;
+
+function readHookTranscriptInfo(data: SessionHookData): ClaudeUnifiedHookTranscriptInfo | null {
   const sessionId = readHookString(data, 'session_id', 'sessionId');
   if (!sessionId) return null;
   return {
     sessionId,
     transcriptPath: readHookString(data, 'transcript_path', 'transcriptPath'),
+  };
+}
+
+function readSessionStartInfo(data: SessionHookData): Readonly<ClaudeUnifiedHookTranscriptInfo & {
+  source: string | null;
+}> | null {
+  if (readHookEventName(data) !== 'SessionStart') return null;
+  const transcriptInfo = readHookTranscriptInfo(data);
+  if (!transcriptInfo) return null;
+  return {
+    ...transcriptInfo,
     source: readHookString(data, 'source', 'source'),
   };
 }
 
+function readLaterHookTranscriptInfo(data: SessionHookData): Readonly<{
+  sessionId: string;
+  transcriptPath: string;
+}> | null {
+  const hookEventName = readHookEventName(data);
+  if (!hookEventName || hookEventName === 'SessionStart') return null;
+  const transcriptInfo = readHookTranscriptInfo(data);
+  return transcriptInfo?.transcriptPath ? {
+    sessionId: transcriptInfo.sessionId,
+    transcriptPath: transcriptInfo.transcriptPath,
+  } : null;
+}
+
 type ClaudeUnifiedSessionStartInfo = NonNullable<ReturnType<typeof readSessionStartInfo>>;
 
-type PendingClaudeUnifiedSessionStart = Readonly<{
+type PendingClaudeUnifiedSessionBinding = Readonly<{
   data: SessionHookData;
-  receivedAtMs: number;
   sessionInfo: ClaudeUnifiedSessionStartInfo;
 }>;
 
@@ -199,7 +222,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   let unsubscribe: (() => void) | null = null;
   const resumeLiveTranscriptAfterMsBySessionId = new Map<string, number>();
   const freshResumeLiveMessageAfterMsBySessionId = new Map<string, number>();
-  const pendingSessionStarts: PendingClaudeUnifiedSessionStart[] = [];
+  const pendingSessionBindings: PendingClaudeUnifiedSessionBinding[] = [];
   const promotedDiscoveredMainSessionIds = new Set<string>();
   const freshHookDrivenSession = isFreshHookDrivenSession(opts);
   const knownResumeSessionId =
@@ -210,7 +233,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   const knownResumeTranscriptPath = knownResumeTranscript?.path ?? null;
   let knownResumeRawFollower: JsonlFollowController | null = null;
   const knownResumeRawFollowerReplaySuppressor = createClaudeJsonlResetReplaySuppressor();
-  let activeTrustedSessionStart: Readonly<{
+  let activeTrustedSessionBinding: Readonly<{
     data: SessionHookData;
     sessionInfo: ClaudeUnifiedSessionStartInfo;
   }> | null = null;
@@ -227,13 +250,13 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
     }
   };
 
-  const applySessionStart = (
+  const applySessionBinding = (
     sessionInfo: ClaudeUnifiedSessionStartInfo,
     data: SessionHookData,
-    receivedAtMs: number,
+    sessionStartReceivedAtMs: number | null,
   ) => {
     if (disposed) return;
-    const previousSessionInfo = activeTrustedSessionStart?.sessionInfo;
+    const previousSessionInfo = activeTrustedSessionBinding?.sessionInfo;
     if (
       !previousSessionInfo
       || previousSessionInfo.sessionId !== sessionInfo.sessionId
@@ -241,12 +264,19 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
     ) {
       acceptedMainTranscriptProvenForSessionId = null;
     }
-    activeTrustedSessionStart = { data, sessionInfo };
-    recordSessionStartBaselines(sessionInfo, receivedAtMs);
+    activeTrustedSessionBinding = { data, sessionInfo };
+    if (sessionStartReceivedAtMs !== null) {
+      recordSessionStartBaselines(sessionInfo, sessionStartReceivedAtMs);
+    }
     opts.onSessionFound?.(sessionInfo.sessionId, data);
 
     if (!scanner) {
-      pendingSessionStarts.push({ data, receivedAtMs, sessionInfo });
+      const pendingIndex = pendingSessionBindings.findIndex(
+        (pending) => pending.sessionInfo.sessionId === sessionInfo.sessionId,
+      );
+      const pendingBinding = { data, sessionInfo };
+      if (pendingIndex >= 0) pendingSessionBindings[pendingIndex] = pendingBinding;
+      else pendingSessionBindings.push(pendingBinding);
       return;
     }
 
@@ -256,13 +286,32 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
     });
   };
 
+  const applyLaterHookTranscriptPath = (
+    transcriptInfo: NonNullable<ReturnType<typeof readLaterHookTranscriptInfo>>,
+    data: SessionHookData,
+  ) => {
+    if (disposed) return;
+    const activeSessionStart = activeTrustedSessionBinding;
+    if (
+      !activeSessionStart
+      || activeSessionStart.sessionInfo.sessionId !== transcriptInfo.sessionId
+      || activeSessionStart.sessionInfo.transcriptPath === transcriptInfo.transcriptPath
+    ) return;
+
+    const updatedSessionInfo = {
+      ...activeSessionStart.sessionInfo,
+      transcriptPath: transcriptInfo.transcriptPath,
+    };
+    applySessionBinding(updatedSessionInfo, data, null);
+  };
+
   const observeTrustedRawTranscriptValue = (
     value: unknown,
     observation: Readonly<{ historicalReplay: boolean }>,
   ): void => {
     opts.onRawTranscriptValue?.(value, observation);
     if (observation.historicalReplay) return;
-    const activeSessionStart = activeTrustedSessionStart;
+    const activeSessionStart = activeTrustedSessionBinding;
     if (!opts.proveAcceptedMainTranscript) return;
     // A canonical known-resume follower is already bound to the exact requested Claude session
     // and starts at the current EOF, so its fresh authenticated rows may prove exact prompt
@@ -342,10 +391,9 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
     }
   };
 
-  const flushPendingSessionStarts = () => {
+  const flushPendingSessionBindings = () => {
     if (!scanner) return;
-    for (const pending of pendingSessionStarts.splice(0)) {
-      recordSessionStartBaselines(pending.sessionInfo, pending.receivedAtMs);
+    for (const pending of pendingSessionBindings.splice(0)) {
       scanner.onNewSession({
         sessionId: pending.sessionInfo.sessionId,
         transcriptPath: pending.sessionInfo.transcriptPath,
@@ -380,7 +428,11 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
               hasTranscriptPath: Boolean(readHookString(data, 'transcript_path', 'transcriptPath')),
             });
           }
-          if (!sessionInfo) return;
+          if (!sessionInfo) {
+            const transcriptInfo = readLaterHookTranscriptInfo(data);
+            if (transcriptInfo) applyLaterHookTranscriptPath(transcriptInfo, data);
+            return;
+          }
           logger.debug('[unified]: Claude SessionStart hook received', {
             sessionId: sessionInfo.sessionId,
             hasTranscriptPath: Boolean(sessionInfo.transcriptPath),
@@ -388,7 +440,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
             knownResumeSessionId,
           });
           if (opts.validateSessionStart?.(sessionInfo) === false) return;
-          applySessionStart(sessionInfo, data, Date.now());
+          applySessionBinding(sessionInfo, data, Date.now());
         }) ?? null;
       }
       let committedClaudeJsonlMessageKeys: ReadonlySet<string> = new Set<string>();
@@ -405,7 +457,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
         replaySuppressRowsBeforeMs = baseline.replaySuppressRowsBeforeMs;
       }
       if (disposed) {
-        pendingSessionStarts.length = 0;
+        pendingSessionBindings.length = 0;
         return;
       }
       const prebindKnownResumeTranscript = Boolean(
@@ -482,22 +534,22 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
         },
       });
       if (disposed) {
-        pendingSessionStarts.length = 0;
+        pendingSessionBindings.length = 0;
         await nextScanner.cleanup();
         return;
       }
       scanner = nextScanner;
       opts.onSubagentFileCollectorChanged?.(nextScanner.subagentFileCollector);
-      flushPendingSessionStarts();
+      flushPendingSessionBindings();
     },
     async dispose() {
       if (disposed) return;
       disposed = true;
       disposeSubscription(unsubscribe);
       unsubscribe = null;
-      pendingSessionStarts.length = 0;
+      pendingSessionBindings.length = 0;
       promotedDiscoveredMainSessionIds.clear();
-      activeTrustedSessionStart = null;
+      activeTrustedSessionBinding = null;
       acceptedMainTranscriptProvenForSessionId = null;
       if (scanner) opts.onSubagentFileCollectorChanged?.(null);
       await scanner?.cleanup();

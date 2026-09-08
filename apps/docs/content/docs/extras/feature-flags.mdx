@@ -18,8 +18,8 @@ clear answer about whether a feature is available, it treats it as unavailable.
 That is why a feature can seem to vanish when a server is unreachable, and why
 a misconfigured self-hosted server hides features rather than half-enabling them.
 
-There are 72 features in the catalog. 22 of them have a switch you can
-reach; the other 50 are decided before you get there.
+There are 74 features in the catalog. 22 of them have a switch you can
+reach; the other 52 are decided before you get there.
 
 ## Features you can turn on yourself
 
@@ -84,6 +84,8 @@ behaviour but still needs the server to advertise the capability.
 | `channelBridges.telegram` | Telegram channel bridge provider. | server | `channelBridges` |
 | `connectedServices.accountFallback` | Connected service account group fallback and automatic active account switching APIs. | server | `connectedServices.accountGroups`, `sessions.usageLimitRecovery` |
 | `connectedServices.accountGroups` | Connected service account groups and member management APIs. | server | `connectedServices` |
+| `connectedServices.autoQuotaReset` | Opt-in banked quota reset spending after account pool exhaustion. | server | `connectedServices.accountFallback`, `connectedServices.quotas` |
+| `connectedServices.subscription` | Provider-optional subscription observations with independently fresh account-usage transport. | server | `connectedServices` |
 | `e2ee.keylessAccounts` | Keyless account support (accounts may omit E2EE signing keys). | server | — |
 | `encryption.accountOptOut` | Per-account encryption opt-out toggle support. | server | `encryption.plaintextStorage` |
 | `encryption.plaintextStorage` | Plaintext session storage support (no E2EE at rest). | server | — |

@@ -166,7 +166,10 @@ describe('submitSessionUserMessage', () => {
         });
         expect(harness.enqueuePendingMessage).toHaveBeenCalledWith(
             's1', 'hello', undefined, expect.anything(),
-            expect.objectContaining({ requestedAction: { v: 1, kind: 'send_now' } }),
+            expect.objectContaining({
+                requestedAction: { v: 1, kind: 'enqueue' },
+                resumeWhenAvailable: true,
+            }),
         );
         expect(harness.shouldDelegatePendingActivationToDaemon).toHaveBeenCalledTimes(1);
         expect(harness.ensureSessionRuntimeForPendingInput).not.toHaveBeenCalled();

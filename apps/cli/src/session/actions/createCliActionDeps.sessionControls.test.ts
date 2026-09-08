@@ -1456,6 +1456,9 @@ describe('createCliActionDeps session controls', () => {
       sessionId: 'sess_1',
       rawSession: {
         active: true,
+        metadata: {
+          machineId: 'machine-local',
+        },
         lastRuntimeIssue: {
           v: 1,
           scope: 'primary_session',

@@ -76,6 +76,14 @@ const scmRowTheme = {
 } as const;
 
 describe('ScmChangeRow', () => {
+  it('does not present incomplete statistics as exact zeros', async () => {
+    const { ScmChangeRow } = await import('./ScmChangeRow');
+    const screen = await renderScreen(<ScmChangeRow theme={scmRowTheme} onPress={() => {}} file={{ fileName: 'large.txt', filePath: '', fullPath: 'large.txt', status: 'untracked', isIncluded: false, linesAdded: 0, linesRemoved: 0, isComplete: false }} />);
+    const text = JSON.stringify(screen.tree.toJSON());
+    expect(text).not.toContain('+0');
+    expect(text).not.toContain('-0');
+    expect(text).toContain('common.unavailable');
+  });
   it('renders change stats and calls onPress', async () => {
     const onPress = vi.fn();
     const { ScmChangeRow } = await import('./ScmChangeRow');

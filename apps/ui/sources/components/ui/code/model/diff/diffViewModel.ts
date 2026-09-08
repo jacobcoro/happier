@@ -3,6 +3,7 @@ import { diffLines } from 'diff';
 import { splitUnifiedDiffByFile } from './splitUnifiedDiffByFile';
 
 export type DiffFileEntry = {
+    isComplete?: boolean;
     key: string;
     filePath?: string;
     unifiedDiff?: string;

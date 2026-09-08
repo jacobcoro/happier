@@ -241,11 +241,13 @@ describe('ApiSessionClient message commit queue', () => {
 
     const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
 
-    await expect.poll(() => supervisorStartCount).toBe(1);
+    await expect.poll(() => supervisorStartCount).toBeGreaterThan(0);
+    await flushMicrotasks();
+    supervisorStartCount = 0;
 
     client.sendAgentMessage('claude' as any, { type: 'message', message: 'FAKE_CLAUDE_OK_2' } as any);
 
-    await expect.poll(() => supervisorStartCount).toBeGreaterThan(1);
+    await expect.poll(() => supervisorStartCount).toBeGreaterThan(0);
   });
 
   it('redacts socket commit errors before logging', async () => {

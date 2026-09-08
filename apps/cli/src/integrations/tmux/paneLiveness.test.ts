@@ -10,9 +10,9 @@ describe('evaluateTmuxPaneLiveness', () => {
         '-p',
         '-t',
         'happy:claude.1',
-        '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}',
+        '#{pane_dead}|#{pane_pid}|#{pane_current_command}',
       ]);
-      return { returncode: 0, stdout: '0\t12345\tclaude\n', stderr: '', command: [...args] };
+      return { returncode: 0, stdout: '0|12345|claude\n', stderr: '', command: [...args] };
     };
 
     await expect(evaluateTmuxPaneLiveness({ executor, target: 'happy:claude.1', observedAt: 42 })).resolves.toEqual({
@@ -24,10 +24,28 @@ describe('evaluateTmuxPaneLiveness', () => {
     });
   });
 
+  it.each([
+    '0\t12345\tclaude\n',
+    '0_12345_claude\n',
+  ])('accepts legacy tmux liveness output without probing the target again: %s', async (stdout) => {
+    const executor: TmuxPaneLivenessExecutor = async (args) => {
+      expect(args[0]).toBe('display-message');
+      return { returncode: 0, stdout, stderr: '', command: [...args] };
+    };
+
+    await expect(evaluateTmuxPaneLiveness({ executor, target: 'happy:claude.1', observedAt: 44 })).resolves.toEqual({
+      paneAlive: true,
+      paneDead: false,
+      panePid: 12345,
+      paneCurrentCommand: 'claude',
+      observedAt: 44,
+    });
+  });
+
   it('redacts sensitive pane command diagnostics', async () => {
     const executor: TmuxPaneLivenessExecutor = async (args) => ({
       returncode: 0,
-      stdout: '0\t12345\tclaude ANTHROPIC_API_KEY=sk-ant-secret-value\n',
+      stdout: '0|12345|claude ANTHROPIC_API_KEY=sk-ant-secret-value\n',
       stderr: '',
       command: [...args],
     });
@@ -41,7 +59,7 @@ describe('evaluateTmuxPaneLiveness', () => {
   it('returns not alive for panes that tmux reports as dead', async () => {
     const deadExecutor: TmuxPaneLivenessExecutor = async (args) => ({
       returncode: 0,
-      stdout: '1\t12345\tzsh\n',
+      stdout: '1|12345|zsh\n',
       stderr: '',
       command: [...args],
     });

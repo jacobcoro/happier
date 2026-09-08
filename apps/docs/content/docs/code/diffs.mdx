@@ -55,6 +55,17 @@ The **All** action is scope-aware:
 
 Repository view remains the source of truth. Turn/session scopes are convenience filters that depend on the quality of provider/runtime attribution.
 
+## Opening a file diff
+
+<Callout type="info">
+  In the current development build (unreleased), a file's available diff is
+  readable without waiting for the full file preview. Open the file view or choose
+  Edit when you need its text. If a requested preview fails, an available diff
+  stays readable with an error and **Retry** action. Preview size limits still
+  apply; seeing a diff does not mean the full file is ready to edit.
+  If the details pane itself fails to load, use its **Retry** action to try again.
+</Callout>
+
 ## Review
 
 **Review** is the “scroll through the actual work” surface for current uncommitted changes.
@@ -76,6 +87,17 @@ Use Review when you want to:
 - Nearby diffs are prefetched so scrolling feels continuous.
 - If you manually collapse a diff, Happier remembers that and does not auto-expand it again just because you scroll away and back.
 - Switching away from Review and coming back restores your previous position.
+
+<Callout type="info">
+  In the current development build (unreleased), the **Previous file** and **Next
+  file** icons move within the current review scope. For a file with multiple diff
+  hunks, **Previous hunk** and **Next hunk** move between those groups of changed
+  lines. The compact toolbar stays above the scrolling review, and navigation
+  stops at either end. Choose **Included**, **Pending**, or **Combined** from the
+  diff-area dropdown. On web, hover or focus an icon to see its label. When actions
+  overflow a narrow pane, scroll the toolbar horizontally; fading edges indicate
+  more actions.
+</Callout>
 
 ### Editing from Review
 

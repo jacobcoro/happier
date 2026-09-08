@@ -77,6 +77,7 @@ describe('probeAgentModelsBestEffort (configured ACP backend)', () => {
       timeoutMs: 100,
       accountSettings: { acpCatalogSettingsV1: { v: 2, backends: [] } },
       credentials,
+      processEnv: { HAPPIER_FAKE_PROFILE_MARKER: 'profile-env' },
     });
 
     expect(result.source).toBe('dynamic');
@@ -89,10 +90,15 @@ describe('probeAgentModelsBestEffort (configured ACP backend)', () => {
       { acpCatalogSettingsV1: { v: 2, backends: [] } },
       'review-bot',
     );
-    expect(materializeConfiguredAcpEnvironmentMock).toHaveBeenCalled();
+    expect(materializeConfiguredAcpEnvironmentMock).toHaveBeenCalledWith(expect.objectContaining({
+      processEnv: { HAPPIER_FAKE_PROFILE_MARKER: 'profile-env' },
+    }));
     expect(createConfiguredAcpBackendMock).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/repo',
-      launchEnv: { API_TOKEN: 'secret' },
+      launchEnv: expect.objectContaining({
+        API_TOKEN: 'secret',
+        HAPPIER_FAKE_PROFILE_MARKER: 'profile-env',
+      }),
       backend: expect.objectContaining({ backendId: 'custom-backend' }),
     }));
     expect(createCatalogAcpBackendMock).not.toHaveBeenCalled();

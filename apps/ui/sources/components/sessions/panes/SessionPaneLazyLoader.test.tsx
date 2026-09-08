@@ -37,9 +37,47 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key) => key });
 });
 
+class AppFailureProbe extends React.Component<React.PropsWithChildren, { failed: boolean }> {
+    override state = { failed: false };
+    static getDerivedStateFromError() { return { failed: true }; }
+    override render() { return this.state.failed ? React.createElement('AppFailed') : this.props.children; }
+}
+
 describe('SessionPaneLazyLoader', () => {
     afterEach(() => {
         vi.clearAllMocks();
+    });
+
+    it('contains a details chunk fetch failure in the pane and retries without losing the surrounding app', async () => {
+        // Model the external browser chunk transport, not file-details domain behavior.
+        vi.doMock('@/components/sessions/files/views/SessionFileDetailsView', () => {
+            throw new TypeError('Failed to fetch');
+        });
+        const { SessionFileDetailsViewForPanel } = await import('./SessionDetailsPanelDetailViews');
+        const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            const screen = await renderScreen(
+                <AppFailureProbe>
+                    {React.createElement('RetainedApp', { testID: 'retained-app' })}
+                    <React.Suspense fallback={React.createElement('Loading')}>
+                        <SessionFileDetailsViewForPanel sessionId="s1" scopeId="session:s1" filePath="README.md" />
+                    </React.Suspense>
+                </AppFailureProbe>,
+            );
+            await act(async () => { await vi.dynamicImportSettled(); });
+            expect(screen.findByTestId('session-file-details-loading-error')).toBeTruthy();
+            expect(screen.findByTestId('retained-app')).toBeTruthy();
+            vi.doMock('@/components/sessions/files/views/SessionFileDetailsView', () => ({
+                SessionFileDetailsView: () => React.createElement('LoadedFileDetails', { testID: 'loaded-file-details' }),
+            }));
+            await pressTestInstanceAsync(screen.findByProps({ accessibilityRole: 'button' }), 'retry details');
+            await act(async () => { await vi.dynamicImportSettled(); });
+            expect(screen.findByTestId('loaded-file-details')).toBeTruthy();
+            expect(screen.findByTestId('retained-app')).toBeTruthy();
+        } finally {
+            vi.doUnmock('@/components/sessions/files/views/SessionFileDetailsView');
+            errorLog.mockRestore();
+        }
     });
 
     it('keeps loading while a slow pane module is still pending and renders once it resolves', async () => {

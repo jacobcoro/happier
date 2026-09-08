@@ -18,6 +18,6 @@ describe('createSyncBackedSubmitPort', () => {
         const requestedAction = { v: 1, kind: 'steer_now' } as const;
         await port.updatePendingRequestedAction?.('s1', 'pending-1', requestedAction);
 
-        expect(updatePendingRequestedAction).toHaveBeenCalledWith('s1', 'pending-1', requestedAction);
+        expect(updatePendingRequestedAction).toHaveBeenCalledWith('s1', 'pending-1', requestedAction, undefined);
     });
 });

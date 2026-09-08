@@ -46,6 +46,14 @@ describe('splitStreamingRevealTextParts (package-owned, plain-suffix recipe)', (
         ]);
     });
 
+    it('keeps an already visible word visible when the appended suffix starts inside it', () => {
+        expect(splitWithSuffix('electromagnetic waves', 'electro'.length)).toEqual([
+            { text: 'electromagnetic', animated: false },
+            { text: ' ', animated: false },
+            { text: 'waves', animated: true },
+        ]);
+    });
+
     it('animates nothing when the text is unchanged', () => {
         expect(splitWithSuffix('Hello world', 'Hello world'.length)).toEqual([
             { text: 'Hello', animated: false },

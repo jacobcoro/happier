@@ -11,10 +11,13 @@ export interface ScmFileStatus {
     fullPath: string;
     status: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted';
     isIncluded: boolean;
+    /** Snapshot fact, independent of the area this status row represents. */
+    hasIncludedDelta?: boolean;
     linesAdded: number;
     linesRemoved: number;
     oldPath?: string;
     isBinary?: boolean;
+    isComplete?: boolean;
 }
 
 export interface ScmStatusFiles {
@@ -43,10 +46,12 @@ function toFileStatus(entry: ScmWorkingEntry, isIncluded: boolean): ScmFileStatu
         fullPath: entry.path,
         status: entry.kind,
         isIncluded,
+        hasIncludedDelta: entry.hasIncludedDelta,
         linesAdded: isIncluded ? entry.stats.includedAdded : entry.stats.pendingAdded,
         linesRemoved: isIncluded ? entry.stats.includedRemoved : entry.stats.pendingRemoved,
         oldPath: entry.previousPath ?? undefined,
         isBinary: entry.stats.isBinary,
+        ...(entry.stats.isComplete === undefined ? {} : { isComplete: entry.stats.isComplete }),
     };
 }
 

@@ -15,17 +15,18 @@ type CreateDirectoryResponse =
   | Readonly<{ success: true }>
   | Readonly<{ success: false; error: string }>;
 
-type ListDirectoryRequest = Readonly<{ path: string }>;
+type ListDirectoryRequest = Readonly<{ path: string; includeGitIgnore?: boolean }>;
 
 type DirectoryEntry = Readonly<{
   name: string;
   type: 'file' | 'directory' | 'other';
   size?: number;
   modified?: number;
+  gitIgnored?: boolean;
 }>;
 
 type ListDirectoryResponse =
-  | Readonly<{ success: true; entries: DirectoryEntry[] }>
+  | Readonly<{ success: true; entries: DirectoryEntry[]; gitIgnoreAvailable?: boolean }>
   | Readonly<{ success: false; error: string }>;
 
 type GetDirectoryTreeRequest = Readonly<{ path: string; maxDepth: number }>;
@@ -100,15 +101,17 @@ export function registerDirectoryHandlers(
           includeFiles: true,
           maxEntries: null,
           statConcurrency: 16,
+          includeGitIgnore: data?.includeGitIgnore === true,
         });
         const directoryEntries: DirectoryEntry[] = listed.entries.map((entry) => ({
           name: entry.name,
           type: entry.type,
           size: entry.size,
           modified: entry.modified,
+          ...(entry.gitIgnored !== undefined ? { gitIgnored: entry.gitIgnored } : {}),
         }));
 
-        return { success: true, entries: directoryEntries };
+        return { success: true, entries: directoryEntries, ...(listed.gitIgnoreAvailable !== undefined ? { gitIgnoreAvailable: listed.gitIgnoreAvailable } : {}) };
       } catch (error) {
         logger.debug('Failed to list directory:', error);
         return { success: false, error: error instanceof Error ? error.message : 'Failed to list directory' };

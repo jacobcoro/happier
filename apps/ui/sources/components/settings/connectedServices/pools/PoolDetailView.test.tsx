@@ -1129,6 +1129,36 @@ describe('PoolDetailView', () => {
         expect(screen.findByTestId('connected-services-pool-detail:switch-on:refreshFailure')).toBeTruthy();
     });
 
+    it('offers quota-reset spending only with server support and persists the explicit opt-in', async () => {
+        featureEnabledById.set('connectedServices.autoQuotaReset', true);
+        const screen = await renderPoolDetail();
+        const toggle = screen.findByTestId('connected-services-pool-detail:auto-quota-reset:toggle');
+        expect(toggle).toBeTruthy();
+        expect(toggle?.props.value).toBe(false);
+        await act(async () => {
+            toggle?.props.onValueChange(true);
+            await flushAsyncHandlers();
+        });
+        expect(authGroupApiSpies.patchConnectedServiceAuthGroupV3).toHaveBeenCalledWith(
+            expect.objectContaining({ token: 't' }),
+            { serviceId: 'openai-codex', groupId: 'primary', patch: { policy: { autoUseQuotaResetsWhenExhausted: true }, expectedGeneration: 2 } },
+        );
+    });
+
+    it('does not offer quota-reset spending against an older server', async () => {
+        featureEnabledById.set('connectedServices.autoQuotaReset', false);
+        const screen = await renderPoolDetail();
+        expect(screen.findByTestId('connected-services-pool-detail:auto-quota-reset:toggle')).toBeNull();
+    });
+
+    it('does not offer quota-reset spending for a provider without banked resets', async () => {
+        featureEnabledById.set('connectedServices.autoQuotaReset', true);
+        connectedServicesModuleState.searchParams = { serviceId: 'anthropic', groupId: 'primary' };
+        authoritativeGroupState.groups = [createAuthoritativeGroup({ serviceId: 'anthropic' })];
+        const screen = await renderPoolDetail();
+        expect(screen.findByTestId('connected-services-pool-detail:auto-quota-reset:toggle')).toBeNull();
+    });
+
     it('patches autoRestorePrimaryWhenReset through the group policy patch API', async () => {
         const screen = await renderPoolDetail();
         await expandAdvanced(screen);

@@ -25,6 +25,7 @@ import {
 import { ReviewCommentInlineComposer } from '@/components/sessions/reviews/comments/ReviewCommentInlineComposer';
 import { ReviewCommentSavedDrafts } from '@/components/sessions/reviews/comments/ReviewCommentSavedDrafts';
 import { computeLineContentHash, findLineIndexByContentHash } from '@/utils/text/lineContentHash';
+import { useMarkdownReadingAnchor } from './useMarkdownReadingAnchor';
 import type { FileDisplayMode } from './FileActionToolbar';
 
 const MARKDOWN_PREVIEW_WIDE_VIEWPORT_WIDTH = 768;
@@ -171,6 +172,14 @@ function FileContentPanelInner({
     onContentSizeChange,
     onScroll,
 }: FileContentPanelProps) {
+    const codeScrollRef = React.useRef<ScrollView | null>(null);
+    const codeScrollContentRef = React.useRef<View>(null);
+    const codeScrollOffsetRef = React.useRef(0);
+    const externalCodeScrollView = React.useMemo(() => ({
+        scrollRef: codeScrollRef,
+        contentRef: codeScrollContentRef,
+        offsetRef: codeScrollOffsetRef,
+    }), []);
     const intraLineDiff = useIntraLineWordDiffConfig();
     const { width: viewportWidth } = useWindowDimensions();
     const effectiveWrapLines = wrapLines ?? true;
@@ -185,6 +194,9 @@ function FileContentPanelInner({
     const markdownPreviewBottomPadding = viewportWidth >= MARKDOWN_PREVIEW_WIDE_VIEWPORT_WIDTH
         ? MARKDOWN_PREVIEW_WIDE_BOTTOM_PADDING
         : MARKDOWN_PREVIEW_COMPACT_PADDING;
+
+    // Only web observes blocks: native prose must share one text view for cross-paragraph selection.
+    const markdownReading = useMarkdownReadingAnchor(`${_sessionId}:${filePath}:${displayMode}`, markdownPreviewTopPadding);
 
     const commentSource: ReviewCommentSource = displayMode === 'diff' ? 'diff' : 'file';
     const draftsForThisView = React.useMemo(() => {
@@ -558,6 +570,7 @@ function FileContentPanelInner({
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
                 contentPaddingHorizontal={16}
                 contentPaddingVertical={16}
+                externalScrollView={!effectiveDiffVirtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
                 virtualized={effectiveDiffVirtualized}
                 scrollToLineId={jumpTarget.scrollToLineId ?? undefined}
                 highlightLineId={jumpTarget.scrollToLineId ?? undefined}
@@ -574,31 +587,76 @@ function FileContentPanelInner({
         )
         : null;
 
+    const fileCodeView = displayMode === 'file' ? (
+        <CodeLinesView
+            lines={lines}
+            onPressLine={effectivePressLine}
+            onPressLineRange={effectivePressLineRangeHandler}
+            pressLineWhenNotSelectable={effectivePressLineWhenNotSelectable}
+            onPressAddComment={effectivePressAddComment}
+            isCommentActive={reviewCommentControls?.isCommentActive}
+            renderAfterLine={reviewCommentControls?.renderAfterLine}
+            contentPaddingHorizontal={16}
+            contentPaddingVertical={16}
+            externalScrollView={!virtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
+            virtualized={virtualized}
+            scrollToLineId={jumpTarget.scrollToLineId ?? undefined}
+            highlightLineId={jumpTarget.scrollToLineId ?? undefined}
+            highlightLineIds={jumpTarget.highlightLineIds}
+            wrapLines={effectiveWrapLines}
+            showLineNumbers={effectiveShowLineNumbers}
+            showPrefix={effectiveShowPrefix}
+            syntaxHighlighting={syntaxHighlighting}
+            testID={virtualized ? scrollTestID : undefined}
+            onLayout={virtualized ? onLayout : undefined}
+            onContentSizeChange={virtualized ? onContentSizeChange : undefined}
+            onScroll={virtualized ? onScroll : undefined}
+            scrollEventThrottle={virtualized ? 16 : undefined}
+        />
+    ) : null;
+
+    const renderCodeScroll = (children: React.ReactNode) => (
+        <ScrollView
+            ref={codeScrollRef}
+            // RN declares this host ref non-null even though it is null before mount.
+            innerViewRef={codeScrollContentRef as React.RefObject<View>}
+            style={{ flex: 1, minHeight: 0 }}
+            testID={scrollTestID}
+            onLayout={onLayout}
+            onContentSizeChange={onContentSizeChange}
+            onScroll={(event) => {
+                codeScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+                onScroll?.(event);
+            }}
+            scrollEventThrottle={16}
+        >
+            {children}
+        </ScrollView>
+    );
+
     return (
         <View style={{ flex: 1 }}>
             {displayMode === 'diff' && typeof diffContent === 'string' ? (
                 effectiveDiffVirtualized ? (
                     diffViewer
                 ) : (
-                    <ScrollView
-                        style={{ flex: 1, minHeight: 0 }}
-                        testID={scrollTestID}
-                        onLayout={onLayout}
-                        onContentSizeChange={onContentSizeChange}
-                        onScroll={onScroll}
-                        scrollEventThrottle={16}
-                    >
-                        {diffViewer}
-                    </ScrollView>
+                    renderCodeScroll(diffViewer)
                 )
             ) : displayMode === 'markdown' && typeof fileContent === 'string' ? (
                 fileContent.length > 0 ? (
                     <ScrollView
-                        style={{ flex: 1, minHeight: 0 }}
+                        ref={markdownReading.scrollRef}
+                        style={{ flex: 1, minHeight: 0, ...(Platform.OS === 'web' ? { overflowAnchor: 'none' } : {}) }}
                         testID={scrollTestID}
                         onLayout={onLayout}
-                        onContentSizeChange={onContentSizeChange}
-                        onScroll={onScroll}
+                        onContentSizeChange={(width, height) => {
+                            markdownReading.onContentSizeChange();
+                            onContentSizeChange?.(width, height);
+                        }}
+                        onScroll={(event) => {
+                            markdownReading.onScroll(event);
+                            onScroll?.(event);
+                        }}
                         scrollEventThrottle={16}
                     >
                         <View
@@ -611,6 +669,7 @@ function FileContentPanelInner({
                             <MarkdownView
                                 testID="file-markdown-preview"
                                 markdown={fileContent}
+                                sourceRangeLayoutObserver={Platform.OS === 'web' ? markdownReading.observer : undefined}
                                 profile="default"
                                 streamingMode="static"
                                 selectable
@@ -635,30 +694,7 @@ function FileContentPanelInner({
                 )
             ) : displayMode === 'file' && typeof fileContent === 'string' ? (
                 fileContent.length > 0 ? (
-                    <CodeLinesView
-                        lines={lines}
-                        onPressLine={effectivePressLine}
-                        onPressLineRange={effectivePressLineRangeHandler}
-                        pressLineWhenNotSelectable={effectivePressLineWhenNotSelectable}
-                        onPressAddComment={effectivePressAddComment}
-                        isCommentActive={reviewCommentControls?.isCommentActive}
-                        renderAfterLine={reviewCommentControls?.renderAfterLine}
-                        contentPaddingHorizontal={16}
-                        contentPaddingVertical={16}
-                        virtualized={virtualized}
-                        scrollToLineId={jumpTarget.scrollToLineId ?? undefined}
-                        highlightLineId={jumpTarget.scrollToLineId ?? undefined}
-                        highlightLineIds={jumpTarget.highlightLineIds}
-                        wrapLines={effectiveWrapLines}
-                        showLineNumbers={effectiveShowLineNumbers}
-                        showPrefix={effectiveShowPrefix}
-                        syntaxHighlighting={syntaxHighlighting}
-                        testID={scrollTestID}
-                        onLayout={onLayout}
-                        onContentSizeChange={onContentSizeChange}
-                        onScroll={onScroll}
-                        scrollEventThrottle={16}
-                    />
+                    virtualized ? fileCodeView : renderCodeScroll(fileCodeView)
                 ) : (
                     <Text
                         style={{

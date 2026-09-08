@@ -265,7 +265,7 @@ describe('pendingQueueV2 error handling', () => {
             text: 'provider custody is unresolved',
             rawRecord: { role: 'user', content: { type: 'text', text: 'provider custody is unresolved' }, meta: {} },
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId: 'external-handoff-1',
             createdAt: 111,
@@ -281,7 +281,7 @@ describe('pendingQueueV2 error handling', () => {
                     deliveryMode: 'external_handoff',
                 }),
             },
-        }, outboxScope);
+        }, outboxScope));
 
         await deletePendingMessageV2({
             sessionId,
@@ -295,7 +295,7 @@ describe('pendingQueueV2 error handling', () => {
                 pendingDeliveryStatus: 'external_handoff',
             }),
         ]);
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toEqual([]);
 
         await fetchAndApplyPendingMessagesV2({
             sessionId,
@@ -490,7 +490,7 @@ describe('pendingQueueV2 error handling', () => {
             text: 'server authoritative',
             rawRecord: { role: 'user', content: { type: 'text', text: 'server authoritative' }, meta: {} },
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -505,7 +505,7 @@ describe('pendingQueueV2 error handling', () => {
                     requestedAction: { v: 1, kind: 'enqueue' },
                 }),
             },
-        }, outboxScope);
+        }, outboxScope));
 
         await expect(deletePendingMessageV2({
             sessionId,
@@ -516,7 +516,7 @@ describe('pendingQueueV2 error handling', () => {
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({ localId, source: 'server_pending' }),
         ]);
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toEqual([
             expect.objectContaining({ localId, operation: 'cancel' }),
         ]);
     });
@@ -539,7 +539,7 @@ describe('pendingQueueV2 error handling', () => {
             },
             pendingOutboxScope: outboxScope,
         } as any);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId: 'local-delete-me',
             createdAt: 111,
@@ -549,7 +549,7 @@ describe('pendingQueueV2 error handling', () => {
                 v: 1,
                 body: '{"localId":"local-delete-me","content":{"t":"plain","v":{}},"messageRole":"user"}',
             },
-        }, outboxScope);
+        }, outboxScope));
 
         const requests: Array<{ path: string; method?: string }> = [];
         await expect(deletePendingMessageV2({
@@ -566,7 +566,7 @@ describe('pendingQueueV2 error handling', () => {
             method: 'DELETE',
         }]);
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toEqual([]);
     });
 
     it('canonicalizes a collision-allocated projection id before cancelling durable enqueue custody', async () => {
@@ -590,7 +590,7 @@ describe('pendingQueueV2 error handling', () => {
             text: 'cancel this exact enqueue',
             rawRecord,
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -605,7 +605,7 @@ describe('pendingQueueV2 error handling', () => {
                     requestedAction: { v: 1, kind: 'enqueue' },
                 }),
             },
-        }, outboxScope);
+        }, outboxScope));
         const requests: Array<{ path: string; method?: string }> = [];
 
         await deletePendingMessageV2({
@@ -621,7 +621,7 @@ describe('pendingQueueV2 error handling', () => {
             path: `/v2/sessions/${sessionId}/pending/${localId}`,
             method: 'DELETE',
         }]);
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
     });
 
@@ -640,7 +640,7 @@ describe('pendingQueueV2 error handling', () => {
             text: 'opaque cancellation',
             rawRecord: { role: 'user', content: { type: 'text', text: 'opaque cancellation' }, meta: {} },
         } as any);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -650,7 +650,7 @@ describe('pendingQueueV2 error handling', () => {
                 v: 1,
                 body: JSON.stringify({ localId, content: { t: 'plain', v: {} }, messageRole: 'user' }),
             },
-        }, outboxScope);
+        }, outboxScope));
         const paths: string[] = [];
 
         await deletePendingMessageV2({
@@ -681,7 +681,7 @@ describe('pendingQueueV2 error handling', () => {
             rawRecord: { role: 'user', content: { type: 'text', text: 'possibly committed' }, meta: {} },
             pendingOutboxScope: outboxScope,
         } as any);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId: 'local-delete-ambiguous',
             createdAt: 111,
@@ -691,7 +691,7 @@ describe('pendingQueueV2 error handling', () => {
                 v: 1,
                 body: '{"localId":"local-delete-ambiguous","content":{"t":"plain","v":{}},"messageRole":"user"}',
             },
-        }, outboxScope);
+        }, outboxScope));
 
         await expect(deletePendingMessageV2({
             sessionId,
@@ -704,7 +704,7 @@ describe('pendingQueueV2 error handling', () => {
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({ localId: 'local-delete-ambiguous' }),
         ]);
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toEqual([
             expect.objectContaining({ localId: 'local-delete-ambiguous', operation: 'cancel' }),
         ]);
 
@@ -786,7 +786,7 @@ describe('pendingQueueV2 error handling', () => {
                 meta: {},
             },
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId: 'local-pending-retry',
             createdAt: 111,
@@ -796,7 +796,7 @@ describe('pendingQueueV2 error handling', () => {
                 v: 1,
                 body: '{"localId":"local-pending-retry","content":{"t":"plain","v":{}},"messageRole":"user"}',
             },
-        }, outboxScope);
+        }, outboxScope));
 
         const bodies: unknown[] = [];
         await expect(retryPendingOutboxOperationV2({
@@ -845,7 +845,7 @@ describe('pendingQueueV2 error handling', () => {
                 meta: {},
             },
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId: 'local-pending-retry-transient',
             createdAt: 111,
@@ -855,7 +855,7 @@ describe('pendingQueueV2 error handling', () => {
                 v: 1,
                 body: '{"localId":"local-pending-retry-transient","content":{"t":"plain","v":{}},"messageRole":"user"}',
             },
-        }, outboxScope);
+        }, outboxScope));
 
         await expect(retryPendingOutboxOperationV2({
             sessionId,
@@ -894,7 +894,7 @@ describe('pendingQueueV2 error handling', () => {
             text: 'ambiguous parse',
             rawRecord,
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -909,7 +909,7 @@ describe('pendingQueueV2 error handling', () => {
                     requestedAction: { v: 1, kind: 'enqueue' },
                 }),
             },
-        }, outboxScope);
+        }, outboxScope));
 
         await expect(retryPendingOutboxOperationV2({
             sessionId,
@@ -921,7 +921,7 @@ describe('pendingQueueV2 error handling', () => {
             }),
         })).rejects.toThrow('Server did not acknowledge the persisted Pending requested action');
 
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toHaveLength(1);
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toHaveLength(1);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({ localId, sendState: 'unconfirmed' }),
         ]);
@@ -931,7 +931,7 @@ describe('pendingQueueV2 error handling', () => {
         const sessionId = 's_test_retry_invalid_auxiliary_projection';
         const localId = 'retry-invalid-auxiliary-projection';
         storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 111,
@@ -948,9 +948,9 @@ describe('pendingQueueV2 error handling', () => {
                     deliveryMode: 'external_handoff',
                 }),
             },
-        }, outboxScope);
-        replayPersistedPendingOutboxForSession(sessionId, outboxScope);
-        const frozenBody = loadPendingOutboxForSession(sessionId, outboxScope)[0]!.request.body;
+        }, outboxScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, outboxScope));
+        const frozenBody = (await loadPendingOutboxForSession(sessionId, outboxScope))[0]!.request.body;
         const sentBodies: string[] = [];
 
         await expect(retryPendingOutboxOperationV2({
@@ -967,7 +967,7 @@ describe('pendingQueueV2 error handling', () => {
         })).resolves.toEqual({ accepted: true });
 
         expect(sentBodies).toEqual([frozenBody]);
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -994,7 +994,7 @@ describe('pendingQueueV2 error handling', () => {
             rawRecord: { role: 'user', content: { type: 'text', text: 'retry after auth' }, meta: {} },
             pendingOutboxScope: outboxScope,
         } as any);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId: 'local-pending-auth',
             createdAt: 111,
@@ -1004,7 +1004,7 @@ describe('pendingQueueV2 error handling', () => {
                 v: 1,
                 body: '{"localId":"local-pending-auth","content":{"t":"plain","v":{}},"messageRole":"user"}',
             },
-        }, outboxScope);
+        }, outboxScope));
 
         await expect(retryPendingOutboxOperationV2({
             sessionId,
@@ -1013,7 +1013,7 @@ describe('pendingQueueV2 error handling', () => {
             request: async () => new Response(null, { status }),
         })).rejects.toMatchObject({ kind: 'auth', status });
 
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toHaveLength(1);
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toHaveLength(1);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({ localId: 'local-pending-auth', sendState: 'failed' }),
         ]);

@@ -150,18 +150,13 @@ vi.mock('@/scm/registry/scmUiBackendRegistry', () => ({
     },
 }));
 
-vi.mock('@/components/sessions/files/content/review/useChangedFilesReviewPrefetch', () => ({
-    useChangedFilesReviewPrefetch: () => ({
-        onViewableItemsChanged: undefined,
-        prefetchEnabled: false,
-        requestedPaths: undefined,
-    }),
-}));
+
+const loadedReviewDiffState = { status: 'loaded', diff: 'diff --git a/x b/x\n', error: null } as const;
 
 vi.mock('@/components/sessions/files/content/review/useChangedFilesReviewDiffLoading', () => ({
     useChangedFilesReviewDiffLoading: () => ({
         diffStateSource: {
-            getDiffState: (_path: string) => ({ status: 'loaded', diff: 'diff --git a/x b/x\n', error: null }),
+            getDiffState: (_path: string) => loadedReviewDiffState,
             subscribe: () => () => {},
             reset: () => {},
             prune: () => {},
@@ -179,9 +174,6 @@ vi.mock('@/components/sessions/files/content/review/useScmDiffExpandedKeys', () 
     }),
 }));
 
-vi.mock('@/components/sessions/files/content/review/useChangedFilesReviewFocusPath', () => ({
-    useChangedFilesReviewFocusPath: () => null,
-}));
 
 vi.mock('@/components/sessions/files/content/review/useInitialScrollRestore', () => ({
     useInitialScrollRestore: () => undefined,

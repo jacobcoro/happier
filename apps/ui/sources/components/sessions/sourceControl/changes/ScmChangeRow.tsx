@@ -190,7 +190,11 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                 filePath={file.filePath}
                 fullPath={file.fullPath}
                 preferNameOverPath
+                alignForRootFiles={false}
                 pathTextStyle={{
+                    flex: 0,
+                    flexBasis: 'auto',
+                    flexShrink: 1,
                     fontSize: 13,
                     color: theme.colors.text.secondary,
                     ...Typography.default(),
@@ -213,15 +217,21 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     gap: 2,
                 }}
             >
-                <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.state.success.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                    {`+${file.linesAdded}`}
-                </Text>
-                <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.text.secondary, ...Typography.default() }}>
-                    {PATH_SEPARATOR}
-                </Text>
-                <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.state.danger.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                    {`-${file.linesRemoved}`}
-                </Text>
+                {file.isComplete === false ? (
+                    <Text accessibilityLabel={t('common.unavailable')} style={{ color: theme.colors.text.secondary }}>—</Text>
+                ) : (
+                    <>
+                        <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.state.success.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+                            {`+${file.linesAdded}`}
+                        </Text>
+                        <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.text.secondary, ...Typography.default() }}>
+                            {PATH_SEPARATOR}
+                        </Text>
+                        <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.state.danger.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+                            {`-${file.linesRemoved}`}
+                        </Text>
+                    </>
+                )}
             </View>
         </>
     );

@@ -14,6 +14,7 @@ import { claudeGoalActionCapabilityProfile, claudeSupportsEditableGoals } from '
 import { buildClaudeSessionHandoffProviderPatch } from '@/agents/providers/claude/sessionHandoff';
 import { isClaudeUnifiedAttachedSessionTerminalAvailable } from '@/agents/providers/claude/attachedSessionTerminal';
 import { resolveClaudePendingDeliveryLabelKey } from '@/agents/providers/claude/pendingDeliveryPresentation';
+import { isCurrentPendingInputServerWireMode } from '@/sync/engine/pending/pendingInputServerWireContract';
 
 export const CLAUDE_UI_BEHAVIOR_OVERRIDE: AgentUiBehavior = {
     pendingDelivery: {
@@ -23,7 +24,7 @@ export const CLAUDE_UI_BEHAVIOR_OVERRIDE: AgentUiBehavior = {
             custodyObservedLocalId: session.agentState?.capabilities?.pendingInputInterruptAndRunLocalId,
         }),
         resolveTransientAction: ({ session, localId, wireMode }) => {
-            if (wireMode !== 'pending_input_v1') return null;
+            if (!isCurrentPendingInputServerWireMode(wireMode)) return null;
             const capabilities = session.agentState?.capabilities;
             if (capabilities?.pendingInputInterruptAndRunLocalId !== localId) return null;
             return {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -18,6 +18,39 @@ describe('scm rpc change discard (git)', () => {
         runGit(workspace, ['commit', '-m', 'init']);
         return workspace;
     }
+
+
+    it.each([false, true])('truthfully discards a staged addition with index lock=%s', async (locked) => {
+        const workspace = createGitWorkspace();
+        writeFileSync(join(workspace, 'new.txt'), 'new\n');
+        runGit(workspace, ['add', 'new.txt']);
+        const indexBefore = readFileSync(join(workspace, '.git', 'index'));
+        if (locked) writeFileSync(join(workspace, '.git', 'index.lock'), '');
+
+        const { call } = createTestRpcManager({ workingDirectory: workspace });
+        const response = await call<{ success: boolean }, { cwd: string; entries: Array<{ path: string; kind: string }> }>(
+            RPC_METHODS.SCM_CHANGE_DISCARD,
+            { cwd: '.', entries: [{ path: 'new.txt', kind: 'added' }] },
+        );
+        expect(response.success).toBe(!locked);
+        expect(existsSync(join(workspace, 'new.txt'))).toBe(locked);
+        if (locked) expect(readFileSync(join(workspace, '.git', 'index'))).toEqual(indexBefore);
+        else expect(runGit(workspace, ['status', '--porcelain'])).toBe('');
+    });
+
+
+    it('discards only the requested bracket filename', async () => {
+        const workspace = createGitWorkspace();
+        writeFileSync(join(workspace, 'literal[1].txt'), 'chosen\n');
+        writeFileSync(join(workspace, 'literal1.txt'), 'keep\n');
+        const { call } = createTestRpcManager({ workingDirectory: workspace });
+        const response = await call<{ success: boolean }, { entries: Array<{ path: string; kind: string }> }>(
+            RPC_METHODS.SCM_CHANGE_DISCARD, { entries: [{ path: 'literal[1].txt', kind: 'untracked' }] },
+        );
+        expect(response.success).toBe(true);
+        expect(existsSync(join(workspace, 'literal[1].txt'))).toBe(false);
+        expect(readFileSync(join(workspace, 'literal1.txt'), 'utf8')).toBe('keep\n');
+    });
 
     it('discards pending modifications to a tracked file', async () => {
         const workspace = createGitWorkspace();

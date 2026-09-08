@@ -175,11 +175,14 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
   };
 
   const sessionAdapter: Pick<ApiSessionClient,
-    'sessionId' | 'getLastObservedMessageSeq' | 'updateMetadata' | 'sendAgentMessage' | 'sendAgentMessageCommitted' | 'sendCodexMessage'
+    'sessionId' | 'getLastObservedMessageSeq' | 'updateMetadata' | 'sendAgentMessage' | 'sendAgentMessageCommitted' | 'sendCodexMessage' | 'sendSessionEvent'
   > = {
     sessionId: 'codex-app-server-execution-run',
     getLastObservedMessageSeq: () => lastObservedMessageSeq,
     updateMetadata: async () => undefined,
+    // Execution runs have no main-session event projection. In particular, their
+    // compaction must not be reported as compaction of the parent session.
+    sendSessionEvent: () => undefined,
     sendAgentMessage: (provider, body) => {
       emitCommittedTranscriptBody(provider, body);
     },
@@ -338,6 +341,9 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
       })();
       promptTurn = createPromptTurn(promptWork);
       void promptWork.catch(() => undefined);
+    },
+    async sendSteerPrompt(_sessionId: SessionId, prompt: string): Promise<void> {
+      await runtime.steerPrompt(prompt);
     },
     async probeTurnLiveness(): Promise<CodexAppServerExecutionRunTurnLiveness> {
       return readTurnLiveness();

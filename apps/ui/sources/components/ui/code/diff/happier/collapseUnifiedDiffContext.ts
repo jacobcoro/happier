@@ -1,7 +1,7 @@
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 
 export type UnifiedDiffFoldRegion = Readonly<{
-    id: string;
+    hiddenStartIndex: number;
     afterLineId: string;
     hiddenCount: number;
 }>;
@@ -10,7 +10,7 @@ export function collapseUnifiedDiffContext(params: Readonly<{
     lines: readonly CodeLine[];
     contextThreshold: number;
     contextRadius: number;
-    expandedRegionIds: ReadonlySet<string>;
+    expandedLineIndices: ReadonlySet<number>;
 }>): Readonly<{ lines: CodeLine[]; regions: UnifiedDiffFoldRegion[] }> {
     const threshold = Math.max(0, Math.floor(params.contextThreshold));
     const radius = Math.max(0, Math.floor(params.contextRadius));
@@ -57,18 +57,14 @@ export function collapseUnifiedDiffContext(params: Readonly<{
             continue;
         }
 
-        const hunkHeader = (() => {
-            for (let j = runStart - 1; j >= 0; j--) {
-                const prev = raw[j]!;
-                if (prev.kind === 'header' && prev.renderCodeText.startsWith('@@')) return prev;
+        let hasExpandedLine = false;
+        for (let j = runStart; j < runEnd; j++) {
+            if (params.expandedLineIndices.has(j)) {
+                hasExpandedLine = true;
+                break;
             }
-            return null;
-        })();
-
-        const headerKey = hunkHeader ? String(hunkHeader.sourceIndex) : 'no-hunk';
-        const regionId = `fold:${headerKey}:${raw[runStart]!.sourceIndex}:${raw[runEnd - 1]!.sourceIndex}`;
-
-        if (params.expandedRegionIds.has(regionId)) {
+        }
+        if (hasExpandedLine) {
             for (let j = runStart; j < runEnd; j++) out.push(raw[j]!);
             i = runEnd;
             continue;
@@ -81,7 +77,7 @@ export function collapseUnifiedDiffContext(params: Readonly<{
 
         const hiddenCount = keepEndStart - keepStartEnd;
         const afterLineId = raw[keepStartEnd - 1]!.id;
-        regions.push({ id: regionId, afterLineId, hiddenCount });
+        regions.push({ hiddenStartIndex: keepStartEnd, afterLineId, hiddenCount });
 
         for (let j = keepEndStart; j < runEnd; j++) out.push(raw[j]!);
 

@@ -120,7 +120,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 8,
         paddingHorizontal: 12,
         paddingVertical: 10,
-        paddingRight: 24,
     },
     optionButton: {
         width: PICKER_OPTION_SIZE,

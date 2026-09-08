@@ -146,21 +146,7 @@ vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
         React.createElement('PermissionFooter', { ...props, testID: 'agent-input-permission-footer' }, null),
 }));
 
-vi.mock('@/components/tools/normalization/policy/permissionSummary', () => ({
-    formatPermissionRequestSummary: () => 'Permission required',
-}));
 
-vi.mock('@/components/tools/normalization/parse/shellCommand', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/components/tools/normalization/parse/shellCommand')>();
-    return {
-        ...actual,
-        extractShellCommand: () => null,
-    };
-});
-
-vi.mock('@/components/tools/normalization/parse/parseParenIdentifier', () => ({
-    parseParenIdentifier: () => null,
-}));
 
 vi.mock('@/hooks/session/useUserMessageHistory', () => ({
     useUserMessageHistory: () => ({

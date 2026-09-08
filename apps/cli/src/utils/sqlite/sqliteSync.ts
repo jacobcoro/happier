@@ -35,4 +35,3 @@ export function openSqliteDatabaseSync(filePath: string): SqliteDatabaseSync {
 
   return new (ctor as new (path: string) => SqliteDatabaseSync)(filePath);
 }
-

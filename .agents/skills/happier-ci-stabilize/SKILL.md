@@ -27,6 +27,18 @@ Read [failure-collection.md](references/failure-collection.md) for a failing run
 7. **Use one foreground monitor.** Keep exactly one poller bound to the run and attempt. Poll long setup, suites, builds, signing, notarization, store submission, and publication every 5-20 minutes. Long duration alone is not failure evidence.
 8. **Close from terminal evidence.** Require canonical CI success for the exact SHA. For a nightly, also inspect the terminal status artifact, immutable identities, required validation, promoted-reference verification, and requested side lanes. A green top-level badge alone is insufficient.
 
+### Iterate narrowly; certify once
+
+Do not enqueue the entire graph after every correction. After one complete failure collection:
+
+1. reproduce each deterministic cluster with the smallest owner-level local command;
+2. run the affected package lane locally once the focused fixes are green;
+3. when the local machine cannot represent the hosted boundary, dispatch `tests-dispatch.yml` with `profile=custom`, only the affected `custom_checks`, and exact `ui_e2e_specs` when applicable;
+4. select a Blacksmith Linux pool only for eligible non-secret Linux work and keep macOS, Windows, self-hosted, credentialed, and release-mutation lanes on their canonical runners;
+5. after the correction batch is coherent, run the required full/release profile once on the exact final SHA.
+
+A GitHub native failed-job rerun is for the same SHA after a safe transient failure. It cannot validate code that exists only in a newer SHA. A custom dispatch on a corrected SHA is fast diagnostic evidence; it does not replace the final exact-SHA profile required by release policy.
+
 ## Keep source CI and release admission separate
 
 - Source CI proves code correctness once for an exact SHA and emits or identifies explicit exact-SHA evidence.

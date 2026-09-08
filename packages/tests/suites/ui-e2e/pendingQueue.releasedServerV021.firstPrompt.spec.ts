@@ -23,6 +23,7 @@ import {
   gotoCommittedWithRetries,
   normalizeLoopbackBaseUrl,
 } from '../../src/testkit/uiE2e/pageNavigation';
+import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const releasedServerArtifact = resolveReleasedServerV021ArtifactPrerequisite({
@@ -125,12 +126,7 @@ describeReleasedServer(releasedServerSuiteName, () => {
     if (!server || !uiBaseUrl) throw new Error('missing released-server/UI fixtures');
 
     const providerObservationStartedAt = Date.now();
-    const browserDiagnostics: string[] = [];
-    page.on('console', (message) => browserDiagnostics.push(`console.${message.type()}: ${message.text()}`));
-    page.on('pageerror', (error) => browserDiagnostics.push(`pageerror: ${error.message}`));
-    page.on('requestfailed', (request) => {
-      browserDiagnostics.push(`requestfailed: ${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`);
-    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
     try {
       daemon = await authenticateAndStartDaemon({
         page,
@@ -173,9 +169,7 @@ describeReleasedServer(releasedServerSuiteName, () => {
         },
       });
     } catch (error) {
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)}\n${browserDiagnostics.slice(-40).join('\n')}`,
-      );
+      throw appendBrowserDiagnostics(error, browserDiagnostics());
     }
 
     const machineId = await waitForDaemonMachineIdFromCliSettings({ cliHomeDir, timeoutMs: 120_000 });

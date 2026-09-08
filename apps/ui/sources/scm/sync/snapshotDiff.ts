@@ -14,6 +14,7 @@ type SnapshotEntryComparable = {
         pendingAdded: number;
         pendingRemoved: number;
         isBinary: boolean;
+        isComplete?: boolean;
     };
 };
 
@@ -35,6 +36,7 @@ function toComparableMap(snapshot: ScmWorkingSnapshot | null | undefined): Map<s
                 pendingAdded: entry.stats.pendingAdded,
                 pendingRemoved: entry.stats.pendingRemoved,
                 isBinary: entry.stats.isBinary,
+                ...(entry.stats.isComplete === undefined ? {} : { isComplete: entry.stats.isComplete }),
             },
         });
     }
@@ -54,7 +56,8 @@ function isEntryEqual(a: SnapshotEntryComparable | undefined, b: SnapshotEntryCo
         a.stats.includedRemoved === b.stats.includedRemoved &&
         a.stats.pendingAdded === b.stats.pendingAdded &&
         a.stats.pendingRemoved === b.stats.pendingRemoved &&
-        a.stats.isBinary === b.stats.isBinary
+        a.stats.isBinary === b.stats.isBinary &&
+        a.stats.isComplete === b.stats.isComplete
     );
 }
 

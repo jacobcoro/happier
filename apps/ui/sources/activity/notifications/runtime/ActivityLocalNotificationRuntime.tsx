@@ -18,6 +18,7 @@ type ActivityLocalNotificationSettings = Readonly<{
     localNotificationsEnabled: boolean;
     localNotificationsShowReady: boolean;
     localNotificationsShowReadyMessageText: boolean;
+    localNotificationsShowRequestMessageText: boolean;
     localNotificationsShowPendingPermissionRequests: boolean;
     localNotificationsShowPendingUserActionRequests: boolean;
 }>;
@@ -26,6 +27,7 @@ function useActivityLocalNotificationSettings(): ActivityLocalNotificationSettin
     const localNotificationsEnabled = useLocalSetting('localNotificationsEnabled');
     const localNotificationsShowReady = useLocalSetting('localNotificationsShowReady');
     const localNotificationsShowReadyMessageText = useLocalSetting('localNotificationsShowReadyMessageText');
+    const localNotificationsShowRequestMessageText = useLocalSetting('localNotificationsShowRequestMessageText');
     const localNotificationsShowPendingPermissionRequests = useLocalSetting('localNotificationsShowPendingPermissionRequests');
     const localNotificationsShowPendingUserActionRequests = useLocalSetting('localNotificationsShowPendingUserActionRequests');
 
@@ -34,6 +36,7 @@ function useActivityLocalNotificationSettings(): ActivityLocalNotificationSettin
             localNotificationsEnabled,
             localNotificationsShowReady,
             localNotificationsShowReadyMessageText,
+            localNotificationsShowRequestMessageText,
             localNotificationsShowPendingPermissionRequests,
             localNotificationsShowPendingUserActionRequests,
         }),
@@ -43,6 +46,7 @@ function useActivityLocalNotificationSettings(): ActivityLocalNotificationSettin
             localNotificationsShowPendingUserActionRequests,
             localNotificationsShowReady,
             localNotificationsShowReadyMessageText,
+            localNotificationsShowRequestMessageText,
         ],
     );
 }
@@ -97,6 +101,7 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
                 session,
                 serverUrl: getActiveServerUrl(),
                 includeReadyMessageText: localSettings.localNotificationsShowReadyMessageText !== false,
+                includeRequestMessageText: localSettings.localNotificationsShowRequestMessageText !== false,
             });
 
             if (isTauriDesktop()) {

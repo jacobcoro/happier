@@ -188,6 +188,47 @@ test('release dry-run JSON requires a project release-notes ID before resolving 
   }
 });
 
+test('combined preview and production dry-run binds one exact dev source and stable validation profile', () => {
+  const stub = createReleaseCliDryRunEnv();
+  try {
+    const raw = execFileSync(
+      process.execPath,
+      [
+        pipelineCli,
+        'release',
+        '--confirm',
+        'release dev to preview and main',
+        '--repository',
+        'happier-dev/happier',
+        '--deploy-environment',
+        'preview-and-production',
+        '--dry-run',
+        '--json',
+        '--operation-id',
+        'rel_combined_20260907',
+        '--release-notes-id',
+        '2026-09-07.1',
+      ],
+      {
+        cwd: repoRoot,
+        env: { ...stub.env, GH_TOKEN: '', GH_REPO: '', GITHUB_REPOSITORY: '' },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: RELEASE_CLI_DRY_RUN_TIMEOUT_MS,
+      },
+    );
+    const plan = JSON.parse(raw);
+    assert.equal(plan.kind, 'happier.release-dispatch-plan.v3');
+    assert.equal(plan.sourceBranch, 'dev');
+    assert.equal(plan.productionPromotionMode, 'fast-forward');
+    assert.equal(plan.authorizedPromotionSourceSha, '2222222222222222222222222222222222222222');
+    assert.equal(plan.validationProfile, 'stable');
+    assert.equal(plan.operationId, 'rel_combined_20260907');
+  } finally {
+    stub.cleanup();
+  }
+});
+
 test('release workflow admits one authorized promotion-source SHA and passes it to both branch promotion paths', async () => {
   const raw = await readFile(resolve(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
 

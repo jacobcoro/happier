@@ -172,7 +172,7 @@ function renderTabBadge(badge: CockpitTabBadge | undefined, testID: string): Rea
         return null;
     }
     if (badge.kind === 'count') {
-        return <TabBadge variant="count" value={badge.value} testID={testID} />;
+        return <TabBadge variant="count" value={badge.value} tone="neutral" testID={testID} />;
     }
     return (
         <TabBadge

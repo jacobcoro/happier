@@ -4,6 +4,8 @@ import { Platform, Pressable, View, type LayoutChangeEvent } from 'react-native'
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScrollableRow';
 import { Text } from '@/components/ui/text/Text';
+import { InlineRepoPathLabel } from '@/components/ui/path/InlineRepoPathLabel';
+import { PressableSurface } from '@/components/ui/interaction/PressableSurface';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import type { ScmProjectInFlightOperation } from '@/sync/runtime/orchestration/projectManager';
@@ -18,6 +20,8 @@ import { WrapLinesToggleButton } from '@/components/ui/code/WrapLinesToggleButto
 
 export type FileDisplayMode = 'file' | 'diff' | 'markdown';
 export type FileDiffMode = 'included' | 'pending' | 'both';
+
+const selectionActionStyle = { minHeight: Platform.select({ ios: 44, android: 48, default: 34 }) };
 
 const FILE_ACTION_TOOLBAR_COMPACT_WIDTH = 520;
 const FILE_ACTION_TOOLBAR_COMPACT_HORIZONTAL_PADDING = 12;
@@ -155,20 +159,12 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     const [toolbarWidth, setToolbarWidth] = React.useState<number | null>(null);
     const [displayMenuOpen, setDisplayMenuOpen] = React.useState(false);
     const [diffAreaMenuOpen, setDiffAreaMenuOpen] = React.useState(false);
-    const stageLabel = virtualSelectionEnabled ? t('files.fileActions.selectForCommit') : t('files.fileActions.stageFile');
+    const stageLabel = virtualSelectionEnabled ? t('files.fileActions.selectEntireFileForCommit') : t('files.fileActions.stageFile');
     const unstageLabel = virtualSelectionEnabled ? t('files.fileActions.removeFromCommitSelection') : t('files.fileActions.unstageFile');
     const commandIconSize = 14;
     const isLineSelectionActive = lineSelectionActive === true || selectedLineCount > 0;
     const canStartLineSelection = lineSelectionCanStart === true || lineSelectionEnabled;
     const isCommentModeActive = commentModeActive === true;
-    const showCompactCommitSelectionEntry = virtualSelectionEnabled && !isLineSelectionActive;
-    const handleStageFilePress = React.useCallback(() => {
-        if (canStartLineSelection && !isLineSelectionActive) {
-            onStartLineSelection?.();
-            return;
-        }
-        onStageFile();
-    }, [canStartLineSelection, isLineSelectionActive, onStageFile, onStartLineSelection]);
     const hasSelectedLines = isLineSelectionActive && lineSelectionEnabled && selectedLineCount > 0;
     const selectedLineActionIsRemoval = !virtualSelectionEnabled && diffMode === 'included';
     const selectedLineActionColor = selectedLineActionIsRemoval ? theme.colors.state.neutral.foreground : theme.colors.state.success.foreground;
@@ -195,8 +191,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         setToolbarWidth((current) => current === width ? current : width);
     }, []);
 
-    // Matches `ToolbarButton`, which the remaining callers cannot simply be: one anchors a popover
-    // and the other switches between a compact glyph and a labelled state mid-render.
+    // Dropdown triggers retain their popover anchor while matching the toolbar buttons.
     const chipStyle = (active: boolean) => ({
         minHeight: 34,
         paddingVertical: 5,
@@ -339,27 +334,21 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     ), [chipStyle, theme.colors.text.primary, theme.colors.text.secondary]);
 
     const pathElement = pathLabel ? (
-        <View
+        <PressableSurface
             testID="file-details-path"
-            style={{
-                minHeight: 32,
-                justifyContent: 'center',
-                maxWidth: useCompactLayout ? '100%' : 190,
-                width: useCompactLayout ? '100%' : undefined,
-                paddingHorizontal: 4,
-            }}
+            accessibilityRole="text"
+            accessibilityLabel={pathLabel}
+            webTooltip={pathLabel}
+            style={{ flexBasis: '32%', flexShrink: 0, minWidth: 0, minHeight: 32, justifyContent: 'center' }}
         >
-            <Text
-                style={{
-                    fontSize: 12,
-                    color: theme.colors.text.secondary,
-                    ...(Typography.mono ? Typography.mono() : Typography.default()),
-                }}
-                numberOfLines={1}
-            >
-                {pathLabel}
-            </Text>
-        </View>
+            <InlineRepoPathLabel
+                fullPath={pathLabel}
+                preferNameOverPath
+                alignForRootFiles={false}
+                pathTextStyle={{ fontSize: 12, color: theme.colors.text.secondary, ...(Typography.mono ? Typography.mono() : Typography.default()) }}
+                nameTextStyle={{ fontSize: 12, color: theme.colors.text.primary, ...(Typography.mono ? Typography.mono() : Typography.default()) }}
+            />
+        </PressableSurface>
     ) : null;
 
     const viewActionsElement = (
@@ -367,7 +356,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             testID="file-details-view-actions"
             style={{
                 flexDirection: 'row',
-                flexWrap: useCompactSelectedLineActions ? 'nowrap' : 'wrap',
+                flexWrap: 'nowrap',
                 alignItems: 'center',
                 gap: actionGap,
                 flexShrink: 0,
@@ -512,64 +501,56 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             testID="file-details-change-actions"
             style={{
                 flexDirection: 'row',
-                flexWrap: useCompactSelectedLineActions ? 'nowrap' : 'wrap',
+                flexWrap: 'nowrap',
                 alignItems: 'center',
-                justifyContent: useCompactSelectedLineActions ? 'flex-start' : useCompactLayout ? 'space-between' : 'flex-start',
+                justifyContent: 'flex-start',
                 gap: actionGap,
-                flex: useCompactLayout && !useCompactSelectedLineActions ? 1 : undefined,
-                flexShrink: useCompactSelectedLineActions ? 0 : undefined,
+                flexShrink: 0,
             }}
         >
             {scmWriteEnabled && canUseSelectionActions && canIncludeFileInSelection && !hasSelectedLines && (
-                <Pressable
+                <IconAction
                     disabled={actionBusy}
-                    onPress={handleStageFilePress}
+                    onPress={onStageFile}
                     testID="file-details-stage-file"
-                    accessibilityRole="button"
                     accessibilityLabel={stageLabel}
-                    style={showCompactCommitSelectionEntry
-                        ? [chipStyle(false), { width: 34, height: 34, minHeight: 34, paddingHorizontal: 0, paddingVertical: 0, opacity: actionBusy ? 0.6 : 1 }]
-                        : {
-                            paddingHorizontal: 12,
-                            paddingVertical: 6,
-                            minHeight: 32,
-                            borderRadius: 8,
-                            backgroundColor: theme.colors.surface.base,
-                            borderWidth: RNStyleSheet.hairlineWidth,
-                            borderColor: theme.colors.state.success.foreground,
-                            opacity: actionBusy ? 0.6 : 1,
-                        }}
+                    style={{ ...selectionActionStyle, minWidth: selectionActionStyle.minHeight, flexShrink: 0 }}
                 >
-                    {showCompactCommitSelectionEntry ? (
-                        <Icon name="plus" size={commandIconSize} color={theme.colors.text.secondary} />
-                    ) : (
-                        <Text style={{ color: theme.colors.state.success.foreground, fontSize: 13, ...Typography.default('semiBold') }}>
-                            {stageLabel}
-                        </Text>
-                    )}
-                </Pressable>
+                    <Icon name="plus" size={commandIconSize} color={theme.colors.text.secondary} />
+                </IconAction>
+            )}
+
+            {scmWriteEnabled && canUseSelectionActions && canStartLineSelection && onStartLineSelection && !isLineSelectionActive && (
+                <ToolbarButton
+                    disabled={actionBusy}
+                    onPress={onStartLineSelection}
+                    testID="file-details-select-lines"
+                    label={t('files.fileActions.selectLines')}
+                    size="md"
+                    style={selectionActionStyle}
+                />
+            )}
+
+            {isLineSelectionActive && !hasSelectedLines && (
+                <ToolbarButton
+                    onPress={onClearSelection}
+                    testID="file-details-clear-selection"
+                    label={t('common.cancel')}
+                    size="md"
+                    style={selectionActionStyle}
+                />
             )}
 
             {scmWriteEnabled && canUseSelectionActions && canRemoveFromSelection && !hasSelectedLines && (
-                <Pressable
+                <IconAction
                     disabled={actionBusy}
                     onPress={onUnstageFile}
                     testID="file-details-unstage-file"
-                    style={{
-                        paddingHorizontal: 12,
-                        paddingVertical: 6,
-                        minHeight: 32,
-                        borderRadius: 10,
-                        backgroundColor: theme.colors.surface.base,
-                        borderWidth: 1,
-                        borderColor: theme.colors.state.neutral.foreground,
-                        opacity: actionBusy ? 0.6 : 1,
-                    }}
+                    accessibilityLabel={unstageLabel}
+                    style={{ ...selectionActionStyle, minWidth: selectionActionStyle.minHeight, flexShrink: 0 }}
                 >
-                    <Text style={{ color: theme.colors.state.neutral.foreground, fontSize: 13, ...Typography.default('semiBold') }}>
-                        {unstageLabel}
-                    </Text>
-                </Pressable>
+                    <Icon name="minus" size={commandIconSize} color={theme.colors.text.secondary} />
+                </IconAction>
             )}
 
             {scmWriteEnabled && canUseSelectionActions && diffMode === 'both' && !hasSelectedLines && (
@@ -632,9 +613,9 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             testID="file-action-toolbar"
             onLayout={onToolbarLayout}
             style={{
-                flexDirection: useCompactLayout ? 'column' : 'row',
+                flexDirection: 'row',
                 flexWrap: 'nowrap',
-                alignItems: useCompactLayout ? 'stretch' : 'center',
+                alignItems: 'center',
                 paddingHorizontal: toolbarHorizontalPadding,
                 paddingVertical: 12,
                 borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
@@ -644,44 +625,21 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             }}
         >
             {pathElement}
-            {useCompactSelectedLineActions ? (
-                <HorizontalScrollableRow
-                    testID="file-details-compact-action-scroll"
-                    contentTestID="file-details-compact-action-scroll-content"
-                    fadeColor={theme.colors.surface.base}
-                    indicatorColor={theme.colors.text.secondary}
-                    containerStyle={{ marginHorizontal: -toolbarHorizontalPadding }}
-                    contentStyle={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: actionGap,
-                        paddingHorizontal: toolbarHorizontalPadding,
-                        paddingRight: toolbarHorizontalPadding + 24,
-                    }}
-                >
-                    {viewActionsElement}
-                    {changeActionsElement}
-                </HorizontalScrollableRow>
-            ) : useCompactLayout ? (
-                <View
-                    testID="file-details-compact-action-row"
-                    style={{
-                        flexDirection: 'row',
-                        flexWrap: useCompactSelectedLineActions ? 'nowrap' : 'wrap',
-                        alignItems: 'center',
-                        justifyContent: useCompactSelectedLineActions ? 'flex-start' : 'space-between',
-                        gap: actionGap,
-                    }}
-                >
-                    {viewActionsElement}
-                    {changeActionsElement}
-                </View>
-            ) : (
-                <>
-                    {viewActionsElement}
-                    {changeActionsElement}
-                </>
-            )}
+            <HorizontalScrollableRow
+                testID="file-details-action-scroll"
+                contentTestID="file-details-action-scroll-content"
+                fadeColor={theme.colors.surface.base}
+                indicatorColor={theme.colors.text.secondary}
+                containerStyle={{ flex: 1, minWidth: 0 }}
+                contentStyle={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: actionGap,
+                }}
+            >
+                {viewActionsElement}
+                {changeActionsElement}
+            </HorizontalScrollableRow>
         </View>
     );
 }

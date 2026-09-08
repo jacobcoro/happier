@@ -53,6 +53,7 @@ export function addWebhookNotificationChannel({
             userActionRequest: true,
         },
         readyIncludeMessageText: false,
+        requestIncludeMessageText: true,
     });
 
     return NotificationChannelsV1Schema.parse([

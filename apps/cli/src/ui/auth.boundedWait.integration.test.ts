@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
-import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
+import { captureConsoleLogAndMuteStdout, captureConsoleText } from '@/testkit/logger/captureOutput';
 import { setStdioTtyForTest } from '@/testkit/process/stdio';
 
 /**
@@ -22,6 +22,15 @@ function pendingRelay() {
   return app;
 }
 
+function setStderrTtyForTest(isTTY: boolean): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(process.stderr, 'isTTY');
+  Object.defineProperty(process.stderr, 'isTTY', { value: isTTY, configurable: true });
+  return () => {
+    if (descriptor) Object.defineProperty(process.stderr, 'isTTY', descriptor);
+    else delete (process.stderr as { isTTY?: boolean }).isTTY;
+  };
+}
+
 describe('terminal auth wait bound', () => {
   const envKeys = [
     'HAPPIER_HOME_DIR',
@@ -29,11 +38,15 @@ describe('terminal auth wait bound', () => {
     'HAPPIER_AUTH_METHOD',
     'HAPPIER_AUTH_POLL_INTERVAL_MS',
     'HAPPIER_AUTH_WAIT_TIMEOUT_MS',
+    'HAPPIER_NO_ANIMATION',
     'HAPPIER_SERVER_URL',
     'HAPPIER_WEBAPP_URL',
+    'NO_COLOR',
+    'TERM',
   ] as const;
 
   let restoreTty: (() => void) | null = null;
+  let restoreStderrTty: (() => void) | null = null;
   let homeDir = '';
   let envScope = createEnvKeyScope(envKeys);
 
@@ -55,6 +68,8 @@ describe('terminal auth wait bound', () => {
   afterEach(async () => {
     restoreTty?.();
     restoreTty = null;
+    restoreStderrTty?.();
+    restoreStderrTty = null;
     envScope.restore();
     vi.resetModules();
     vi.unstubAllGlobals();
@@ -70,7 +85,7 @@ describe('terminal auth wait bound', () => {
     vi.resetModules();
     const { doAuth } = await import('./auth');
 
-    const output = captureConsoleLogAndMuteStdout();
+    const output = captureConsoleText();
     try {
       const startedAt = performance.now();
       const result = await doAuth();
@@ -78,11 +93,46 @@ describe('terminal auth wait bound', () => {
 
       expect(result).toBeNull();
       expect(elapsedMs).toBeLessThan(2_000);
-      const logs = output.logs.join('\n').toLowerCase();
+      const logs = output.text().toLowerCase();
+      expect(logs).not.toContain('\r');
       expect(logs).toContain('happier auth login');
       expect(logs).toContain('create a new sign-in request');
       expect(logs).not.toContain('approve it on your phone');
     } finally {
+      output.restore();
+      restoreAxios();
+      await app.close().catch(() => {});
+    }
+  }, 30_000);
+
+  it('keeps QR approval on compact progress so the code stays visible', async () => {
+    envScope.patch({
+      HAPPIER_AUTH_METHOD: undefined,
+      HAPPIER_AUTH_WAIT_TIMEOUT_MS: '200',
+      HAPPIER_NO_ANIMATION: '',
+      NO_COLOR: '1',
+      TERM: 'xterm-256color',
+    });
+    restoreTty?.();
+    restoreTty = setStdioTtyForTest({ stdin: false, stdout: true });
+    restoreStderrTty = setStderrTtyForTest(true);
+
+    const app = pendingRelay();
+    await app.ready();
+    const restoreAxios = installAxiosFastifyAdapter({ app, origin: process.env.HAPPIER_SERVER_URL ?? '' });
+    vi.resetModules();
+    const { doAuth } = await import('./auth');
+
+    const output = captureConsoleText();
+    const clear = vi.spyOn(console, 'clear');
+    try {
+      await expect(doAuth()).resolves.toBeNull();
+      const text = output.text();
+      expect(text).toContain('Scan this QR code');
+      expect(text).toContain('- [|] Waiting for authentication');
+      expect(clear).not.toHaveBeenCalled();
+    } finally {
+      clear.mockRestore();
       output.restore();
       restoreAxios();
       await app.close().catch(() => {});

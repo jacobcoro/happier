@@ -2,6 +2,8 @@ import type { Dirent } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { defaultScmBackendRegistry } from '@/scm/defaultRegistry'
+
 import type { DirectoryListingEntry, DirectoryListingEntryType, DirectoryListingResult } from './directoryListingTypes'
 import { sortDirectoryEntries } from './sortDirectoryEntries'
 
@@ -10,6 +12,7 @@ type ListDirectoryEntriesInput = Readonly<{
   includeFiles: boolean
   maxEntries: number | null
   statConcurrency: number
+  includeGitIgnore?: boolean
 }>
 
 function resolveEntryType(entry: Pick<Dirent, 'isDirectory' | 'isFile'>): DirectoryListingEntryType {
@@ -78,5 +81,25 @@ export async function listDirectoryEntries(input: ListDirectoryEntriesInput): Pr
     }
   })
 
+  if (input.includeGitIgnore === true) {
+    try {
+      const selected = await defaultScmBackendRegistry.selectBackend({
+        cwd: input.directoryPath,
+        workingDirectory: input.directoryPath,
+      })
+      const classify = selected?.backend.classifyDirectoryIgnores
+      if (classify) {
+        const ignored = await classify({ cwd: input.directoryPath, entries })
+        return {
+          entries: entries.map((entry) => ({ ...entry, gitIgnored: ignored.has(entry.name) })),
+          truncated,
+          gitIgnoreAvailable: true,
+        }
+      }
+    } catch {
+      // The response exposes unavailable classification; callers retain the raw listing.
+    }
+    return { entries, truncated, gitIgnoreAvailable: false }
+  }
   return { entries, truncated }
 }

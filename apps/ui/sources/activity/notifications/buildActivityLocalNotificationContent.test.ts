@@ -115,7 +115,7 @@ describe('buildActivityLocalNotificationContent', () => {
 
         expect(notification).toMatchObject({
             title: 'Repo status',
-            body: 'Run: git status',
+            body: 'Command: git status',
             data: {
                 sessionId: 'session-2',
                 requestId: 'req-1',
@@ -158,7 +158,7 @@ describe('buildActivityLocalNotificationContent', () => {
 
         expect(notification).toMatchObject({
             title: 'Session',
-            body: 'Which branch should I use?',
+            body: expect.stringContaining('Which branch should I use?'),
             data: {
                 sessionId: 'session-3',
                 requestId: 'req-2',
@@ -171,4 +171,33 @@ describe('buildActivityLocalNotificationContent', () => {
         });
       },
     );
+    it.each(['permission', 'user_action'] as const)('hides %s details when request previews are disabled', async (requestKind) => {
+        const { buildActivityLocalNotificationContent } = await import('./buildActivityLocalNotificationContent');
+        const notification = buildActivityLocalNotificationContent({
+            event: { kind: 'agent-request', sessionId: 'session-1', requestId: 'req-private', requestKind,
+                toolName: requestKind === 'permission' ? 'Bash' : 'AskUserQuestion',
+                toolArgs: requestKind === 'permission' ? { command: 'cat private.txt' } : { questions: [{ question: 'Private question?', options: [{ label: 'Secret option' }] }] } },
+            session: null,
+            serverUrl: 'https://stack.example.test',
+            includeRequestMessageText: false,
+        });
+        expect(notification.body).toBe(requestKind === 'permission'
+            ? 'Approval required.'
+            : 'This session needs your input.');
+        expect(notification.data.requestId).toBe('req-private');
+    });
+
+    it('includes question options in request previews', async () => {
+        const { buildActivityLocalNotificationContent } = await import('./buildActivityLocalNotificationContent');
+        const notification = buildActivityLocalNotificationContent({
+            event: { kind: 'agent-request', sessionId: 'session-1', requestId: 'req-options', requestKind: 'user_action',
+                toolName: 'AskUserQuestion', toolArgs: { questions: [{ question: 'Which branch?', options: [{ label: 'Main' }, { label: 'Develop' }] }] } },
+            session: null,
+            serverUrl: 'https://stack.example.test',
+        });
+        expect(notification.body).toContain('Which branch?');
+        expect(notification.body).toContain('Main');
+        expect(notification.body).toContain('Develop');
+    });
+
 });

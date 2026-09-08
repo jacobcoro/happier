@@ -104,6 +104,7 @@ export function finishExecutionRun(args: Readonly<{
     ioMode: updated.ioMode,
     retentionPolicy: updated.retentionPolicy,
     status: updated.status,
+    ...(updated.notifyParentOnCompletion === true ? { notifyParentOnCompletion: true } : {}),
     startedAtMs: updated.startedAtMs,
     updatedAtMs: args.next.finishedAtMs,
     finishedAtMs: args.next.finishedAtMs,

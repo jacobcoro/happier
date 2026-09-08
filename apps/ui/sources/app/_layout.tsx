@@ -24,6 +24,7 @@ import * as Sentry from '@sentry/react-native';
 import { tracking } from '@/track/tracking';
 import { SettingsAnalyticsRuntime } from '@/track/settingsAnalytics/SettingsAnalyticsRuntime';
 import { syncRestore } from '@/sync/sync';
+import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 import { prepareWarmCacheStorage } from '@/sync/domains/state/warmCachePersistence';
 import { storage } from '@/sync/domains/state/storage';
 import {
@@ -617,11 +618,21 @@ function RootLayout() {
 
     return (
         <WebCryptoStartupGate>
-            <AppBoot
-                desktopWindowBackgroundColor={background}
-                navigationTheme={navigationTheme}
+            <AppCrashRecoveryBoundary
                 onRestart={onRestart}
-            />
+                onError={(error) => {
+                    try {
+                        (Sentry as any).captureException?.(error);
+                    } catch {
+                        // ignore
+                    }
+                }}
+            >
+                <AppBoot
+                    desktopWindowBackgroundColor={background}
+                    navigationTheme={navigationTheme}
+                />
+            </AppCrashRecoveryBoundary>
         </WebCryptoStartupGate>
     );
 }
@@ -629,7 +640,6 @@ function RootLayout() {
 function AppBoot(props: {
     desktopWindowBackgroundColor: string;
     navigationTheme: any;
-    onRestart: () => void;
 }) {
     //
     // Init sequence
@@ -645,6 +655,7 @@ function AppBoot(props: {
     );
     const isTerminalConnectRoute = isTerminalConnectWebPathname(pathname);
     const [initState, setInitState] = React.useState<AppBootReadyState | null>(null);
+    const [bootError, setBootError] = React.useState<Error | null>(null);
     const restartBugReportCheckedRef = React.useRef(false);
 
     React.useEffect(() => {
@@ -658,11 +669,16 @@ function AppBoot(props: {
             sodiumReady: sodium.ready,
             resolveCredentials: () => resolveBootCredentials(Platform.OS),
             prepareWarmCache: prepareWarmCacheStorage,
+            prepareSessionDrafts: prepareSessionDraftPersistenceStorage,
             restoreSync: syncRestore,
             onReady: (ready) => {
                 if (cancelled) return;
                 setInitState(ready);
             },
+        }).catch((error: unknown) => {
+            if (cancelled) return;
+            setBootError(error instanceof Error ? error : new Error('Failed to initialize app storage', { cause: error }));
+            void SplashScreen.hideAsync().catch(() => {});
         });
         return () => {
             cancelled = true;
@@ -707,6 +723,7 @@ function AppBoot(props: {
     // Not inited
     //
 
+    if (bootError) throw bootError;
     if (!initState) {
         return null;
     }
@@ -760,19 +777,10 @@ function AppBoot(props: {
     }
 
     return (
-        <AppCrashRecoveryBoundary
-            onRestart={props.onRestart}
-            onError={(error) => {
-                try {
-                    (Sentry as any).captureException?.(error);
-                } catch {
-                    // ignore
-                }
-            }}
-        >
+        <>
             <FaviconPermissionIndicator />
             {providers}
-        </AppCrashRecoveryBoundary>
+        </>
     );
 }
 
@@ -830,13 +838,9 @@ function RootAppShell(props: Readonly<{
         </View>
     );
 
-    if (!shouldUseRootDesktopDragSurface) {
-        return shellContent;
-    }
-
     return (
         <DesktopMainContentDragSurface
-            enabled={Platform.OS === 'web' && tauriDesktop}
+            enabled={shouldUseRootDesktopDragSurface && Platform.OS === 'web' && tauriDesktop}
             leftOffsetPx={0}
             style={{ flex: 1 }}
         >

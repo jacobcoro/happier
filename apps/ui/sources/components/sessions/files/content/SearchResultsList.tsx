@@ -17,9 +17,11 @@ type SearchResultsListProps = {
     theme: any;
     isSearching: boolean;
     searchQuery: string;
+    searchResultsQuery?: string;
     searchResults: FileItem[];
     onFilePress: (file: FileItem) => void;
     onFilePressPinned?: (file: FileItem) => void;
+    onFolderPress?: (folder: FileItem) => void;
     onLayout?: ScrollViewProps['onLayout'];
     onContentSizeChange?: ScrollViewProps['onContentSizeChange'];
     onScroll?: ScrollViewProps['onScroll'];
@@ -47,14 +49,17 @@ export const SearchResultsList = React.memo(({
     theme,
     isSearching,
     searchQuery,
+    searchResultsQuery,
     searchResults,
     onFilePress,
     onFilePressPinned,
+    onFolderPress,
     onLayout,
     onContentSizeChange,
     onScroll,
     scrollEventThrottle,
 }: SearchResultsListProps) => {
+    const showsPreviousResults = isSearching || (searchResultsQuery !== undefined && searchResultsQuery !== searchQuery.trim());
     const keyExtractor = React.useCallback((file: FileItem) => `file-${file.fullPath}`, []);
     const listHeaderComponent = React.useMemo(() => (
         Boolean(searchQuery) ? (
@@ -75,11 +80,14 @@ export const SearchResultsList = React.memo(({
                         ...Typography.default(),
                     }}
                 >
-                    {t('files.searchResults', { count: searchResults.length })}
+                    {showsPreviousResults ? t('files.previousSearchResults') : t('files.searchResults', { count: searchResults.length })}
+                    {isSearching ? ` · ${t('files.searching')}` : null}
                 </Text>
             </View>
         ) : null
     ), [
+        showsPreviousResults,
+        isSearching,
         searchQuery,
         searchResults.length,
         theme.colors.border.default,
@@ -111,7 +119,7 @@ export const SearchResultsList = React.memo(({
                 rightElement={null}
                 icon={renderFileIconForSearch(file, theme)}
                 density="compact"
-                onPress={file.fileType === 'file' ? () => onFilePress(file) : undefined}
+                onPress={file.fileType === 'file' ? () => onFilePress(file) : onFolderPress ? () => onFolderPress(file) : undefined}
                 onDoublePress={
                     file.fileType === 'file' && onFilePressPinned
                         ? () => onFilePressPinned(file)
@@ -127,6 +135,7 @@ export const SearchResultsList = React.memo(({
     }, [
         onFilePress,
         onFilePressPinned,
+        onFolderPress,
         searchResults.length,
         theme,
     ]);
@@ -157,7 +166,7 @@ export const SearchResultsList = React.memo(({
             : undefined,
     } as const;
 
-    if (isSearching) {
+    if (isSearching && searchResults.length === 0) {
         return (
             <View
                 style={{

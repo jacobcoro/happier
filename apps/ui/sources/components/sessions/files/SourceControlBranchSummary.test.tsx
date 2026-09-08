@@ -133,6 +133,19 @@ describe('SourceControlBranchSummary', () => {
         expect(screen.findAllByTestId('scm-publish-branch')).toHaveLength(0);
     });
 
+    it.each(['index', 'working-copy'] as const)('labels rail counters for the %s change model', async (changeSetModel) => {
+        const { SourceControlBranchSummary } = await import('./SourceControlBranchSummary');
+        const screen = await renderScreen(<SourceControlBranchSummary
+            variant="rail"
+            theme={branchSummaryTheme}
+            scmStatusFiles={{ branch: 'main', includedFiles: [], pendingFiles: [], totalIncluded: 2, totalPending: 3, changeSetModel }}
+        />);
+        const included = changeSetModel === 'working-copy' ? 'included' : 'staged';
+        const pending = changeSetModel === 'working-copy' ? 'pending' : 'unstaged';
+        expect(screen.tree.root.findAll((node) => node.props.accessibilityLabel === `files.branchSummary.${included}: 2`).length).toBeGreaterThan(0);
+        expect(screen.tree.root.findAll((node) => node.props.accessibilityLabel === `files.branchSummary.${pending}: 3`).length).toBeGreaterThan(0);
+    });
+
     it('renders branch and staged/unstaged summary', async () => {
         const { SourceControlBranchSummary } = await import('./SourceControlBranchSummary');
 

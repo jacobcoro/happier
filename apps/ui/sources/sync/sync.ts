@@ -3049,14 +3049,14 @@ class Sync {
 
         // Automatic outbox retries never give up silently: exhaustion keeps the durable row and
         // exposes a typed failed send/cancellation state for explicit recovery.
-        const markSendFailed = (): void => {
-            setPendingMessageSendState(params.sessionId, params.localId, 'failed', params.outboxScope);
+        const markSendFailed = async (): Promise<void> => {
+            await setPendingMessageSendState(params.sessionId, params.localId, 'failed', params.outboxScope);
         };
 
-        const scheduleRetryWithBackoff = (attempt: number): void => {
+        const scheduleRetryWithBackoff = async (attempt: number): Promise<void> => {
             const nextAttempt = attempt + 1;
             if (nextAttempt >= 6) {
-                markSendFailed();
+                await markSendFailed();
                 clearRetry();
                 return;
             }
@@ -3094,16 +3094,16 @@ class Sync {
                     clearRetry();
                     return;
                 }
-                scheduleRetryWithBackoff(attempt);
+                await scheduleRetryWithBackoff(attempt);
             } catch (error) {
                 if (error instanceof PendingOutboxSessionNotHydratedError) {
-                    scheduleRetryWithBackoff(attempt);
+                    await scheduleRetryWithBackoff(attempt);
                     return;
                 }
                 if (isTerminalAuthError(error)) {
                     recordTerminalAuthSyncError(error);
                 }
-                markSendFailed();
+                await markSendFailed();
                 clearRetry();
             }
         };
@@ -3128,6 +3128,7 @@ class Sync {
         sessionId: string,
         localId: string,
         requestedAction: import('@happier-dev/protocol').PendingRequestedActionV1,
+        options?: Readonly<{ resumeWhenAvailable?: boolean }>,
     ): Promise<void> {
         assertSafePendingIdPathSegment(localId);
         const ownerContext = await this.resolvePendingQueueOwnerContext(sessionId);
@@ -3138,6 +3139,9 @@ class Sync {
             sessionId,
             localId,
             requestedAction,
+            ...(options?.resumeWhenAvailable !== undefined
+                ? { resumeWhenAvailable: options.resumeWhenAvailable }
+                : {}),
             request: ownerContext.request,
             outboxScope: ownerContext.outboxScope,
             wireMode,
@@ -3158,8 +3162,8 @@ class Sync {
             sendMessage: (targetSessionId, targetText, targetDisplayText, targetMetaOverrides, options) =>
                 this.sendMessage(targetSessionId, targetText, targetDisplayText, targetMetaOverrides, options),
             abortSession: (targetSessionId) => this.abortSession(targetSessionId),
-            updatePendingRequestedAction: (targetSessionId, localId, requestedAction) =>
-                this.updatePendingRequestedAction(targetSessionId, localId, requestedAction),
+            updatePendingRequestedAction: (targetSessionId, localId, requestedAction, options) =>
+                this.updatePendingRequestedAction(targetSessionId, localId, requestedAction, options),
             ensureSessionRuntimeForPendingInput: (options) => ensureSessionRuntimeForPendingInput(options),
             shouldDelegatePendingActivationToDaemon: (session, serverId, machineId) =>
                 shouldDelegatePendingActivationToDaemon({
@@ -3538,7 +3542,7 @@ class Sync {
         ) {
             return;
         }
-        const replayLocalIds = replayPersistedPendingOutboxForSession(sessionId, outboxScope);
+        const replayLocalIds = await replayPersistedPendingOutboxForSession(sessionId, outboxScope);
         for (const localId of replayLocalIds) {
             this.schedulePendingOutboxOperationRetry({ sessionId, localId, outboxScope });
         }
@@ -3569,7 +3573,7 @@ class Sync {
                 },
             },
             async () => {
-                const sessionIds = listPendingOutboxSessionIds(outboxScope);
+                const sessionIds = await listPendingOutboxSessionIds(outboxScope);
                 await runTasksWithLimit(
                     sessionIds.map((sessionId) => async () => {
                         if (!areServerAccountScopesEqual(getActiveServerAccountScope(), outboxScope)) {
@@ -3597,6 +3601,7 @@ class Sync {
             deliveryMode?: 'external_handoff';
             onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void;
             requestedAction: import('@happier-dev/protocol').PendingRequestedActionV1;
+            resumeWhenAvailable?: true;
         }>,
     ): Promise<PendingMessageEnqueueResultV2> {
         const ownerContext = await this.resolvePendingQueueOwnerContext(sessionId);
@@ -3618,6 +3623,7 @@ class Sync {
             request: ownerContext.request,
             outboxScope,
             requestedAction: options?.requestedAction ?? { v: 1, kind: 'enqueue' },
+            ...(options?.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
             wireMode,
             onWireContractMismatch: async () => {
                 await getServerFeaturesSnapshot({ serverId: outboxScope.serverId, force: true });
@@ -3642,7 +3648,7 @@ class Sync {
         );
         if (!pending) throw new Error('Pending retry requires its persisted server-account scope');
         this.markSessionLiveTailIntent(sessionId);
-        setPendingMessageSendState(sessionId, localId, 'unconfirmed', outboxScope);
+        await setPendingMessageSendState(sessionId, localId, 'unconfirmed', outboxScope);
         try {
             const wireMode = resolvePendingInputServerWireMode(await getServerFeaturesSnapshot({
                 serverId: outboxScope.serverId,
@@ -3664,7 +3670,7 @@ class Sync {
             if (isTerminalAuthError(error)) {
                 recordTerminalAuthSyncError(error);
             }
-            setPendingMessageSendState(sessionId, localId, 'failed', outboxScope);
+            await setPendingMessageSendState(sessionId, localId, 'failed', outboxScope);
         }
     }
 
@@ -7617,6 +7623,28 @@ class Sync {
         options?: { notifyVoice?: boolean; notifyActivity?: boolean }
     ) => {
         const result = storage.getState().applyMessages(sessionId, messages);
+        const serverPendingLocalIds = new Set(
+            (storage.getState().sessionPending[sessionId]?.messages ?? [])
+                .filter((message) => message.source === 'server_pending')
+                .map((message) => message.localId)
+                .filter((localId): localId is string => typeof localId === 'string' && localId.length > 0),
+        );
+        const receivedCommittedTwinOfServerPending = result.changed.length > 0
+            && messages.some((message) => (
+                message.role === 'user'
+                && typeof message.localId === 'string'
+                && serverPendingLocalIds.has(message.localId)
+            ));
+        if (receivedCommittedTwinOfServerPending) {
+            // Settlement publishes the committed message and the pending-state receipt separately.
+            // If the receipt is lost, the committed twin cannot itself prove whether the durable row
+            // was removed or intentionally retained. Ask the canonical pending snapshot owner rather
+            // than leaving the last server-delivering projection visible until a page refresh.
+            fireAndForget(this.fetchPendingMessages(sessionId), {
+                tag: 'Sync.applyMessages.fetchPendingMessages',
+                logToConsole: false,
+            });
+        }
         const notifyVoice = options?.notifyVoice !== false;
         const notifyActivity = options?.notifyActivity ?? notifyVoice;
         if (notifyVoice || notifyActivity) {

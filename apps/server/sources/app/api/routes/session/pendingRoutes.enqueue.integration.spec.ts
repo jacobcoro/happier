@@ -416,7 +416,7 @@ describe("sessionPendingRoutes (enqueue)", () => {
         expect(emitUpdate).toHaveBeenCalledWith(expect.objectContaining({ userId: "recipient" }));
     });
 
-    it("publishes one exact machine activation after an inactive send-now row is durably committed", async () => {
+    it("publishes one exact machine activation after an ordinary queued row requests resume-on-availability", async () => {
         const createdAt = new Date("2026-07-23T12:00:00.000Z");
         enqueuePendingMessage.mockResolvedValueOnce({
             ok: true,
@@ -425,7 +425,7 @@ describe("sessionPendingRoutes (enqueue)", () => {
                 localId: "pending-after-ui-death",
                 messageRole: "user",
                 content: { t: "encrypted", c: "cipher" },
-                requestedAction: { v: 1, kind: "send_now" },
+                requestedAction: { v: 1, kind: "enqueue" },
                 status: "queued",
                 deliveryStatus: { status: "queued" },
                 position: 1,
@@ -463,9 +463,15 @@ describe("sessionPendingRoutes (enqueue)", () => {
                 localId: "pending-after-ui-death",
                 ciphertext: "cipher",
                 messageRole: "user",
-                requestedAction: { v: 1, kind: "send_now" },
+                requestedAction: { v: 1, kind: "enqueue" },
+                resumeWhenAvailable: true,
             },
         });
+
+        expect(enqueuePendingMessage).toHaveBeenCalledWith(expect.objectContaining({
+            requestedAction: { v: 1, kind: "enqueue" },
+            resumeWhenAvailable: true,
+        }));
 
         expect(buildPendingChangedUpdate).toHaveBeenCalledWith(
             expect.objectContaining({

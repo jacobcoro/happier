@@ -187,7 +187,6 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
         expect(nextFlatListProps.ListHeaderComponent).toBe(firstFlatListProps.ListHeaderComponent);
         expect(nextFlatListProps.contentContainerStyle).toBe(firstFlatListProps.contentContainerStyle);
         expect(nextFlatListProps.renderItem).toBe(firstFlatListProps.renderItem);
-        expect(nextFlatListProps.getItemLayout).toBe(firstFlatListProps.getItemLayout);
     });
 
     it('flows a changed per-row action renderer into FlatList extraData so cached cells re-render', async () => {

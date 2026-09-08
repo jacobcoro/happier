@@ -402,11 +402,11 @@ describe('ApiSessionClient transcript vNext transport', () => {
       { localId: 'l1' },
     );
 
-    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledTimes(1);
-    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+    const messageCalls = sessionSocketStub.emitWithAck.mock.calls.filter((call) => call[0] === 'message');
+    expect(messageCalls).toEqual([[
       'message',
       expect.objectContaining({ sidechainId: ' sc-1\n' }),
-    );
+    ]]);
   });
 
   it('forwards Claude sidechainId on durable commits for imported sidechain messages', async () => {
@@ -433,11 +433,11 @@ describe('ApiSessionClient transcript vNext transport', () => {
 
     await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
 
-    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledTimes(1);
-    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+    const messageCalls = sessionSocketStub.emitWithAck.mock.calls.filter((call) => call[0] === 'message');
+    expect(messageCalls).toEqual([[
       'message',
       expect.objectContaining({ sidechainId: ' tool_agent_1\n' }),
-    );
+    ]]);
   });
 
   it('does not expose transcript-draft ephemerals (legacy partial streaming removed)', async () => {

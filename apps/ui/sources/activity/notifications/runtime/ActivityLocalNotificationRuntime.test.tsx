@@ -269,7 +269,7 @@ describe('ActivityLocalNotificationRuntime', () => {
         expect(sendExpoLocalNotification).not.toHaveBeenCalled();
         expect(sendTauriLocalNotification).toHaveBeenCalledWith(expect.objectContaining({
             title: 'Ready session',
-            body: 'Run: pwd',
+            body: 'Command: pwd',
         }));
 
         await act(async () => {

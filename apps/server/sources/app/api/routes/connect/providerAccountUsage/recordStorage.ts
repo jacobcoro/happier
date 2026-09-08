@@ -6,6 +6,8 @@ import {
     ProviderAccountUsageRecordKeyV1Schema,
     ProviderAccountUsageSnapshotV1Schema,
     SealedProviderAccountUsageSnapshotV1Schema,
+    ProviderAccountSubscriptionV1Schema,
+    splitProviderAccountUsageSubscription,
 } from "@happier-dev/protocol";
 import { validateProviderAccountUsageRecordWrite } from "./schemas";
 import type {
@@ -70,9 +72,15 @@ function parseStoredProviderAccountUsageRecord(row: Readonly<{
     if (!status) {
         throw new ProviderAccountUsagePayloadInvariantError(`Unsupported provider account usage status: ${row.status}`);
     }
-    const snapshot = isJsonFieldAbsent(row.snapshot)
+    const baseSnapshot = isJsonFieldAbsent(row.snapshot)
         ? undefined
         : ProviderAccountUsageSnapshotV1Schema.parse(row.snapshot);
+    const metadata = row.metadata === null || row.metadata === undefined
+        ? undefined
+        : zodProviderAccountUsageMetadata(row.metadata);
+    const snapshot = baseSnapshot && metadata?.subscription
+        ? { ...baseSnapshot, subscription: metadata.subscription }
+        : baseSnapshot;
     const sealedPayload = isJsonFieldAbsent(row.sealedPayload)
         ? undefined
         : SealedProviderAccountUsageSnapshotV1Schema.parse(row.sealedPayload);
@@ -82,9 +90,6 @@ function parseStoredProviderAccountUsageRecord(row: Readonly<{
     if (payloadMode === "sealed_account_scoped_v1" && (snapshot || (!sealedPayload && status !== "refresh_requested"))) {
         throw new ProviderAccountUsagePayloadInvariantError("Stored sealed provider account usage record payload is invalid");
     }
-    const metadata = row.metadata === null || row.metadata === undefined
-        ? undefined
-        : zodProviderAccountUsageMetadata(row.metadata);
     return {
         accountId: row.accountId,
         recordId: row.recordId as StoredProviderAccountUsageRecord["recordId"],
@@ -108,7 +113,11 @@ function zodProviderAccountUsageMetadata(raw: unknown) {
     if (materialFingerprint !== undefined && typeof materialFingerprint !== "string") {
         throw new ProviderAccountUsagePayloadInvariantError("Stored provider account usage materialFingerprint must be a string");
     }
-    return materialFingerprint ? { materialFingerprint } : {};
+    const subscription = (raw as { subscription?: unknown }).subscription;
+    return {
+        ...(materialFingerprint ? { materialFingerprint } : {}),
+        ...(subscription !== undefined ? { subscription: ProviderAccountSubscriptionV1Schema.parse(subscription) } : {}),
+    };
 }
 
 function parseProviderAccountUsageRecordWrite(raw: UpsertProviderAccountUsageRecordParams): ParsedProviderAccountUsageRecordWrite {
@@ -122,6 +131,7 @@ function parseProviderAccountUsageRecordWrite(raw: UpsertProviderAccountUsageRec
 }
 
 function buildProviderAccountUsageRecordCreateData(parsed: ParsedProviderAccountUsageRecordWrite) {
+    const plain = parsed.snapshot ? splitProviderAccountUsageSubscription(parsed.snapshot) : undefined;
     return {
         accountId: parsed.accountId,
         providerId: parsed.recordKey.providerId,
@@ -134,16 +144,17 @@ function buildProviderAccountUsageRecordCreateData(parsed: ParsedProviderAccount
         recordKeyJson: parsed.recordKey,
         payloadMode: parsed.payloadMode,
         status: parsed.status,
-        ...(parsed.snapshot ? { snapshot: parsed.snapshot as Prisma.InputJsonValue } : {}),
+        ...(plain ? { snapshot: plain.snapshot as Prisma.InputJsonValue } : {}),
         ...(parsed.sealedPayload ? { sealedPayload: parsed.sealedPayload as Prisma.InputJsonValue } : {}),
         ...(parsed.fetchedAt !== undefined ? { fetchedAt: new Date(parsed.fetchedAt) } : {}),
         ...(parsed.staleAfterMs !== undefined ? { staleAfterMs: parsed.staleAfterMs } : {}),
         ...(parsed.refreshRequestedAt !== undefined ? { refreshRequestedAt: new Date(parsed.refreshRequestedAt) } : {}),
-        ...(parsed.metadata ? { metadata: parsed.metadata as Prisma.InputJsonValue } : {}),
+        ...(parsed.metadata || plain?.subscription ? { metadata: { ...parsed.metadata, ...(plain?.subscription ? { subscription: plain.subscription } : {}) } as Prisma.InputJsonValue } : {}),
     };
 }
 
 function buildProviderAccountUsageRecordUpdateData(parsed: ParsedProviderAccountUsageRecordWrite) {
+    const plain = parsed.snapshot ? splitProviderAccountUsageSubscription(parsed.snapshot) : undefined;
     return {
         providerId: parsed.recordKey.providerId,
         accountSubjectId: parsed.recordKey.accountSubjectId,
@@ -154,12 +165,14 @@ function buildProviderAccountUsageRecordUpdateData(parsed: ParsedProviderAccount
         recordKeyJson: parsed.recordKey,
         payloadMode: parsed.payloadMode,
         status: parsed.status,
-        snapshot: parsed.snapshot ? parsed.snapshot as Prisma.InputJsonValue : prismaRuntime.DbNull,
+        snapshot: plain ? plain.snapshot as Prisma.InputJsonValue : prismaRuntime.DbNull,
         sealedPayload: parsed.sealedPayload ? parsed.sealedPayload as Prisma.InputJsonValue : prismaRuntime.DbNull,
         fetchedAt: parsed.fetchedAt !== undefined ? new Date(parsed.fetchedAt) : null,
         staleAfterMs: parsed.staleAfterMs ?? null,
         refreshRequestedAt: parsed.refreshRequestedAt !== undefined ? new Date(parsed.refreshRequestedAt) : null,
-        metadata: parsed.metadata ? parsed.metadata as Prisma.InputJsonValue : prismaRuntime.DbNull,
+        metadata: parsed.metadata || plain?.subscription
+            ? { ...parsed.metadata, ...(plain?.subscription ? { subscription: plain.subscription } : {}) } as Prisma.InputJsonValue
+            : prismaRuntime.DbNull,
     };
 }
 

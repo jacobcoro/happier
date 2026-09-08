@@ -27,6 +27,7 @@ vi.mock('axios', () => {
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: vi.fn(),
+    infoFile: vi.fn(),
   },
 }));
 
@@ -57,8 +58,61 @@ describe('PushNotificationClient.sendToAllDevicesAsync', () => {
     sendPushNotificationsAsyncSpy.mockClear();
     getPushNotificationReceiptsAsyncSpy.mockClear();
     (logger.debug as any).mockClear();
+    vi.mocked(logger.infoFile).mockClear();
     (axios as any).get.mockReset();
     (axios as any).delete.mockReset();
+  });
+
+  it('bounds the serialized outbound message while preserving Unicode and routing data', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { tokens: [{ id: '1', token: 'ExponentPushToken[a]' }] } });
+    const data = { sessionId: 's_1', requestId: 'p_1', kind: 'permission', tool: 'Bash' };
+    const body = 'Run command: ' + '🧪漢字\n"'.repeat(1500);
+    await new PushNotificationClient('t', 'https://api.example.test').sendToAllDevicesAsync('Permission', body, data);
+    const message = sendPushNotificationsAsyncSpy.mock.calls[0][0][0];
+    expect(Buffer.byteLength(JSON.stringify(message), 'utf8')).toBeLessThanOrEqual(4096);
+    expect(message.body).toMatch(/^Run command: /);
+    expect(message.body.endsWith('…')).toBe(true);
+    expect(body.startsWith(message.body.slice(0, -1))).toBe(true);
+    expect(message.body).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+    expect(message.data).toEqual({ ...data, serverUrl: 'https://api.example.test' });
+    expect(message.categoryId).toBe(PUSH_NOTIFICATION_CATEGORY_IDS.permissionRequestV1);
+    expect(message.channelId).toBe(PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS.permissionRequestsV1);
+  });
+
+  it('bounds long titles and subtitles at the same outbound boundary', async () => {
+    const client = new PushNotificationClient('t');
+    await client.sendPushNotifications([{ to: 'ExponentPushToken[a]', title: '🧪'.repeat(2000), subtitle: '漢'.repeat(2000), body: 'Body', data: { sessionId: 's_1' } }]);
+    const message = sendPushNotificationsAsyncSpy.mock.calls[0][0][0];
+    expect(Buffer.byteLength(JSON.stringify(message), 'utf8')).toBeLessThanOrEqual(4096);
+    expect(message.data).toEqual({ sessionId: 's_1' });
+  });
+
+  it('rejects oversized routing metadata without sending a corrupt route', async () => {
+    const client = new PushNotificationClient('t');
+    await expect(client.sendPushNotifications([{ to: 'ExponentPushToken[a]', body: 'Body', data: { sessionId: 's'.repeat(5000) } }])).rejects.toThrow(/4096/);
+    expect(sendPushNotificationsAsyncSpy).not.toHaveBeenCalled();
+  });
+
+  it('still sends to valid recipients when another device has oversized routing metadata', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { tokens: [
+      { id: '1', token: 'ExponentPushToken[a]', clientServerUrl: 'https://api.example.test/' + 's'.repeat(5000) },
+      { id: '2', token: 'ExponentPushToken[b]', clientServerUrl: 'https://api.example.test' },
+    ] } });
+    await new PushNotificationClient('t').sendToAllDevicesAsync('Title', 'Body', { sessionId: 's_1' });
+    expect(sendPushNotificationsAsyncSpy.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ to: 'ExponentPushToken[b]', data: { sessionId: 's_1', serverUrl: 'https://api.example.test' } }),
+    ]);
+    expect(logger.infoFile).toHaveBeenCalledWith('[PUSH] Notification exceeds outbound payload budget; routing data was preserved');
+  });
+
+  it.each(['ticket', 'receipt'])('reports terminal MessageTooBig from a %s without retrying unchanged content', async (source) => {
+    sendPushNotificationsAsyncSpy.mockResolvedValueOnce(source === 'ticket'
+      ? [{ status: 'error', details: { error: 'MessageTooBig' } }]
+      : [{ status: 'ok', id: 'oversize' }]);
+    if (source === 'receipt') getPushNotificationReceiptsAsyncSpy.mockResolvedValueOnce({ oversize: { status: 'error', details: { error: 'MessageTooBig' } } });
+    await new PushNotificationClient('t').sendPushNotifications([{ to: 'ExponentPushToken[a]', body: 'Body' }]);
+    expect(sendPushNotificationsAsyncSpy).toHaveBeenCalledTimes(1);
+    expect(logger.infoFile).toHaveBeenCalledWith('[PUSH] Expo rejected oversized notification payload', { count: 1 });
   });
 
   it('uses token-specific clientServerUrl when present', async () => {

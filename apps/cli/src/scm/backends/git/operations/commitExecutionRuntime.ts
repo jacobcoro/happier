@@ -88,8 +88,6 @@ export async function createGitTemporaryIndex(input: {
         }
         if (existsSync(sourceIndex.indexPath)) {
             copyFileSync(sourceIndex.indexPath, indexPath);
-        } else {
-            writeFileSync(indexPath, '');
         }
         return {
             success: true,

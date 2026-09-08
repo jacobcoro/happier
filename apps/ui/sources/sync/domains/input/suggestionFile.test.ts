@@ -187,6 +187,26 @@ describe('searchFiles', () => {
         expect(results.map((entry) => entry.fullPath)).toContain('src/');
     });
 
+    it('ranks exact basenames and stems before prefixes and fuzzy matches before applying the limit', async () => {
+        mockMachineRpc.mockResolvedValue({ success: true, stdout: [
+            'src/normalizeSecretStringPromptInput.ts',
+            'src/promptInputHelper.ts',
+            'src/promptInput.test.ts',
+            'packages/a/promptInput.ts',
+            'packages/b/promptInput.ts',
+            'promptInput/child.ts',
+        ].join('\n') });
+        const { searchFiles } = await import('./suggestionFile');
+        const results = await searchFiles(SCOPE, 'PROMPTINPUT', { limit: 4 });
+        expect(results.map((file) => file.fullPath)).toEqual([
+            'promptInput/', 'packages/a/promptInput.ts', 'packages/b/promptInput.ts', 'src/promptInput.test.ts',
+        ]);
+        expect((await searchFiles(SCOPE, 'promptInput.ts', { limit: 2 })).map((file) => file.fullPath))
+            .toEqual(['packages/a/promptInput.ts', 'packages/b/promptInput.ts']);
+        expect((await searchFiles(SCOPE, 'packages/b/promptInput.ts', { limit: 1 }))[0]?.fullPath)
+            .toBe('packages/b/promptInput.ts');
+    });
+
     it('matches hyphenated filenames and extensions', async () => {
         mockMachineRpc.mockResolvedValue({
             success: true,

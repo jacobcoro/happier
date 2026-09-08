@@ -535,6 +535,7 @@ export function observeTranscriptPhysicalScrollMethods(
     const scrollToDescriptor = Object.getOwnPropertyDescriptor(element, 'scrollTo');
     const originalScrollBy = element.scrollBy;
     const originalScrollTo = element.scrollTo;
+    let methodWriteActive = false;
 
     const wrap = (
         method: TranscriptPhysicalScrollDiagnosticEntry['method'],
@@ -543,11 +544,21 @@ export function observeTranscriptPhysicalScrollMethods(
         const preWriteScrollTop = element.scrollTop;
         const targetScrollTop = requestedScrollTop(method, optionsOrX, y, preWriteScrollTop);
         const stack = new Error(`transcript physical ${method}`).stack ?? '';
-        Reflect.apply(
-            original,
-            element,
-            typeof optionsOrX === 'number' ? [optionsOrX, y ?? 0] : [optionsOrX],
-        );
+        const nestedWrite = methodWriteActive;
+        methodWriteActive = true;
+        try {
+            Reflect.apply(
+                original,
+                element,
+                typeof optionsOrX === 'number' ? [optionsOrX, y ?? 0] : [optionsOrX],
+            );
+        } finally {
+            methodWriteActive = nestedWrite;
+        }
+        // Browser-native scrollBy is one operation. Test/browser polyfills may implement it by
+        // calling the element's scrollTo method, which this observer also wraps; count only the
+        // outer operation so the diagnostic ring never inflates a single physical movement.
+        if (nestedWrite) return;
         const entry: TranscriptPhysicalScrollDiagnosticEntry = {
             atMs: Date.now(),
             deltaPx: element.scrollTop - preWriteScrollTop,

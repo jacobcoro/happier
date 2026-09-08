@@ -987,7 +987,7 @@ index 490b567..d25e727 100644
    const contextMenuCallbacksRef = useRef(new Map());
    useEffect(() => {
 diff --git a/node_modules/react-native-enriched-markdown/lib/module/web/EnrichedMarkdownText.js b/node_modules/react-native-enriched-markdown/lib/module/web/EnrichedMarkdownText.js
-index c6c73b0..96c805e 100644
+index c6c73b0..aa651fe 100644
 --- a/node_modules/react-native-enriched-markdown/lib/module/web/EnrichedMarkdownText.js
 +++ b/node_modules/react-native-enriched-markdown/lib/module/web/EnrichedMarkdownText.js
 @@ -1,13 +1,22 @@
@@ -1016,7 +1016,7 @@ index c6c73b0..96c805e 100644
  export const EnrichedMarkdownText = ({
    markdown,
    markdownStyle = {},
-@@ -18,30 +27,40 @@ export const EnrichedMarkdownText = ({
+@@ -18,30 +27,41 @@ export const EnrichedMarkdownText = ({
    allowTrailingMargin = false,
    containerStyle,
    selectable = true,
@@ -1043,34 +1043,57 @@ index c6c73b0..96c805e 100644
 +    });
 +    return parsed ? prepareAstForRendering(parsed) : null;
 +  }, [markdown, underline, latexMath, texMathBackslashDelimiters]);
-+  const [ast, setAst] = useState(syncAst);
++  const [ast, setAst] = useState(null);
 +  const [katex, setKatex] = useState(null);
 +  const [parseError, setParseError] = useState(false);
    useEffect(() => {
++    // A warm synchronous AST is already the rendered authority. Only cold or
++    // failed synchronous parsing needs an asynchronous result publication.
++    if (syncAst) return;
      let cancelled = false;
-     const katexPromise = latexMath ? loadKaTeX() : Promise.resolve(null);
-     Promise.all([parseMarkdown(markdown, {
+-    const katexPromise = latexMath ? loadKaTeX() : Promise.resolve(null);
+-    Promise.all([parseMarkdown(markdown, {
++    parseMarkdown(markdown, {
        underline,
 -      latexMath
+-    }), katexPromise]).then(([result, katexInstance]) => {
 +      latexMath,
 +      texMathBackslashDelimiters
-     }), katexPromise]).then(([result, katexInstance]) => {
++    }).then(result => {
        if (!cancelled) {
 -        indexTaskItems(result);
 -        markInlineImages(result);
          setParseError(false);
-         setKatex(katexInstance);
+-        setKatex(katexInstance);
 -        setAst(result);
 +        setAst(prepareAstForRendering(result));
        }
      }).catch(error => {
        if (!cancelled) {
-@@ -56,15 +75,67 @@ export const EnrichedMarkdownText = ({
+@@ -50,21 +70,84 @@ export const EnrichedMarkdownText = ({
+         }
+         setParseError(true);
+         setAst(null);
+-        setKatex(null);
+       }
+     });
      return () => {
        cancelled = true;
      };
 -  }, [markdown, underline, latexMath]);
-+  }, [markdown, underline, latexMath, texMathBackslashDelimiters]);
++  }, [syncAst, markdown, underline, latexMath, texMathBackslashDelimiters]);
++  useEffect(() => {
++    let cancelled = false;
++    if (!latexMath) {
++      setKatex(null);
++      return;
++    }
++    // Optional math readiness is independent of document parsing and streaming.
++    void loadKaTeX().then(instance => {
++      if (!cancelled) setKatex(instance);
++    });
++    return () => { cancelled = true; };
++  }, [latexMath]);
 +  const renderedAst = syncAst ?? ast;
    const callbacks = useMemo(() => ({
      onLinkPress,
@@ -1136,12 +1159,16 @@ index c6c73b0..96c805e 100644
    const lastChildStyle = useMemo(() => allowTrailingMargin ? normalizedStyle : zeroTrailingMargins(normalizedStyle), [normalizedStyle, allowTrailingMargin]);
    const styles = useMemo(() => buildStyles(normalizedStyle), [normalizedStyle]);
    const lastChildStyles = useMemo(() => buildStyles(lastChildStyle), [lastChildStyle]);
-@@ -81,14 +152,41 @@ export const EnrichedMarkdownText = ({
-       style: wrapperStyle,
-       dir: dir,
-       ...rest,
--      children: /*#__PURE__*/_jsx("pre", {
--        style: parseErrorFallbackStyle,
+@@ -76,19 +159,46 @@ export const EnrichedMarkdownText = ({
+       userSelect: 'none'
+     })
+   }), [containerStyle, selectable]);
+-  if (parseError) {
++  if (parseError && !syncAst) {
++    return /*#__PURE__*/_jsx("div", {
++      style: wrapperStyle,
++      dir: dir,
++      ...rest,
 +      children: /*#__PURE__*/_jsx("p", {
 +        style: {
 +          ...lastChildStyles.paragraph,
@@ -1166,10 +1193,12 @@ index c6c73b0..96c805e 100644
 +        ...rest
 +      });
 +    }
-+    return /*#__PURE__*/_jsx("div", {
-+      style: wrapperStyle,
-+      dir: dir,
-+      ...rest,
+     return /*#__PURE__*/_jsx("div", {
+       style: wrapperStyle,
+       dir: dir,
+       ...rest,
+-      children: /*#__PURE__*/_jsx("pre", {
+-        style: parseErrorFallbackStyle,
 +      children: /*#__PURE__*/_jsx("p", {
 +        style: fallbackParagraphStyle,
          children: markdown
@@ -1183,7 +1212,7 @@ index c6c73b0..96c805e 100644
    return /*#__PURE__*/_jsx("div", {
      style: wrapperStyle,
 diff --git a/node_modules/react-native-enriched-markdown/lib/module/web/parseMarkdown.js b/node_modules/react-native-enriched-markdown/lib/module/web/parseMarkdown.js
-index 7604c13..e8f6607 100644
+index 7604c13..20039e4 100644
 --- a/node_modules/react-native-enriched-markdown/lib/module/web/parseMarkdown.js
 +++ b/node_modules/react-native-enriched-markdown/lib/module/web/parseMarkdown.js
 @@ -1,32 +1,169 @@
@@ -1364,6 +1393,7 @@ index 7604c13..e8f6607 100644
 +  return JSON.parse(JSON.stringify(ast));
  }
  //# sourceMappingURL=parseMarkdown.js.map
+\ No newline at end of file
 diff --git a/node_modules/react-native-enriched-markdown/lib/module/web/renderers/BlockRenderers.js b/node_modules/react-native-enriched-markdown/lib/module/web/renderers/BlockRenderers.js
 index 5bdaee9..ab8bc37 100644
 --- a/node_modules/react-native-enriched-markdown/lib/module/web/renderers/BlockRenderers.js
@@ -1509,10 +1539,10 @@ index 0000000..74504cf
 +export * from '../../typescript/src/web/streamingReveal';
 diff --git a/node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js b/node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js
 new file mode 100644
-index 0000000..0bf3a53
+index 0000000..bc8dafb
 --- /dev/null
 +++ b/node_modules/react-native-enriched-markdown/lib/module/web/streamingReveal.js
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,181 @@
 +"use strict";
 +
 +import { createElement } from 'react';
@@ -1664,7 +1694,9 @@ index 0000000..0bf3a53
 +    while (rangeIndex < activeRanges.length && activeRanges[rangeIndex].end <= start) {
 +      rangeIndex++;
 +    }
-+    const isActiveRevealRange = rangeIndex < activeRanges.length && activeRanges[rangeIndex].start < end;
++    // A suffix can extend a word that is already visible. Keep that word
++    // visible instead of restarting its opacity animation from zero.
++    const isActiveRevealRange = rangeIndex < activeRanges.length && activeRanges[rangeIndex].start <= start;
 +    return {
 +      text: part,
 +      animated: !/^\s+$/.test(part) && isActiveRevealRange,
@@ -1758,8 +1790,21 @@ index 3513fc6..cc06a72 100644
  export type { EnrichedMarkdownTextProps } from './types/MarkdownTextProps.web';
  export type { MarkdownStyle, Md4cFlags } from './types/MarkdownStyle';
  export type { LinkPressEvent, LinkLongPressEvent, TaskListItemPressEvent, } from './types/events';
+diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/styleUtils.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/styleUtils.d.ts
+index 7c5aece..44d8004 100644
+--- a/node_modules/react-native-enriched-markdown/lib/typescript/src/styleUtils.d.ts
++++ b/node_modules/react-native-enriched-markdown/lib/typescript/src/styleUtils.d.ts
+@@ -1,6 +1,6 @@
+-import { type ColorValue } from 'react-native';
++import { type ProcessedColorValue } from 'react-native';
+ import type { MarkdownStyle } from './types/MarkdownStyle';
+-export declare const normalizeColor: (color: string | undefined) => ColorValue | undefined;
++export declare const normalizeColor: (color: string | undefined) => string | ProcessedColorValue | undefined;
+ export declare function mergeSubStyle<T extends Record<string, unknown>>(defaultStyle: T, userStyle?: Partial<T>): T;
+ export declare function isStyleEqual(a: MarkdownStyle, b: MarkdownStyle, referenceKeys: readonly string[]): boolean;
+ //# sourceMappingURL=styleUtils.d.ts.map
 diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts
-index b2c9fb9..68c249a 100644
+index b2c9fb9..dff4534 100644
 --- a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts
 +++ b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownStyle.d.ts
 @@ -208,6 +208,11 @@ export interface Md4cFlags {
@@ -1774,6 +1819,7 @@ index b2c9fb9..68c249a 100644
  }
  export {};
  //# sourceMappingURL=MarkdownStyle.d.ts.map
+\ No newline at end of file
 diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownTextProps.web.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownTextProps.web.d.ts
 index 609252d..3e6bc94 100644
 --- a/node_modules/react-native-enriched-markdown/lib/typescript/src/types/MarkdownTextProps.web.d.ts
@@ -1814,6 +1860,28 @@ index 4643d20..8f43e3b 100644
 +export declare function parseMarkdownSyncIfReady(markdown: string, { underline, latexMath }?: Md4cFlags): ASTNode | null;
  //# sourceMappingURL=parseMarkdown.d.ts.map
 \ No newline at end of file
+diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/web/renderers/index.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/web/renderers/index.d.ts
+index 7881f09..42cf7f9 100644
+--- a/node_modules/react-native-enriched-markdown/lib/typescript/src/web/renderers/index.d.ts
++++ b/node_modules/react-native-enriched-markdown/lib/typescript/src/web/renderers/index.d.ts
+@@ -1,14 +1,5 @@
+ import type { ReactNode } from 'react';
+-import type { ASTNode, NodeType, RendererCallbacks, RenderCapabilities } from '../types';
+-import type { MarkdownStyleInternal } from '../../types/MarkdownStyleInternal';
+-import type { Styles } from '../styles';
+-export interface RenderNodeProps {
+-    node: ASTNode;
+-    style: MarkdownStyleInternal;
+-    styles: Styles;
+-    callbacks: RendererCallbacks;
+-    capabilities: RenderCapabilities;
+-    parentType?: NodeType;
+-}
+-export declare function RenderNode({ node, style, styles, callbacks, capabilities, parentType, }: RenderNodeProps): ReactNode;
++import type { RendererProps } from '../types';
++export type RenderNodeProps = Omit<RendererProps, 'renderChildren'>;
++export declare function RenderNode({ node, style, styles, callbacks, capabilities, parentType, parentAttributes, childIndex, siblingCount, }: RenderNodeProps): ReactNode;
+ //# sourceMappingURL=index.d.ts.map
 diff --git a/node_modules/react-native-enriched-markdown/lib/typescript/src/web/streamingReveal.d.ts b/node_modules/react-native-enriched-markdown/lib/typescript/src/web/streamingReveal.d.ts
 new file mode 100644
 index 0000000..a2236c2
@@ -1972,6 +2040,22 @@ index 236c2b7..1e893f5 100644
      }),
      [md4cFlags]
    );
+diff --git a/node_modules/react-native-enriched-markdown/src/styleUtils.ts b/node_modules/react-native-enriched-markdown/src/styleUtils.ts
+index ad339ba..326e53d 100644
+--- a/node_modules/react-native-enriched-markdown/src/styleUtils.ts
++++ b/node_modules/react-native-enriched-markdown/src/styleUtils.ts
+@@ -1,9 +1,9 @@
+-import { Platform, processColor, type ColorValue } from 'react-native';
++import { Platform, processColor, type ProcessedColorValue } from 'react-native';
+ import type { MarkdownStyle } from './types/MarkdownStyle';
+ 
+ export const normalizeColor = (
+   color: string | undefined
+-): ColorValue | undefined => {
++): string | ProcessedColorValue | undefined => {
+   if (!color) return undefined;
+   if (Platform.OS === 'web') return color;
+   return processColor(color) ?? undefined;
 diff --git a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyle.ts b/node_modules/react-native-enriched-markdown/src/types/MarkdownStyle.ts
 index c05a97a..f70b8af 100644
 --- a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyle.ts
@@ -2017,7 +2101,7 @@ index fa9d401..90d9e21 100644
     * When false (default), removes trailing margin from the last element to
     * eliminate bottom spacing.
 diff --git a/node_modules/react-native-enriched-markdown/src/web/EnrichedMarkdownText.tsx b/node_modules/react-native-enriched-markdown/src/web/EnrichedMarkdownText.tsx
-index 70eb3a4..2440c90 100644
+index 70eb3a4..dec24c2 100644
 --- a/node_modules/react-native-enriched-markdown/src/web/EnrichedMarkdownText.tsx
 +++ b/node_modules/react-native-enriched-markdown/src/web/EnrichedMarkdownText.tsx
 @@ -1,17 +1,40 @@
@@ -2073,51 +2157,74 @@ index 70eb3a4..2440c90 100644
    dir,
    ...rest
  }: EnrichedMarkdownTextProps) => {
-@@ -30,30 +55,30 @@ export const EnrichedMarkdownText = ({
+@@ -30,30 +55,26 @@ export const EnrichedMarkdownText = ({
      () => normalizeMarkdownStyle(markdownStyle),
      [markdownStyle]
    );
 +  const { underline = false, latexMath = true, texMathBackslashDelimiters = false } = md4cFlags;
  
--  const [ast, setAst] = useState<ASTNode | null>(null);
 +  const syncAst = useMemo(() => {
 +    const parsed = parseMarkdownSyncIfReady(markdown, { underline, latexMath, texMathBackslashDelimiters });
 +    return parsed ? prepareAstForRendering(parsed) : null;
 +  }, [markdown, underline, latexMath, texMathBackslashDelimiters]);
-+  const [ast, setAst] = useState<ASTNode | null>(syncAst);
+   const [ast, setAst] = useState<ASTNode | null>(null);
    const [katex, setKatex] = useState<KaTeXInstance | null>(null);
    const [parseError, setParseError] = useState<boolean>(false);
  
 -  const { underline = false, latexMath = true } = md4cFlags;
 -
    useEffect(() => {
++    // A warm synchronous AST is already the rendered authority. Only cold or
++    // failed synchronous parsing needs an asynchronous result publication.
++    if (syncAst) return;
      let cancelled = false;
- 
-     const katexPromise = latexMath ? loadKaTeX() : Promise.resolve(null);
- 
-     Promise.all([
+-
+-    const katexPromise = latexMath ? loadKaTeX() : Promise.resolve(null);
+-
+-    Promise.all([
 -      parseMarkdown(markdown, { underline, latexMath }),
-+      parseMarkdown(markdown, { underline, latexMath, texMathBackslashDelimiters }),
-       katexPromise,
-     ])
-       .then(([result, katexInstance]) => {
+-      katexPromise,
+-    ])
+-      .then(([result, katexInstance]) => {
++    parseMarkdown(markdown, { underline, latexMath, texMathBackslashDelimiters })
++      .then((result) => {
          if (!cancelled) {
 -          indexTaskItems(result);
 -          markInlineImages(result);
 -
            setParseError(false);
-           setKatex(katexInstance);
+-          setKatex(katexInstance);
 -          setAst(result);
 +          setAst(prepareAstForRendering(result));
          }
        })
        .catch((error) => {
-@@ -71,14 +96,93 @@ export const EnrichedMarkdownText = ({
+@@ -64,21 +85,112 @@ export const EnrichedMarkdownText = ({
+ 
+           setParseError(true);
+           setAst(null);
+-          setKatex(null);
+         }
+       });
+ 
      return () => {
        cancelled = true;
      };
 -  }, [markdown, underline, latexMath]);
-+  }, [markdown, underline, latexMath, texMathBackslashDelimiters]);
++  }, [syncAst, markdown, underline, latexMath, texMathBackslashDelimiters]);
++
++  useEffect(() => {
++    let cancelled = false;
++    if (!latexMath) {
++      setKatex(null);
++      return;
++    }
++    // Optional math readiness is independent of document parsing and streaming.
++    void loadKaTeX().then((instance) => {
++      if (!cancelled) setKatex(instance);
++    });
++    return () => { cancelled = true; };
++  }, [latexMath]);
 +
 +  const renderedAst = syncAst ?? ast;
  
@@ -2208,8 +2315,12 @@ index 70eb3a4..2440c90 100644
  
    const lastChildStyle = useMemo(
      () =>
-@@ -108,14 +212,39 @@ export const EnrichedMarkdownText = ({
-   if (parseError) {
+@@ -105,17 +217,42 @@ export const EnrichedMarkdownText = ({
+     [containerStyle, selectable]
+   );
+ 
+-  if (parseError) {
++  if (parseError && !syncAst) {
      return (
        <div style={wrapperStyle} dir={dir} {...rest}>
 -        <pre style={parseErrorFallbackStyle}>{markdown}</pre>
@@ -2649,10 +2760,41 @@ index dfe69cb..4d4e7c2 100644
        </span>
        {nestedNode && renderChildren(nestedNode)}
 diff --git a/node_modules/react-native-enriched-markdown/src/web/renderers/index.tsx b/node_modules/react-native-enriched-markdown/src/web/renderers/index.tsx
-index dca24cf..e6662ba 100644
+index dca24cf..a59dc94 100644
 --- a/node_modules/react-native-enriched-markdown/src/web/renderers/index.tsx
 +++ b/node_modules/react-native-enriched-markdown/src/web/renderers/index.tsx
-@@ -44,6 +44,9 @@ export function RenderNode({
+@@ -1,13 +1,9 @@
+ import type { ReactNode } from 'react';
+ import type {
+   ASTNode,
+-  NodeType,
+-  RendererCallbacks,
+-  RenderCapabilities,
++  RendererProps,
+   RendererMap,
+ } from '../types';
+-import type { MarkdownStyleInternal } from '../../types/MarkdownStyleInternal';
+-import type { Styles } from '../styles';
+ import { blockRenderers } from './BlockRenderers';
+ import { inlineRenderers } from './InlineRenderers';
+ import { listRenderers } from './ListRenderers';
+@@ -28,14 +24,7 @@ const RENDERERS: RendererMap = {
+   ...tableRenderers,
+ };
+ 
+-export interface RenderNodeProps {
+-  node: ASTNode;
+-  style: MarkdownStyleInternal;
+-  styles: Styles;
+-  callbacks: RendererCallbacks;
+-  capabilities: RenderCapabilities;
+-  parentType?: NodeType;
+-}
++export type RenderNodeProps = Omit<RendererProps, 'renderChildren'>;
+ 
+ export function RenderNode({
+   node,
+@@ -44,6 +33,9 @@ export function RenderNode({
    callbacks,
    capabilities,
    parentType,
@@ -2662,7 +2804,7 @@ index dca24cf..e6662ba 100644
  }: RenderNodeProps): ReactNode {
    const Renderer = RENDERERS[node.type];
    if (!Renderer) return null;
-@@ -58,6 +61,9 @@ export function RenderNode({
+@@ -58,6 +50,9 @@ export function RenderNode({
          callbacks={callbacks}
          capabilities={capabilities}
          parentType={childNode.type}
@@ -2672,7 +2814,7 @@ index dca24cf..e6662ba 100644
        />
      )) ?? null;
  
-@@ -67,6 +73,9 @@ export function RenderNode({
+@@ -67,6 +62,9 @@ export function RenderNode({
        style={style}
        styles={styles}
        parentType={parentType}
@@ -2684,10 +2826,10 @@ index dca24cf..e6662ba 100644
        renderChildren={renderChildren}
 diff --git a/node_modules/react-native-enriched-markdown/src/web/streamingReveal.ts b/node_modules/react-native-enriched-markdown/src/web/streamingReveal.ts
 new file mode 100644
-index 0000000..7b1a56e
+index 0000000..f31bffe
 --- /dev/null
 +++ b/node_modules/react-native-enriched-markdown/src/web/streamingReveal.ts
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,307 @@
 +import { createElement, type ReactNode } from 'react';
 +import type { ASTNode, NodeType, RenderCapabilities } from './types';
 +
@@ -2954,7 +3096,9 @@ index 0000000..7b1a56e
 +
 +      const isActiveRevealRange =
 +        rangeIndex < activeRanges.length &&
-+        activeRanges[rangeIndex]!.start < end;
++        // A suffix can extend a word that is already visible. Keep that word
++        // visible instead of restarting its opacity animation from zero.
++        activeRanges[rangeIndex]!.start <= start;
 +
 +      return {
 +        text: part,

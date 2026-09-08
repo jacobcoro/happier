@@ -503,37 +503,6 @@ vi.mock('@/components/sessions/files/content/review/useChangedFilesReviewDiffLoa
     },
 }));
 
-vi.mock('@/components/sessions/files/content/review/useChangedFilesReviewFocusPath', () => ({
-    useChangedFilesReviewFocusPath: (input: any) => {
-        const [highlightedPath, setHighlightedPath] = React.useState<string | null>(null);
-        const appliedFocusPathRef = React.useRef<string | null>(null);
-        const expandPathRef = React.useRef(input.expandPath);
-        const scrollToPathRef = React.useRef(input.scrollToPath);
-        expandPathRef.current = input.expandPath;
-        scrollToPathRef.current = input.scrollToPath;
-
-        React.useEffect(() => {
-            const resolved = typeof input.focusPath === 'string' ? input.focusPath : null;
-            if (!resolved) {
-                appliedFocusPathRef.current = null;
-                return;
-            }
-            if (appliedFocusPathRef.current === resolved) return;
-            if (!Array.isArray(input.reviewFiles) || !input.reviewFiles.some((f: any) => f.fullPath === resolved)) return;
-            appliedFocusPathRef.current = resolved;
-            setHighlightedPath(resolved);
-            expandPathRef.current(resolved);
-            const scrollTimer = setTimeout(() => scrollToPathRef.current(resolved), 50);
-            const clearTimer = setTimeout(() => setHighlightedPath(null), 8000);
-            return () => {
-                clearTimeout(scrollTimer);
-                clearTimeout(clearTimer);
-            };
-        }, [input.focusPath, input.reviewFiles]);
-
-        return highlightedPath;
-    },
-}));
 
 vi.mock('@/components/sessions/files/content/review/useScmDiffExpandedKeys', () => ({
     useScmDiffExpandedKeys: (input: any) => {
@@ -1069,7 +1038,7 @@ describe('ChangedFilesReview', () => {
         expect(screen.findAllByType('CodeLinesView' as any).length).toBeGreaterThan(0);
     });
 
-    it('does not re-fetch diffs again when within the refresh interval', async () => {
+    it('does not re-fetch an unchanged snapshot within the refresh interval', async () => {
         sessionScmDiffFileSpy.mockClear();
         const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-01-01T00:00:00.000Z').getTime());
 
@@ -1088,7 +1057,7 @@ describe('ChangedFilesReview', () => {
             expect(sessionScmDiffFileSpy).toHaveBeenCalledTimes(1);
 
             await screen.update(await buildChangedFilesReviewElement({
-                snapshot: { ...snapshot, fetchedAt: snapshot.fetchedAt + 1 },
+                snapshot: { ...snapshot },
                 allRepositoryChangedFiles: [{ ...fileA }],
                 diffAutoRefreshIntervalMs: 60_000,
             }));

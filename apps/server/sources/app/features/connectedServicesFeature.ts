@@ -15,8 +15,10 @@ export function resolveConnectedServicesFeature(
             connectedServices: {
                 enabled,
                 quotas: { enabled: quotasEnabled },
+                subscription: { enabled: true },
                 accountGroups: { enabled: accountGroupsEnabled },
                 accountFallback: { enabled: accountFallbackEnabled },
+                autoQuotaReset: { enabled: true },
             },
         },
         capabilities: {

@@ -11,6 +11,7 @@ import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } f
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 import {
   createSessionFromNewSessionComposer,
   reloadCreatedSessionFromNewSessionComposer,
@@ -220,21 +221,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
     if (!server || !ui) throw new Error('missing server/ui fixtures');
     if (!uiBaseUrl) throw new Error('missing ui base url');
 
-    const pageConsole: string[] = [];
-    const pageErrors: string[] = [];
-    const requestFailures: string[] = [];
-    const responseErrors: string[] = [];
-
-    page.on('console', (msg) => pageConsole.push(`[${msg.type()}] ${msg.text()}`));
-    page.on('pageerror', (err) => pageErrors.push(String(err)));
-    page.on('requestfailed', (request) => {
-      const failure = request.failure();
-      requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
-    });
-    page.on('response', (response) => {
-      const status = response.status();
-      if (status >= 400) responseErrors.push(`${status} ${response.request().method()} ${response.url()}`);
-    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
 
     const testDir = resolve(join(suiteDir, 't1-create-connect-daemon'));
     await mkdir(testDir, { recursive: true });
@@ -307,13 +294,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
     } finally {
       await cliLogin?.stop().catch(() => {});
       if (thrown) {
-        const diagnostic =
-          `# Browser diagnostics\n\n` +
-          `## Console\n\n${pageConsole.length ? pageConsole.join('\n') : '(none)'}\n\n` +
-          `## Page errors\n\n${pageErrors.length ? pageErrors.join('\n') : '(none)'}\n\n` +
-          `## Request failures\n\n${requestFailures.length ? requestFailures.join('\n') : '(none)'}\n\n` +
-          `## Response errors\n\n${responseErrors.length ? responseErrors.join('\n') : '(none)'}\n`;
-        await testInfo.attach('browser-diagnostics.md', { body: diagnostic, contentType: 'text/markdown' });
+        await testInfo.attach('browser-diagnostics.md', { body: browserDiagnostics(), contentType: 'text/markdown' });
       }
     }
   });
@@ -324,21 +305,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
     if (!uiBaseUrl) throw new Error('missing ui base url');
     if (!accountSecretKeyFormatted) throw new Error('missing account secret key from prior test');
 
-    const pageConsole: string[] = [];
-    const pageErrors: string[] = [];
-    const requestFailures: string[] = [];
-    const responseErrors: string[] = [];
-
-    page.on('console', (msg) => pageConsole.push(`[${msg.type()}] ${msg.text()}`));
-    page.on('pageerror', (err) => pageErrors.push(String(err)));
-    page.on('requestfailed', (request) => {
-      const failure = request.failure();
-      requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
-    });
-    page.on('response', (response) => {
-      const status = response.status();
-      if (status >= 400) responseErrors.push(`${status} ${response.request().method()} ${response.url()}`);
-    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
 
     let thrown: unknown = null;
     try {
@@ -362,13 +329,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
       throw error;
     } finally {
       if (thrown) {
-        const diagnostic =
-          `# Browser diagnostics\n\n` +
-          `## Console\n\n${pageConsole.length ? pageConsole.join('\n') : '(none)'}\n\n` +
-          `## Page errors\n\n${pageErrors.length ? pageErrors.join('\n') : '(none)'}\n\n` +
-          `## Request failures\n\n${requestFailures.length ? requestFailures.join('\n') : '(none)'}\n\n` +
-          `## Response errors\n\n${responseErrors.length ? responseErrors.join('\n') : '(none)'}\n`;
-        await testInfo.attach('browser-diagnostics.md', { body: diagnostic, contentType: 'text/markdown' });
+        await testInfo.attach('browser-diagnostics.md', { body: browserDiagnostics(), contentType: 'text/markdown' });
 
         if (fakeClaudeLogPath) {
           await testInfo
@@ -402,21 +363,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
     if (!daemon) throw new Error('missing daemon from prior test');
     if (!fakeClaudePath) throw new Error('missing fake Claude path from prior test');
 
-    const pageConsole: string[] = [];
-    const pageErrors: string[] = [];
-    const requestFailures: string[] = [];
-    const responseErrors: string[] = [];
-
-    page.on('console', (msg) => pageConsole.push(`[${msg.type()}] ${msg.text()}`));
-    page.on('pageerror', (err) => pageErrors.push(String(err)));
-    page.on('requestfailed', (request) => {
-      const failure = request.failure();
-      requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
-    });
-    page.on('response', (response) => {
-      const status = response.status();
-      if (status >= 400) responseErrors.push(`${status} ${response.request().method()} ${response.url()}`);
-    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
 
     const testDir = resolve(join(suiteDir, 't3-daemon-reconnect'));
     await mkdir(testDir, { recursive: true });
@@ -479,13 +426,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
       throw error;
     } finally {
       if (thrown) {
-        const diagnostic =
-          `# Browser diagnostics\n\n` +
-          `## Console\n\n${pageConsole.length ? pageConsole.join('\n') : '(none)'}\n\n` +
-          `## Page errors\n\n${pageErrors.length ? pageErrors.join('\n') : '(none)'}\n\n` +
-          `## Request failures\n\n${requestFailures.length ? requestFailures.join('\n') : '(none)'}\n\n` +
-          `## Response errors\n\n${responseErrors.length ? responseErrors.join('\n') : '(none)'}\n`;
-        await testInfo.attach('browser-diagnostics.md', { body: diagnostic, contentType: 'text/markdown' });
+        await testInfo.attach('browser-diagnostics.md', { body: browserDiagnostics(), contentType: 'text/markdown' });
       }
     }
   });
@@ -497,21 +438,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
     if (!accountSecretKeyFormatted) throw new Error('missing account secret key from prior test');
     if (!createdSessionId) throw new Error('missing session id from prior test');
 
-    const pageConsole: string[] = [];
-    const pageErrors: string[] = [];
-    const requestFailures: string[] = [];
-    const responseErrors: string[] = [];
-
-    page.on('console', (msg) => pageConsole.push(`[${msg.type()}] ${msg.text()}`));
-    page.on('pageerror', (err) => pageErrors.push(String(err)));
-    page.on('requestfailed', (request) => {
-      const failure = request.failure();
-      requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
-    });
-    page.on('response', (response) => {
-      const status = response.status();
-      if (status >= 400) responseErrors.push(`${status} ${response.request().method()} ${response.url()}`);
-    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
 
     let thrown: unknown = null;
     try {
@@ -533,13 +460,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
       throw error;
     } finally {
       if (thrown) {
-        const diagnostic =
-          `# Browser diagnostics\n\n` +
-          `## Console\n\n${pageConsole.length ? pageConsole.join('\n') : '(none)'}\n\n` +
-          `## Page errors\n\n${pageErrors.length ? pageErrors.join('\n') : '(none)'}\n\n` +
-          `## Request failures\n\n${requestFailures.length ? requestFailures.join('\n') : '(none)'}\n\n` +
-          `## Response errors\n\n${responseErrors.length ? responseErrors.join('\n') : '(none)'}\n`;
-        await testInfo.attach('browser-diagnostics.md', { body: diagnostic, contentType: 'text/markdown' });
+        await testInfo.attach('browser-diagnostics.md', { body: browserDiagnostics(), contentType: 'text/markdown' });
 
         if (fakeClaudeLogPath) {
           await testInfo
@@ -561,24 +482,9 @@ test.describe('ui e2e: auth + terminal connect', () => {
       }
     }
 
-    const pageConsole: string[] = [];
-    const pageErrors: string[] = [];
-    const requestFailures: string[] = [];
-    const responseErrors: string[] = [];
-
     const ctx = await browser.newContext();
     const loggedOutPage = await ctx.newPage();
-
-    loggedOutPage.on('console', (msg) => pageConsole.push(`[${msg.type()}] ${msg.text()}`));
-    loggedOutPage.on('pageerror', (err) => pageErrors.push(String(err)));
-    loggedOutPage.on('requestfailed', (request) => {
-      const failure = request.failure();
-      requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
-    });
-    loggedOutPage.on('response', (response) => {
-      const status = response.status();
-      if (status >= 400) responseErrors.push(`${status} ${response.request().method()} ${response.url()}`);
-    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page: loggedOutPage });
 
     const testDir = resolve(join(suiteDir, 't5-terminal-connect-unauth'));
     await mkdir(testDir, { recursive: true });
@@ -620,13 +526,7 @@ test.describe('ui e2e: auth + terminal connect', () => {
       await cliLogin?.stop().catch(() => {});
       await ctx.close().catch(() => {});
       if (thrown) {
-        const diagnostic =
-          `# Browser diagnostics\n\n` +
-          `## Console\n\n${pageConsole.length ? pageConsole.join('\n') : '(none)'}\n\n` +
-          `## Page errors\n\n${pageErrors.length ? pageErrors.join('\n') : '(none)'}\n\n` +
-          `## Request failures\n\n${requestFailures.length ? requestFailures.join('\n') : '(none)'}\n\n` +
-          `## Response errors\n\n${responseErrors.length ? responseErrors.join('\n') : '(none)'}\n`;
-        await testInfo.attach('browser-diagnostics.md', { body: diagnostic, contentType: 'text/markdown' });
+        await testInfo.attach('browser-diagnostics.md', { body: browserDiagnostics(), contentType: 'text/markdown' });
       }
     }
   });

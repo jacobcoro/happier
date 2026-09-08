@@ -124,6 +124,7 @@ function PaneScopeProbe(props: Readonly<{ scopeId: string }>) {
 
     return React.createElement('PaneScopeProbe', {
         scopeState: pane.scopeState,
+        closeDetailsTab: pane.closeDetailsTab,
     });
 }
 
@@ -149,17 +150,19 @@ function DeepLinkDetailsProbe(props: Readonly<{ scopeId: string; path: string }>
 
 function CockpitSurfaceHarness(props: SessionCockpitSurfaceScreenProps) {
     const [surface, setSurface] = React.useState(props.surface);
+    const previousSurface = React.useRef(props.surface);
     React.useEffect(() => {
         setSurface(props.surface);
     }, [props.surface]);
 
     const switchSurface = React.useCallback((nextSurface: SessionCockpitSurfaceScreenProps['surface']) => {
+        previousSurface.current = surface;
         bottomTabsState.navigations.push(nextSurface);
         setSurface(nextSurface);
-    }, []);
+    }, [surface]);
 
     return (
-        <SessionCockpitSurfaceNavigationProvider value={{ switchSurface }}>
+        <SessionCockpitSurfaceNavigationProvider value={{ switchSurface, returnToPreviousSurface: () => switchSurface(previousSurface.current) }}>
             <SessionCockpitSurfaceScreen {...props} surface={surface} />
         </SessionCockpitSurfaceNavigationProvider>
     );
@@ -561,6 +564,26 @@ describe('SessionCockpitSurfaceScreen', () => {
             isOpen: true,
             activeTabKey: 'file:src/example.ts',
         }));
+    });
+
+    it.each(['git', 'browse'] as const)('returns to %s when the final details tab closes', async (surface) => {
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <CockpitSurfaceHarness sessionId="s_1" scopeId="session:s_1" surface={surface} terminalTabAvailable />
+                <PaneScopeProbe scopeId="session:s_1" />
+            </AppPaneProvider>,
+        );
+        const sourceType = surface === 'git' ? 'SessionGitSurface' : 'SessionBrowseFilesSurface';
+        await act(async () => {
+            screen.tree.findByType(sourceType as never).props.onOpenFile('src/example.ts');
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(screen.tree.findAllByType('SessionDetailsPanel' as never)).toHaveLength(1);
+        await act(async () => {
+            screen.tree.findByType('PaneScopeProbe' as never).props.closeDetailsTab('file:src/example.ts');
+        });
+        expect(screen.tree.findAllByType(sourceType as never)).toHaveLength(1);
+        expect(screen.tree.findAllByType('SessionDetailsPanel' as never)).toHaveLength(0);
     });
 
     it('opens commit details on the internal details tab without pushing a sibling stack route', async () => {

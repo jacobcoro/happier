@@ -172,9 +172,8 @@ exec ${JSON.stringify(realCp)} "$@"
   const stdout = String(res.stdout ?? '');
   const stderr = String(res.stderr ?? '');
   assert.equal(res.status, 0, `installer failed:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
-  assert.ok(stdout.includes('Checksum verified.'), 'installer should verify checksums');
-  assert.ok(stdout.includes('Signature verified.'), 'installer should verify minisign signature');
+  assert.ok(stdout.includes('[ok] Verifying archive checksum'), 'installer should verify checksums');
+  assert.ok(stdout.includes('[ok] Verifying release signature'), 'installer should verify minisign signature');
 
   await rm(root, { recursive: true, force: true });
 });
-

@@ -1,7 +1,7 @@
-import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs';
+import { accessSync, constants as fsConstants, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { expandHomeDirPath, resolveHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
+import { expandHomeDirPath, providerCliPathRequiresJavaScriptRuntime, resolveHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandPath } from '@happier-dev/cli-common/process';
 
 import { requireJavaScriptRuntimeExecutable } from '@/runtime/js/requireJavaScriptRuntimeExecutable';
@@ -9,23 +9,6 @@ import { requireProviderCliCommand } from '@/runtime/managedTools/requireProvide
 import { isBun } from '@/utils/runtime';
 
 const JAVA_SCRIPT_ENTRYPOINT_EXTENSION = /\.(?:c?js|mjs)$/i;
-const JAVA_SCRIPT_SHEBANG = /^#!.*\b(?:env\s+)?(?:node|bun)(?:\s|$)/;
-
-function isJavaScriptBackedCodexCommand(command: string): boolean {
-    if (JAVA_SCRIPT_ENTRYPOINT_EXTENSION.test(command)) {
-        return true;
-    }
-    if (!existsSync(command)) {
-        return false;
-    }
-    try {
-        const header = readFileSync(command, 'utf8').slice(0, 256);
-        const firstLine = header.split(/\r?\n/u, 1)[0] ?? '';
-        return JAVA_SCRIPT_SHEBANG.test(firstLine);
-    } catch {
-        return false;
-    }
-}
 
 function looksLikePath(value: string): boolean {
     return value.includes('/') || value.includes('\\') || value.startsWith('.') || value.startsWith('~');
@@ -96,7 +79,7 @@ export async function resolveCodexCliInvocation(params: Readonly<{
         resolveCodexOverrideCommand(processEnv, params.overrideEnvVarKeys ?? [], cwd)
         ?? requireProviderCliCommand('codex', { processEnv });
 
-    if (!isJavaScriptBackedCodexCommand(command)) {
+    if (!providerCliPathRequiresJavaScriptRuntime(command)) {
         return { command, args: [...params.args] };
     }
 

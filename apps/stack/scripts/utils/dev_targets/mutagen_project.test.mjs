@@ -76,7 +76,7 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     '.restore.*',
     '.dist.hstack-*',
     '.cxx',
-    'apps/ui/ios/build',
+    'apps/ui/ios',
     'apps/ui/android/app/build',
     'apps/ui/android/build',
     'apps/ui/android/.gradle',

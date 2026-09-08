@@ -13,6 +13,7 @@ const listRepositoryDirectoryEntriesSpy = vi.fn<
 const cachedDirectoryEntries = new Map<string, Array<{ name: string; type: 'file' | 'directory' }>>();
 
 vi.mock('@/sync/domains/input/repositoryDirectory', () => ({
+    getCachedRepositoryGitIgnoreAvailable: () => undefined,
     listRepositoryDirectoryEntries: (input: any) => listRepositoryDirectoryEntriesSpy(input),
     warmRepositoryDirectoryCache: (input: any) => listRepositoryDirectoryEntriesSpy(input),
     getCachedRepositoryDirectoryEntries: (input: any) => cachedDirectoryEntries.get(`${input.sessionId}:${input.directoryPath}`) ?? null,

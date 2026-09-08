@@ -1,5 +1,6 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import {
     createRootLayoutFeaturesResponse,
@@ -21,6 +22,8 @@ const mockState = await vi.hoisted(async () => {
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     return {
         activeServerUrl: 'https://api.happier.dev',
+        activeServerAccountScope: null as { serverId: string; accountId: string } | null,
+        activeServerAccountScopeListeners: new Set<() => void>(),
         applySettingsSpy: vi.fn(),
         clearPendingNotificationActionSpy: vi.fn(),
         clearPendingNotificationNavSpy: vi.fn(),
@@ -40,6 +43,7 @@ const mockState = await vi.hoisted(async () => {
         pendingNotificationActionValue: null as { serverUrl: string; sessionId: string; requestId: string; action: 'allow' | 'deny' } | null,
         pendingNotificationNavValue: null as { serverUrl: string; route: string } | null,
         pendingTerminalConnectValue: null as { publicKeyB64Url: string; serverUrl: string } | null,
+        pendingTerminalConnectRequiresScope: false,
         pushSpy: vi.fn(),
         navigateSpy: vi.fn(),
         serverProfilesValue: [] as { id: string; serverUrl: string }[],
@@ -102,6 +106,14 @@ installRootLayoutRouteCommonModuleMocks({
                     mockState.mockLocalSettings[key]) as typeof import('@/sync/domains/state/storage')['useLocalSetting'],
                 useSettings: () => mockState.mockSettings as any,
                 useSetting: ((key: keyof typeof mockState.mockSettings) => mockState.mockSettings[key]) as any,
+                useActiveServerAccountScope: () => React.useSyncExternalStore(
+                    (listener) => {
+                        mockState.activeServerAccountScopeListeners.add(listener);
+                        return () => mockState.activeServerAccountScopeListeners.delete(listener);
+                    },
+                    () => mockState.activeServerAccountScope,
+                    () => mockState.activeServerAccountScope,
+                ),
             },
         });
     },
@@ -163,6 +175,7 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
     ),
     subscribeActiveServer: () => () => {},
     subscribeServerProfiles: () => () => {},
+    setServerProfileIdentityForUrl: vi.fn(),
 }));
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
@@ -172,7 +185,11 @@ vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
 }));
 
 vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-    getPendingTerminalConnect: () => mockState.pendingTerminalConnectValue,
+    getPendingTerminalConnect: () => (
+        mockState.pendingTerminalConnectRequiresScope && !mockState.activeServerAccountScope
+            ? null
+            : mockState.pendingTerminalConnectValue
+    ),
     clearPendingTerminalConnect: () => mockState.clearPendingTerminalConnectSpy(),
     setPendingTerminalConnect: vi.fn(),
 }));
@@ -214,9 +231,11 @@ vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
 
 afterEach(async () => {
     mockState.activeServerUrl = 'https://api.happier.dev';
+    mockState.activeServerAccountScope = null;
     mockState.serverProfilesValue = [];
     mockState.tabActiveServerId = null;
     mockState.pendingTerminalConnectValue = null;
+    mockState.pendingTerminalConnectRequiresScope = false;
     mockState.pendingNotificationNavValue = null;
     mockState.pendingNotificationActionValue = null;
     await mockState.lastUnmount?.();
@@ -256,6 +275,34 @@ describe('App RootLayout notifications', () => {
 
         expect(mockState.pushSpy).toHaveBeenCalledWith('/terminal/connect#key=abc123&server=https%3A%2F%2Fapi.happier.dev');
         expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
+    });
+
+    it('resumes terminal connect exactly once when account scope hydrates after authentication', async () => {
+        mockState.pendingTerminalConnectValue = {
+            publicKeyB64Url: 'hydrated-key',
+            serverUrl: 'https://api.happier.dev',
+        };
+        mockState.pendingTerminalConnectRequiresScope = true;
+
+        const Notifications = await import('expo-notifications');
+        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue(null);
+        vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(() => ({ remove: () => {} }));
+
+        await renderRootLayout();
+        expect(mockState.pushSpy).not.toHaveBeenCalled();
+
+        await act(async () => {
+            mockState.activeServerAccountScope = { serverId: 'server-1', accountId: 'account-a' };
+            for (const listener of mockState.activeServerAccountScopeListeners) listener();
+        });
+        await flushHookEffects();
+        await act(async () => {
+            for (const listener of mockState.activeServerAccountScopeListeners) listener();
+        });
+        await flushHookEffects();
+
+        expect(mockState.pushSpy).toHaveBeenCalledTimes(1);
+        expect(mockState.pushSpy).toHaveBeenCalledWith('/terminal/connect#key=hydrated-key&server=https%3A%2F%2Fapi.happier.dev');
     });
 
     it('promotes pending terminal connect server when a tab override masks the device default', async () => {

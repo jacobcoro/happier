@@ -151,6 +151,9 @@ export type CancelConnectedServiceRuntimeAuthRecovery = (input: Readonly<{
 
 export type NotifyConnectedServiceRuntimeAuthFailure = NotifyRuntimeAuthFailure;
 
+export type ReadTemporaryThrottleRecovery = (sessionId: string) => Readonly<{ issueFingerprint: string; armedAtMs: number }> | null;
+export type CancelTemporaryThrottleRecovery = (input: Readonly<{ sessionId: string; issueFingerprint?: string; armedAtMs?: number }>) => Promise<unknown> | unknown;
+
 export type RetryTemporaryThrottleNow = (input: Readonly<{
   sessionId: string;
 }>) => Promise<unknown> | unknown;
@@ -622,6 +625,8 @@ export function createCliActionDeps(params: Readonly<{
   cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
   notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
+  readTemporaryThrottleRecovery?: ReadTemporaryThrottleRecovery;
+  cancelTemporaryThrottleRecovery?: CancelTemporaryThrottleRecovery;
   directSpawnTransport?: DirectSpawnedSessionTransport;
 }>): ActionExecutorDeps {
   const approvalsStore = params.credentials ? createCliApprovalsArtifactStore({ credentials: params.credentials }) : null;
@@ -1046,6 +1051,8 @@ export function createCliActionDeps(params: Readonly<{
       ...(params.retryTemporaryThrottleNow
         ? { retryTemporaryThrottleNow: params.retryTemporaryThrottleNow }
         : {}),
+      readTemporaryThrottleRecovery: params.readTemporaryThrottleRecovery,
+      cancelTemporaryThrottleRecovery: params.cancelTemporaryThrottleRecovery,
       callLiveSessionRpc: async () => await callSessionRpcForTransport(
         transport,
         operation === 'enable'

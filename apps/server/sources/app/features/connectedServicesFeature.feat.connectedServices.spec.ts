@@ -9,8 +9,10 @@ describe("resolveConnectedServicesFeature", () => {
         expect(feature.features?.connectedServices).toEqual({
             enabled: true,
             quotas: { enabled: true },
+            subscription: { enabled: true },
             accountGroups: { enabled: true },
             accountFallback: { enabled: true },
+            autoQuotaReset: { enabled: true },
         });
         expect(feature.capabilities?.connectedServices).toEqual({
             credentialDelete: { revisionGuard: true },
@@ -28,8 +30,10 @@ describe("resolveConnectedServicesFeature", () => {
         expect(feature.features?.connectedServices).toEqual({
             enabled: false,
             quotas: { enabled: true },
+            subscription: { enabled: true },
             accountGroups: { enabled: true },
             accountFallback: { enabled: true },
+            autoQuotaReset: { enabled: true },
         });
     });
 
@@ -42,8 +46,10 @@ describe("resolveConnectedServicesFeature", () => {
         expect(feature.features?.connectedServices).toEqual({
             enabled: true,
             quotas: { enabled: true },
+            subscription: { enabled: true },
             accountGroups: { enabled: false },
             accountFallback: { enabled: false },
+            autoQuotaReset: { enabled: true },
         });
     });
 });

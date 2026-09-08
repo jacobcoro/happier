@@ -1,5 +1,7 @@
 import { readSessionMetadataRuntimeDescriptor } from '@happier-dev/agents';
 import {
+  buildRecoveryCreditConsumeIdempotencyKey,
+  ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema,
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SessionRuntimeIssueV1Schema,
   SessionUsageLimitRecoveryV1Schema,
@@ -9,6 +11,7 @@ import {
 
 import { createConnectedServiceCredentialApi } from '@/api/connectedServices/connectedServiceCredentialApi';
 import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
+import type { notifyDaemonConnectedServiceQuotaRecoveryCreditConsume } from '@/daemon/controlClient';
 import type { Credentials } from '@/persistence';
 import type {
   SessionUsageLimitRecoveryControlAdapter as GenericSessionUsageLimitRecoveryControlAdapter,
@@ -221,6 +224,9 @@ export function createCodexAppServerUsageLimitRecoveryControlAdapter(deps: Reado
   fetchRuntime?: CodexRateLimitResetCreditsFetch;
   processEnv?: NodeJS.ProcessEnv;
   resolveConnectedServiceResetCreditAuth?: ResolveConnectedServiceResetCreditAuth;
+  consumeConnectedServiceResetCredit?: (
+    input: Parameters<typeof notifyDaemonConnectedServiceQuotaRecoveryCreditConsume>[0],
+  ) => Promise<unknown>;
 }> = {}): GenericSessionUsageLimitRecoveryControlAdapter {
   const runWithControlClient = deps.runWithControlClient ?? withCodexAppServerControlClient;
   const resolveConnectedServiceResetCreditAuth =
@@ -329,16 +335,31 @@ export function createCodexAppServerUsageLimitRecoveryControlAdapter(deps: Reado
         ? persistedIntent
         : buildRecoveryIntentFromLatestUsageLimitIssue(params);
       if (!intent) return stableError('session_usage_limit_recovery_control_inactive');
-      const auth = intent.selectedAuth.kind === 'native'
-        ? resolveNativeResetCreditAuth(params)
-        : await resolveConnectedServiceResetCreditAuth({
-          credentials: params.credentials,
-          selectedAuth: intent.selectedAuth,
-        });
+      if (intent.selectedAuth.kind !== 'native') {
+        const profileId = intent.selectedAuth.profileId;
+        if (!profileId) return stableError('connected_service_quota_recovery_credit_profile_unavailable');
+        const consume = deps.consumeConnectedServiceResetCredit
+          ?? (await import('@/daemon/controlClient')).notifyDaemonConnectedServiceQuotaRecoveryCreditConsume;
+        const response = ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema.safeParse(await consume({
+          serviceId: intent.selectedAuth.serviceId,
+          profileId,
+          idempotencyKey: buildRecoveryCreditConsumeIdempotencyKey({
+            serviceId: intent.selectedAuth.serviceId,
+            profileId,
+          }),
+        }));
+        if (!response.success) return stableError('connected_service_quota_recovery_credit_unsupported_response');
+        const consumed = response.data;
+        if (!consumed.ok) return stableError(consumed.errorCode);
+        if (consumed.receipt.status === 'not_available') return stableError('no_credit');
+        if (consumed.receipt.status === 'unknown_after_timeout') {
+          return stableError('connected_service_quota_recovery_credit_unknown_after_timeout');
+        }
+        return await runCheckNow(params);
+      }
+      const auth = resolveNativeResetCreditAuth(params);
       if (!auth) {
-        return stableError(intent.selectedAuth.kind === 'native'
-          ? 'codex_reset_credit_native_auth_unavailable'
-          : 'codex_reset_credit_connected_service_auth_unavailable');
+        return stableError('codex_reset_credit_native_auth_unavailable');
       }
 
       // Prefer a concrete available credit when details contain one, while preserving

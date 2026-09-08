@@ -94,6 +94,87 @@ describe('KeyboardShortcutProvider', () => {
         installKeyboardWindowMock();
     });
 
+    it('invokes the current scoped command from an explicit action even when shortcuts are disabled', async () => {
+        testState.settings = { ...testState.settings, keyboardShortcutsV2Enabled: false };
+        const { renderScreen } = await import('@/dev/testkit');
+        const module = await import('./KeyboardShortcutProvider');
+        let focused = '';
+        let invoke: (command: 'composer.focus') => boolean = () => false;
+        function Action() {
+            invoke = module.useKeyboardCommand();
+            return <Child />;
+        }
+        function Composer({ name }: { name: string }) {
+            module.useKeyboardShortcutHandlers({ 'composer.focus': () => { focused = name; } });
+            return <Child />;
+        }
+        const screen = await renderScreen(<module.KeyboardShortcutProvider handlers={{}}><Composer name="first" /><Action /></module.KeyboardShortcutProvider>);
+        expect(invoke('composer.focus')).toBe(true);
+        expect(focused).toBe('first');
+        await act(async () => { screen.tree.update(<module.KeyboardShortcutProvider handlers={{}}><Composer name="second" /><Action /></module.KeyboardShortcutProvider>); });
+        invoke('composer.focus');
+        expect(focused).toBe('second');
+        await act(async () => { screen.tree.update(<module.KeyboardShortcutProvider handlers={{}}><Action /></module.KeyboardShortcutProvider>); });
+        expect(invoke('composer.focus')).toBe(false);
+    });
+
+    it('hands review back to mobile chat before focusing, preserving tabs without sending', async () => {
+        testState.platformOS = 'ios';
+        testState.settings = { ...testState.settings, keyboardShortcutsV2Enabled: false };
+        const { renderScreen } = await import('@/dev/testkit');
+        const { KeyboardShortcutProvider } = await import('./KeyboardShortcutProvider');
+        const { AppPaneProvider, useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitSurfaceNavigationProvider } = await import('@/components/workspaceCockpit/session/SessionCockpitSurfaceNavigation');
+        const { useReviewComposerHandoff } = await import('@/components/sessions/reviews/comments/useReviewComposerHandoff');
+        type Surface = import('@/components/workspaceCockpit/session/sessionCockpitState').SessionMobileSurface;
+        let surface: Surface = 'tabs';
+        let focusedSurface: Surface | null = null;
+        let sent = 0;
+        let handoff = () => {};
+        let paneState: ReturnType<typeof useAppPaneContext>['state'] | null = null;
+        const frames: FrameRequestCallback[] = [];
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+        function Probe() {
+            const context = useAppPaneContext();
+            paneState = context.state;
+            handoff = useReviewComposerHandoff('session:s1');
+            React.useEffect(() => {
+                context.dispatch({ type: 'activateScope', scopeId: 'session:s1' });
+                context.dispatch({ type: 'openRight', scopeId: 'session:s1', tabId: 'git' });
+                context.dispatch({ type: 'openDetailsTab', scopeId: 'session:s1', tab: { key: 'scmReview:working', kind: 'scmReview', title: 'Review', resource: {} }, openAs: 'pinned' });
+                context.dispatch({ type: 'setDetailsTabState', scopeId: 'session:s1', tabKey: 'scmReview:working', nextState: { scrollTop: 120 } });
+                context.dispatch({ type: 'enterFocusMode', scopeId: 'session:s1' });
+            }, [context.dispatch]);
+            return <Child />;
+        }
+        function Harness() {
+            const [activeSurface, setSurface] = React.useState<Surface>('tabs');
+            surface = activeSurface;
+            return <KeyboardShortcutProvider handlers={{ 'composer.focus': () => { focusedSurface = activeSurface; }, 'composer.sendImmediate': () => { sent += 1; } }}>
+                <SessionCockpitSurfaceNavigationProvider value={{ switchSurface: setSurface, returnToPreviousSurface: () => {} }}>
+                    <AppPaneProvider><Probe /></AppPaneProvider>
+                </SessionCockpitSurfaceNavigationProvider>
+            </KeyboardShortcutProvider>;
+        }
+        try {
+            await renderScreen(<Harness />);
+            await act(async () => { handoff(); });
+            expect(surface).toBe('chat');
+            const state = paneState as ReturnType<typeof useAppPaneContext>['state'] | null;
+            expect(state?.focusMode.scopeId).toBeNull();
+            expect(state?.scopes['session:s1']?.details.isOpen).toBe(false);
+            expect(state?.scopes['session:s1']?.right.isOpen).toBe(false);
+            expect(state?.scopes['session:s1']?.details.tabs.map((tab) => tab.key)).toEqual(['scmReview:working']);
+            expect(state?.scopes['session:s1']?.details.tabState['scmReview:working']).toEqual({ scrollTop: 120 });
+            expect(focusedSurface).toBeNull();
+            await act(async () => { for (const callback of frames) callback(0); });
+            expect(focusedSurface).toBe('chat');
+            expect(sent).toBe(0);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('omits inactive handler labels from shortcut help', async () => {
         const { renderScreen } = await import('@/dev/testkit');
         const { Modal } = await import('@/modal');

@@ -94,6 +94,7 @@ export const SubAgentSettingsView = React.memo(function SubAgentSettingsView() {
     const enabledAgentIds = useEnabledAgentIds();
     const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
     const [enabled, setEnabled] = useSettingMutable('executionRunsGuidanceEnabled');
+    const [notifyParentOnCompletion, setNotifyParentOnCompletion] = useSettingMutable('executionRunsNotifyParentOnCompletionDefault');
     const [maxCharsRaw, setMaxChars] = useSettingMutable('executionRunsGuidanceMaxChars');
     const [entriesRaw, setEntries] = useSettingMutable('executionRunsGuidanceEntries');
     const acpCatalogSettingsV1 = useSetting('acpCatalogSettingsV1');
@@ -208,6 +209,14 @@ export const SubAgentSettingsView = React.memo(function SubAgentSettingsView() {
                             rightElement={<Switch value={enabled === true} onValueChange={(v) => setEnabled(v as any)} />}
                             showChevron={false}
                             onPress={() => setEnabled((enabled !== true) as any)}
+                        />
+                        <Item
+                            title={t('subAgentGuidance.settings.notifyParentOnCompletion.title')}
+                            subtitle={t('subAgentGuidance.settings.notifyParentOnCompletion.subtitle')}
+                            icon={<Icon name="bell" size={29} color={theme.colors.accent.blue} />}
+                            rightElement={<Switch value={notifyParentOnCompletion === true} onValueChange={(v) => setNotifyParentOnCompletion(v as any)} />}
+                            showChevron={false}
+                            onPress={() => setNotifyParentOnCompletion((notifyParentOnCompletion !== true) as any)}
                         />
 
                         <Item

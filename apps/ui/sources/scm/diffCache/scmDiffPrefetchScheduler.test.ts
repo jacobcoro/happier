@@ -29,7 +29,7 @@ describe('ScmDiffPrefetchScheduler', () => {
         });
 
         expect(fetchDiff).toHaveBeenCalledTimes(1);
-        expect(fetchDiff.mock.calls[0]?.[0]).toEqual({ sessionId: 's', diffArea: 'pending', path: 'b.ts' });
+        expect(fetchDiff.mock.calls[0]?.[0]).toEqual({ snapshotSignature: 'sig', sessionId: 's', diffArea: 'pending', path: 'b.ts' });
     });
 
     it('enforces concurrency and pumps the queue as requests resolve', async () => {
@@ -37,17 +37,9 @@ describe('ScmDiffPrefetchScheduler', () => {
 
         const reachedB = createDeferred<void>();
         const reachedC = createDeferred<void>();
-        const cachedC = createDeferred<void>();
         const deferredA = createDeferred<Readonly<{ success: true; diff: string }>>();
         const deferredB = createDeferred<Readonly<{ success: true; diff: string }>>();
         const deferredC = createDeferred<Readonly<{ success: true; diff: string }>>();
-        const originalSet = cache.set.bind(cache);
-        vi.spyOn(cache, 'set').mockImplementation((key, diff) => {
-            originalSet(key, diff);
-            if (key.path === 'c.ts') {
-                cachedC.resolve();
-            }
-        });
         const fetchDiff = vi.fn(async (input: Parameters<ScmDiffPrefetchFetchFn>[0]) => {
             if (input.path === 'a.ts') return deferredA.promise;
             if (input.path === 'b.ts') {
@@ -80,7 +72,7 @@ describe('ScmDiffPrefetchScheduler', () => {
         expect(fetchDiff.mock.calls[2]?.[0]?.path).toBe('c.ts');
 
         deferredC.resolve({ success: true, diff: 'diff-c' });
-        await cachedC.promise;
-        expect(cache.get({ sessionId: 's', snapshotSignature: 'sig', diffArea: 'pending', path: 'c.ts' })?.diff).toBe('diff-c');
+        await deferredC.promise;
+        expect(cache.get({ sessionId: 's', snapshotSignature: 'sig', diffArea: 'pending', path: 'c.ts' })).toBeNull();
     });
 });

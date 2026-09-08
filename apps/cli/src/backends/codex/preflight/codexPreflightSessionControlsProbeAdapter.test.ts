@@ -19,6 +19,7 @@ const envKeys = [
     'HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS',
     'HAPPIER_FAKE_CODEX_APP_SERVER_DELAY_MS',
     'HAPPIER_FAKE_CODEX_APP_SERVER_ENV_CAPTURE_FILE',
+    'HAPPIER_FAKE_PROFILE_MARKER',
     'HAPPIER_HOME_DIR',
     'OPENAI_API_KEY',
     'CODEX_API_KEY',
@@ -128,6 +129,8 @@ describe('codexPreflightSessionControlsProbeAdapter', () => {
         expect(JSON.parse(readFileSync(captureFile, 'utf8'))).toEqual({
             CODEX_HOME: codexHome,
             CODEX_SQLITE_HOME: codexHome,
+            HAPPIER_FAKE_PROFILE_MARKER: null,
+            OPENAI_API_KEY: null,
             CODEX_AUTH_FILE_PRESENT: false,
         });
     });

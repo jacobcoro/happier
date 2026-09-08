@@ -109,6 +109,7 @@ function StatPill(props: Readonly<{
 }
 
 function InlineStat(props: Readonly<{
+    label: string;
     value: number;
     iconName: string;
     theme: SourceControlBranchSummaryProps['theme'];
@@ -116,27 +117,15 @@ function InlineStat(props: Readonly<{
     const { theme } = props;
     return (
         <View
-            style={{
-                minWidth: 16,
-                minHeight: 30,
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 1,
-                flexShrink: 0,
-            }}
+            accessible
+            accessibilityLabel={`${props.label}: ${props.value}`}
+            {...(Platform.OS === 'web' ? { title: `${props.label}: ${props.value}` } : {})}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
         >
-            <Text
-                numberOfLines={1}
-                style={{
-                    fontSize: 11,
-                    lineHeight: 13,
-                    color: theme.colors.text.primary,
-                    ...Typography.mono('semiBold'),
-                }}
-            >
+            <Icon name={props.iconName as any} size={14} color={theme.colors.text.secondary} />
+            <Text style={{ fontSize: 11, color: theme.colors.text.primary, ...Typography.mono('semiBold') }}>
                 {String(props.value)}
             </Text>
-            <Icon name={props.iconName as any} size={14} color={theme.colors.text.secondary} />
         </View>
     );
 }
@@ -171,16 +160,20 @@ function SourceControlBranchSummaryImpl({
             <View
                 style={{
                     paddingHorizontal: 12,
-                    paddingTop: 12,
-                    paddingBottom: 10,
+                    paddingTop: 6,
+                    paddingBottom: 6,
                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                     borderBottomColor: theme.colors.border.default,
                     backgroundColor: theme.colors.surface.base,
                     gap: 6,
                 }}
             >
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                    <View style={{ minWidth: 0, flex: 1, gap: 4 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View
+                        style={{ minWidth: 0, flex: 1 }}
+                        accessibilityHint={scmStatusFiles.upstream ?? undefined}
+                        {...(Platform.OS === 'web' ? { title: scmStatusFiles.upstream ? `${scmStatusFiles.branch ?? ''} · ${scmStatusFiles.upstream}` : scmStatusFiles.branch ?? undefined } : {})}
+                    >
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 }}>
                             <Icon
                                 name="git-branch"
@@ -229,24 +222,13 @@ function SourceControlBranchSummaryImpl({
                                 </Text>
                             )}
                         </View>
-
-                        {showTracking ? (
-                            <Text
-                                numberOfLines={1}
-                                style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}
-                            >
-                                {scmStatusFiles.upstream
-                                    ? t('files.branchSummary.upstreamLabel', { upstream: scmStatusFiles.upstream })
-                                    : t('files.branchSummary.noUpstream')}
-                            </Text>
-                        ) : null}
                     </View>
 
-                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 5, flexShrink: 0 }}>
-                        <InlineStat value={staged} iconName="plus-square" theme={theme} />
-                        <InlineStat value={unstaged} iconName="pencil-simple" theme={theme} />
-                        {showTracking ? <InlineStat value={ahead} iconName="arrow-up" theme={theme} /> : null}
-                        {showTracking ? <InlineStat value={behind} iconName="arrow-down" theme={theme} /> : null}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                        <InlineStat label={includedLabel} value={staged} iconName="plus-square" theme={theme} />
+                        <InlineStat label={pendingLabel} value={unstaged} iconName="pencil-simple" theme={theme} />
+                        {showTracking ? <InlineStat label={t('files.branchSummary.ahead')} value={ahead} iconName="arrow-up" theme={theme} /> : null}
+                        {showTracking ? <InlineStat label={t('files.branchSummary.behind')} value={behind} iconName="arrow-down" theme={theme} /> : null}
                     </View>
                 </View>
             </View>

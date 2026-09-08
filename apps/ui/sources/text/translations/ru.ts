@@ -1810,6 +1810,7 @@ export const ru: TranslationStructure = {
           title: "Инструкции для запусков Happier",
           subtitle: "Отключение удаляет приоритет нативной маршрутизации и механику запусков Happier из системных промптов агентов программирования.",
         },
+        notifyParentOnCompletion: { title: 'Уведомлять родительский агент о завершении', subtitle: 'Отправляет родительскому агенту структурированное событие завершения.' },
         characterBudget: {
           title: "Лимит пользовательских правил",
           subtitle: ({ value }: { value: string }) => `${value} символов`,
@@ -2428,6 +2429,28 @@ export const ru: TranslationStructure = {
   },
 
   connectedServices: {
+      subscription: {
+          title: "Подписка",
+          currentPeriod: "Текущий период",
+          renewal: "Продление",
+          renewalOn: "Включено",
+          renewalOff: "Выключено",
+          renewalUnknown: "Неизвестно",
+          renews: ({ date }: { date: string }) => `Продление ${date}`,
+          ends: ({ date }: { date: string }) => `Окончание ${date}`,
+          renewsInDays: ({ days }: { days: number }) => `Продление через ${days} дн.`,
+          endsInDays: ({ days }: { days: number }) => `Окончание через ${days} дн.`,
+          periodEnds: ({ date }: { date: string }) => `Текущий период заканчивается ${date}`,
+          period: ({ start, end }: { start: string; end: string }) => `${start} – ${end}`,
+          periodStarted: ({ date }: { date: string }) => `Начало ${date}`,
+          accessUntil: ({ date }: { date: string }) => `Доступ сохраняется до ${date}`,
+          checked: ({ time }: { time: string }) => `Проверено: ${time}`,
+          lastKnown: ({ summary }: { summary: string }) => `Последние известные данные: ${summary}`,
+          unavailable: "Сведения о подписке недоступны",
+          refreshFailed: "Не удалось обновить сведения о подписке. Показаны последние известные данные.",
+          outdated: "Сведения о подписке могут быть устаревшими.",
+          none: "Нет подписки",
+      },
     fallbackName: "Подключённый сервис",
     serviceNames: {
       claudeSubscription: "Подписка Claude",
@@ -2949,6 +2972,8 @@ export const ru: TranslationStructure = {
         membersSubtitle: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} включено`,
         optionsTitle: "Параметры",
         autoSwitchTitle: "Автоматический резерв",
+        autoQuotaResetTitle: "Автоматически использовать сбросы квоты",
+        autoQuotaResetSubtitle: "Расходует доступный сброс, только когда ни один аккаунт пула не готов и исчерпанную квоту можно сбросить. По умолчанию отключено.",
         autoSwitchEnabledSubtitle: "Переключаться на другого участника, когда активному аккаунту нужно восстановление.",
         autoSwitchDisabledSubtitle: "Использовать активного участника, пока вы не переключите его вручную.",
         strategyTitle: "Стратегия выбора",
@@ -3600,6 +3625,8 @@ export const ru: TranslationStructure = {
       readySubtitle: "Отправляйте, когда ход закончится и агент будет ждать вашей команды.",
       readyPreviewTitle: "Превью готовых сообщений",
       readyPreviewSubtitle: "Включить последний текст сообщения помощника в готовые уведомления для этого вебхука.",
+      requestPreviewTitle: "Предпросмотр запросов",
+      requestPreviewSubtitle: "Показывать команды, требующие разрешения, вопросы и варианты ответа. Они могут появиться на экране блокировки.",
       permissionRequestsTitle: "Запросы на разрешение",
       permissionRequestsSubtitle: "Отправлять, когда сеанс заблокирован в ожидании одобрения",
       userActionsTitle: "Запросы на действия",
@@ -3631,6 +3658,8 @@ export const ru: TranslationStructure = {
       readySubtitle: "Показывать локальное уведомление об окончании поворота",
       readyPreviewTitle: "Превью готовых сообщений",
       readyPreviewSubtitle: "Включить последнее сообщение помощника в готовые уведомления на этом устройстве.",
+      requestPreviewTitle: "Предпросмотр запросов",
+      requestPreviewSubtitle: "Включать команды, требующие разрешения, вопросы и варианты ответа в данные этого вебхука.",
       permissionRequestsTitle: "Запросы на разрешение",
       permissionRequestsSubtitle: "Показывать локальное уведомление, когда сеанс требует одобрения",
       userActionsTitle: "Запросы на действия",
@@ -3670,6 +3699,10 @@ export const ru: TranslationStructure = {
         title: "Превью готовых сообщений",
         subtitle: "Включите последний текст сообщения помощника в push-уведомления о готовых поворотах.",
       },
+      requestPreview: {
+          title: "Предпросмотр запросов",
+          subtitle: "Показывать команды, требующие разрешения, вопросы и варианты ответа. Они могут появиться на экране блокировки.",
+      },
       permissionRequests: {
         title: "Запросы разрешений",
         subtitle:
@@ -3694,6 +3727,15 @@ export const ru: TranslationStructure = {
         readyFallbackBody: "Поворот закончен. ",
         permissionFallbackBody: "Требуется одобрение.",
         userActionFallbackBody: "Эта сессия нуждается в вашем вкладе.",
+        requestLabels: {
+            command: "Команда",
+            file: "Файл",
+            selectOne: "Выберите один вариант",
+            selectMultiple: "Выберите несколько вариантов",
+            customAnswer: "Можно ввести свой ответ",
+            localMessages: "Локальные сообщения",
+            remoteMessages: "Удалённые сообщения",
+        },
       },
       channels: {
         default: 'По умолчанию',
@@ -5549,6 +5591,16 @@ export const ru: TranslationStructure = {
       railScrollDownA11y: "Прокрутить навигацию вниз",
     },
     usageLimitRecovery: {
+        overloadTitle: "Модель перегружена",
+        overloadWaiting: "Ожидание повторной попытки.",
+        overloadDispatching: "Повторная попытка.",
+        overloadAwaiting: "Ожидание ответа модели.",
+        overloadStopped: "Автоматические попытки остановлены. Можно повторить вручную.",
+        overloadExhausted: "Автоматические попытки исчерпаны. Можно повторить вручную.",
+        overloadOffline: "Подключитесь к машине сессии, чтобы проверить состояние попыток.",
+        stopRetrying: "Остановить попытки",
+        overloadCountdown: ({ seconds, attempt }: { seconds: number; attempt: number }) => `Модель перегружена — повтор через ${seconds} с · попытка ${attempt}`,
+        overloadAttempt: ({ attempt }: { attempt: number }) => `Попытка ${attempt}`,
       title: "Достигнут лимит использования",
       readyTitle: "Лимит использования сброшен",
       resetBody: ({ time }: { time: string }) =>
@@ -6964,6 +7016,8 @@ export const ru: TranslationStructure = {
   },
 
   files: {
+            revealInFiles: "Показать в файлах",
+            openChanges: "Открыть изменения",
     searchPlaceholder: "Поиск файлов...",
     clearSearchA11y: "Очистить поиск",
     createFileA11y: "Создать файл",
@@ -7212,6 +7266,10 @@ export const ru: TranslationStructure = {
       noFilesInProject: "Файлов в проекте нет",
       repositoryFolderLoadFailed: "Не удалось загрузить папку",
       repositoryCollapseAll: "Свернуть все",
+    commitCreated: "Коммит создан",
+    commitRefreshFailed: ({ sha }: { sha: string }) => `Коммит ${sha} создан, но обновить данные репозитория не удалось. Повторите обновление состояния контроля версий.`,
+    refreshingRepository: "Обновление репозитория…",
+    retryRefresh: "Повторить обновление",
     sourceControlOperationsLog: {
       title: "Недавние операции контроля версий",
       allSessions: "Все сессии",
@@ -7227,8 +7285,11 @@ export const ru: TranslationStructure = {
       reviewNoMatches: "Нет совпадений",
       reviewLargeDiffOneAtATime: "Обнаружен большой diff; изменения будут подгружаться при прокрутке.",
       reviewDiffRequestFailed: "Не удалось загрузить diff",
+      reviewPreviousHunk: "Предыдущий блок",
+      reviewNextHunk: "Следующий блок",
       reviewUnableToLoadDiff: "Не удалось загрузить diff",
       tryDifferentTerm: "Попробуйте другой поисковый запрос",
+      previousSearchResults: "Результаты предыдущего поиска",
       searchResults: ({ count }: { count: number }) =>
         `Результаты поиска (${count})`,
     projectRoot: "Корень проекта",
@@ -7251,7 +7312,9 @@ export const ru: TranslationStructure = {
         "Этот файл изменился на диске, пока вы его редактировали. Черновик оставлен без изменений; проверьте последнюю версию файла перед сохранением.",
       selectionFailed: "Не удалось обновить выбор",
       openReviewCommentsFailed: "Не удалось открыть комментарии к ревью",
-        reviewComments: {
+        reviewPreviousFile: "Предыдущий файл",
+                  reviewNextFile: "Следующий файл",
+                  reviewComments: {
           title: ({ count }: { count: number }) => `Комментарии ревью (${count})`,
           placeholder: "Добавьте комментарий к ревью…",
           jump: "Перейти",
@@ -7261,6 +7324,7 @@ export const ru: TranslationStructure = {
           modalSubtitle: "Проверьте, какие комментарии будут отправлены со следующим сообщением.",
           modalSummary: ({ included, count }: { included: number; count: number }) =>
             `${included} из ${count} выбрано для следующего промпта`,
+          goToComposer: 'Перейти к сообщению',
           detachOrDiscardTitle: "Убрать комментарии ревью?",
           detachOrDiscardBody:
             "Открепление сохранит комментарии, но исключит их из следующего промпта. Удаление удалит их полностью.",
@@ -7329,6 +7393,8 @@ export const ru: TranslationStructure = {
       combined: "Объединено",
     },
     fileActions: {
+      selectEntireFileForCommit: 'Выбрать весь файл для коммита',
+      selectLines: 'Выбрать строки',
       selectForCommit: "Выбрать для коммита",
       selectFilesToCommit: "Выбрать файлы для коммита",
       stageFile: "Добавить в stage",
@@ -7346,6 +7412,9 @@ export const ru: TranslationStructure = {
     },
 	    toolbar: {
 	      changedFiles: "Изменённые файлы",
+	      projectFiles: "Проект",
+	      allFiles: "Все файлы",
+	      projectFilesUnavailable: "Фильтр проекта здесь недоступен. Показаны все файлы.",
 	      hiddenFiles: "Показать скрытые файлы",
 	      details: "Подробности",
 	      upload: "Загрузить",

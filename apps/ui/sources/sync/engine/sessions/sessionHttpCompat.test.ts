@@ -208,6 +208,11 @@ describe('session record coercion carries the server-materialized unread entry f
             pendingCount: 0,
             pendingBlockedCount: 0,
             pendingVersion: 1,
+            pendingActivationAuthorization: {
+                status: 'waiting',
+                requestId: 'activation-1',
+                requestedAt: 28,
+            },
             share: { accessLevel: 'edit', canApprovePermissions: true },
             latestTurnId: 't1',
             latestTurnStatus: 'completed',
@@ -222,5 +227,10 @@ describe('session record coercion carries the server-materialized unread entry f
         expect(declaredFields.length).toBeGreaterThan(20);
         const missing = declaredFields.filter((field) => !(field in (coerced as Record<string, unknown>)));
         expect(missing).toEqual([]);
+        expect(coerced?.pendingActivationAuthorization).toEqual({
+            status: 'waiting',
+            requestId: 'activation-1',
+            requestedAt: 28,
+        });
     });
 });

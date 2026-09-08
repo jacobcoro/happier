@@ -28,7 +28,7 @@ describe('collapseUnifiedDiffContext', () => {
             lines,
             contextThreshold: 6,
             contextRadius: 2,
-            expandedRegionIds: new Set(),
+            expandedLineIndices: new Set(),
         });
 
         expect(collapsed.regions).toHaveLength(1);
@@ -55,17 +55,17 @@ describe('collapseUnifiedDiffContext', () => {
             lines,
             contextThreshold: 6,
             contextRadius: 2,
-            expandedRegionIds: new Set(),
+            expandedLineIndices: new Set(),
         });
 
-        const regionId = firstPass.regions[0]?.id;
-        expect(regionId).toBeTruthy();
+        const hiddenStartIndex = firstPass.regions[0]?.hiddenStartIndex;
+        expect(hiddenStartIndex).toBeDefined();
 
         const expanded = collapseUnifiedDiffContext({
             lines,
             contextThreshold: 6,
             contextRadius: 2,
-            expandedRegionIds: new Set([regionId!]),
+            expandedLineIndices: new Set([hiddenStartIndex!]),
         });
 
         expect(expanded.regions).toHaveLength(0);

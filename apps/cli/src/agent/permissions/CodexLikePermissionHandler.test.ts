@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { CodexLikePermissionHandler } from './CodexLikePermissionHandler';
+import { SessionPermissionRpcRouter } from './sessionPermissionRpcRouter';
+import { createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/runtime/runScopedExecutionPermissionHandler';
+import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
 
 class FakeRpcHandlerManager {
   handlers = new Map<string, (payload: any) => any>();
@@ -14,6 +17,14 @@ class FakeSession {
   rpcHandlerManager = new FakeRpcHandlerManager();
   agentState: any = { requests: {}, completedRequests: {} };
   metadata: any = null;
+  private permissionRpcRouter: SessionPermissionRpcRouter | null = null;
+
+  getOrCreatePermissionRpcRouter() {
+    if (!this.permissionRpcRouter) {
+      this.permissionRpcRouter = new SessionPermissionRpcRouter(this.rpcHandlerManager);
+    }
+    return this.permissionRpcRouter;
+  }
 
   getAgentStateSnapshot() {
     return this.agentState;
@@ -171,6 +182,116 @@ describe('CodexLikePermissionHandler', () => {
         decision: 'approved',
       }),
     );
+  });
+
+  it('routes one session permission RPC to the handler that owns the exact request id', async () => {
+    const session = new FakeSession();
+    const firstHandler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[First]' });
+    const secondHandler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Second]' });
+
+    const pending = secondHandler.handleToolCall('tool-second', 'Write', { path: '/tmp/x', content: 'hi' });
+    const rpc = session.rpcHandlerManager.handlers.get('permission');
+    expect(rpc).toBeDefined();
+    await expect(rpc!({ id: 'tool-second', approved: true, decision: 'approved' })).resolves.toEqual({ ok: true });
+
+    await expect(pending).resolves.toEqual({ decision: 'approved' });
+    firstHandler.reset();
+    secondHandler.reset();
+  });
+
+  it('isolates identical provider permission ids by execution run and disposes only one run', async () => {
+    const session = new FakeSession();
+    const owner = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[ExecutionRun]' });
+    const runA = createRunScopedExecutionPermissionHandler({ runId: 'run-a', handler: owner });
+    const runB = createRunScopedExecutionPermissionHandler({ runId: 'run-b', handler: owner });
+
+    const approvalA = runA.handler.handleToolCall('call_1', 'Write', { path: '/tmp/a' });
+    const approvalB = runB.handler.handleToolCall('call_1', 'Write', { path: '/tmp/b' });
+    const requestIds = Object.keys(session.agentState.requests);
+    expect(requestIds).toHaveLength(2);
+    const requestAId = requestIds.find((id) => session.agentState.requests[id]?.arguments?.path === '/tmp/a');
+    const requestBId = requestIds.find((id) => session.agentState.requests[id]?.arguments?.path === '/tmp/b');
+    expect(requestAId).toBeDefined();
+    expect(requestBId).toBeDefined();
+    expect(requestAId).not.toBe(requestBId);
+
+    const rpc = session.rpcHandlerManager.handlers.get('permission');
+    await rpc!({ id: requestAId, approved: true, decision: 'approved' });
+    await expect(approvalA).resolves.toEqual({ decision: 'approved' });
+    expect(await settledState(approvalB)).toBe('pending');
+
+    const stopA = runA.handler.handleToolCall('call_2', 'Write', { path: '/tmp/a2' });
+    const stopB = runB.handler.handleToolCall('call_2', 'Write', { path: '/tmp/b2' });
+    runA.dispose('Execution run stopped');
+    await expect(stopA).resolves.toEqual({ decision: 'abort' });
+    expect(await settledState(stopB)).toBe('pending');
+    expect(await settledState(approvalB)).toBe('pending');
+
+    runB.dispose('Test cleanup');
+    await expect(stopB).resolves.toEqual({ decision: 'abort' });
+    await expect(approvalB).resolves.toEqual({ decision: 'abort' });
+    owner.reset();
+  });
+
+  it('uses each admitted execution-run policy instead of the parent session mode', async () => {
+    const session = new FakeSession();
+    const owner = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[ExecutionRun]' });
+    owner.setPermissionMode('yolo');
+
+    const createDefaultRun = (runId: string) => {
+      const scope = createRunScopedExecutionPermissionHandler({ runId, handler: owner });
+      return {
+        scope,
+        handler: createExecutionRunPermissionHandler({
+          backendId: 'codex',
+          permissionMode: 'default',
+          interactiveHandler: scope.handler,
+        }),
+      };
+    };
+    const runA = createDefaultRun('run-policy-a');
+    const runB = createDefaultRun('run-policy-b');
+
+    const approvalA = runA.handler.handleToolCall('call_1', 'Write', { path: '/tmp/a' });
+    const approvalB = runB.handler.handleToolCall('call_1', 'Write', { path: '/tmp/b' });
+
+    expect(await settledState(approvalA)).toBe('pending');
+    expect(await settledState(approvalB)).toBe('pending');
+    expect(Object.keys(session.agentState.requests)).toHaveLength(2);
+
+    const rpc = session.rpcHandlerManager.handlers.get('permission');
+    const requestIds = Object.keys(session.agentState.requests);
+    await rpc!({ id: requestIds[0], approved: true, decision: 'approved' });
+    await rpc!({ id: requestIds[1], approved: false, decision: 'denied' });
+    await expect(approvalA).resolves.toEqual({ decision: 'approved' });
+    await expect(approvalB).resolves.toEqual({ decision: 'denied' });
+
+    runA.scope.dispose('Test cleanup');
+    runB.scope.dispose('Test cleanup');
+    owner.reset();
+  });
+
+  it('keeps an admitted default execution run interactive under a read-only parent session', async () => {
+    const session = new FakeSession();
+    const owner = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[ExecutionRun]' });
+    owner.setPermissionMode('read-only');
+    const scope = createRunScopedExecutionPermissionHandler({ runId: 'run-default', handler: owner });
+    const handler = createExecutionRunPermissionHandler({
+      backendId: 'codex',
+      permissionMode: 'default',
+      interactiveHandler: scope.handler,
+    });
+
+    const approval = handler.handleToolCall('call_1', 'Write', { path: '/tmp/default' });
+
+    expect(await settledState(approval)).toBe('pending');
+    const requestId = Object.keys(session.agentState.requests)[0];
+    const rpc = session.rpcHandlerManager.handlers.get('permission');
+    await rpc!({ id: requestId, approved: true, decision: 'approved' });
+    await expect(approval).resolves.toEqual({ decision: 'approved' });
+
+    scope.dispose('Test cleanup');
+    owner.reset();
   });
 
   it('resolves every duplicate same-id waiter when permission mode clears the prompt', async () => {

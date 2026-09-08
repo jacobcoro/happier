@@ -105,6 +105,16 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
         terminalTabAvailable,
     ]);
 
+    const previousDetails = React.useRef({ scopeId: props.scopeId, count: openDetailsTabCount });
+    React.useEffect(() => {
+        const previous = previousDetails.current;
+        previousDetails.current = { scopeId: props.scopeId, count: openDetailsTabCount };
+        if (isFocused && props.surface === 'tabs' && previous.scopeId === props.scopeId
+            && previous.count > 0 && openDetailsTabCount === 0) {
+            surfaceNavigationRef.current?.returnToPreviousSurface();
+        }
+    }, [isFocused, openDetailsTabCount, props.scopeId, props.surface]);
+
     const targetRightTabId = resolveSessionRightTabIdForSurface(props.surface, terminalTabAvailable);
     React.useEffect(() => {
         if (!isFocused) return;
@@ -235,6 +245,7 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
             <SessionCockpitFullscreenSurface screenTestID="session-files-screen" safeAreaPadding={false}>
                 <React.Suspense fallback={<SessionCockpitLoadingFallback color={theme.colors.text.secondary} />}>
                     <SessionBrowseFilesSurface
+                        scopeId={props.scopeId}
                         sessionId={props.sessionId}
                         onOpenFile={openFileInDetails}
                         onOpenFilePinned={openFileInDetailsPinned}

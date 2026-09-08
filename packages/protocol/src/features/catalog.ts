@@ -63,6 +63,12 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: ['connectedServices'],
     representation: 'server',
   },
+  'connectedServices.subscription': {
+    description: 'Provider-optional subscription observations with independently fresh account-usage transport.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['connectedServices'],
+    representation: 'server',
+  },
   'connectedServices.accountGroups': {
     description: 'Connected service account groups and member management APIs.',
     defaultFailMode: 'fail_closed',
@@ -73,6 +79,12 @@ const FEATURE_CATALOG_DEFINITION = {
     description: 'Connected service account group fallback and automatic active account switching APIs.',
     defaultFailMode: 'fail_closed',
     dependencies: ['connectedServices.accountGroups', 'sessions.usageLimitRecovery'],
+    representation: 'server',
+  },
+  'connectedServices.autoQuotaReset': {
+    description: 'Opt-in banked quota reset spending after account pool exhaustion.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['connectedServices.accountFallback', 'connectedServices.quotas'],
     representation: 'server',
   },
   channelBridges: {

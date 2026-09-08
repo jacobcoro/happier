@@ -110,13 +110,46 @@ export function resolveEntryRestoreTarget<TItem>(
         }
     }
 
-    if (params.items.length === 0) {
-        return { kind: 'none', reason: 'empty-transcript' };
+    if (params.items.length === 0 && !params.fillSettled) {
+        return { kind: 'none', reason: 'awaiting-fill-settle' };
     }
 
     const contentHeight = normalizeDimension(params.contentMeasured.contentHeight);
     const layoutHeight = normalizeDimension(params.contentMeasured.layoutHeight);
     const contentMeasured = contentHeight > 0 && layoutHeight > 0;
+    const anchor = params.snapshot.anchor;
+    const exactTarget = anchor ? toAnchorTarget(
+        params.anchorIndexResolver(anchor, params.items),
+        anchor.itemOffsetPx,
+        params.items.length,
+    ) : null;
+    const anchorSeqHint = anchor ? resolveDurableAnchorSeqHint(anchor, params.anchorSeqResolver) : null;
+    if (
+        !params.snapshot.shouldFollowBottom &&
+        params.canMaterializeOlder &&
+        !exactTarget &&
+        anchorSeqHint !== null &&
+        params.anchorSeqLoadedResolver?.(anchorSeqHint, params.items) !== true
+    ) {
+        return { kind: 'materialize-then-anchor', anchorSeqHint };
+    }
+
+    // Web settles its open fill before history is materialized. An empty/short
+    // page is therefore not a final restore verdict while its bounded lookup
+    // can still recover the saved position (including a lookup already in flight).
+    if (
+        !params.snapshot.shouldFollowBottom &&
+        params.fillSettled &&
+        params.canMaterializeOlder &&
+        !exactTarget &&
+        (params.snapshot.offsetY ?? 0) > 0 &&
+        (params.items.length === 0 || (contentMeasured && contentHeight <= layoutHeight))
+    ) {
+        return { kind: 'materialize-then-anchor', anchorSeqHint: null };
+    }
+    if (params.items.length === 0) {
+        return { kind: 'none', reason: 'empty-transcript' };
+    }
     if (params.fillSettled && contentMeasured && contentHeight <= layoutHeight) {
         // Under-filled settled content fits the viewport: nothing to scroll, and
         // FlashList MVCP misbehaves on under-filled lists (upstream #2050).
@@ -131,26 +164,8 @@ export function resolveEntryRestoreTarget<TItem>(
     // scrollable range and not only the data fact that the row exists.
     const hasScrollableRange = contentMeasured && contentHeight > layoutHeight;
 
-    const anchor = params.snapshot.anchor;
     if (anchor) {
-        const exactTarget = toAnchorTarget(
-            params.anchorIndexResolver(anchor, params.items),
-            anchor.itemOffsetPx,
-            params.items.length,
-        );
         if (exactTarget) return anchorTargetOrWait(exactTarget, hasScrollableRange);
-
-        const anchorSeqHint = resolveDurableAnchorSeqHint(anchor, params.anchorSeqResolver);
-        if (
-            params.canMaterializeOlder &&
-            anchorSeqHint !== null &&
-            params.anchorSeqLoadedResolver?.(anchorSeqHint, params.items) !== true
-        ) {
-            return {
-                kind: 'materialize-then-anchor',
-                anchorSeqHint,
-            };
-        }
 
         const survivingTarget = toAnchorTarget(
             params.nearestSurvivingResolver(anchor, params.items),

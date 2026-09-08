@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildProviderAccountUsageRecordId,
+  accountSettingsParse,
   buildConnectedServiceCredentialRecord,
   ConnectedServiceQuotaSnapshotV1Schema,
   ProviderAccountUsageSnapshotV1Schema,
@@ -17,6 +18,8 @@ import type {
 import { randomBytes } from 'node:crypto';
 
 import type { Credentials } from '@/persistence';
+import { dispatchConnectedServiceAutomaticQuotaResetNotificationAsync } from '../notifications/dispatchConnectedServiceQuotaLifecycleNotification';
+import { createOpenAiCodexQuotaFetcher } from '@/backends/codex/connectedServices/quotaFetcher';
 import { invalidateConnectedServiceAccountMode } from '@/cloud/connectedServices/resolveConnectedServiceAccountMode';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
@@ -565,11 +568,14 @@ describe('ConnectedServiceQuotasCoordinator', () => {
   });
 
   it.each([
-    ['consumed', 'consumed'],
-    ['already_consumed', 'already_consumed'],
-    ['not_available', 'not_available'],
-    ['nothing_to_reset', 'nothing_to_reset'],
-  ] as const)('preserves the %s provider-neutral recovery-credit outcome in the RPC receipt', async (providerOutcome, expectedStatus) => {
+    ['consumed', 'consumed', 'normal'],
+    ['consumed', 'consumed', 'refresh_failure'],
+    ['consumed', 'consumed', 'notification_pending'],
+    ['consumed', 'consumed', 'notification_throws'],
+    ['already_consumed', 'already_consumed', 'normal'],
+    ['not_available', 'not_available', 'normal'],
+    ['nothing_to_reset', 'nothing_to_reset', 'normal'],
+  ] as const)('preserves the %s provider-neutral recovery-credit outcome in the RPC receipt (%s, %s)', async (providerOutcome, expectedStatus, mode) => {
     const now = 1_000_000;
     const record = buildConnectedServiceCredentialRecord({
       now,
@@ -592,22 +598,117 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     const fetcher: ConnectedServiceQuotaFetcher = {
       serviceId: 'openai-codex',
       consumeRecoveryCredit: vi.fn(async () => providerOutcome),
-      fetch: vi.fn(async () => null),
+      fetch: vi.fn(async () => {
+        if (mode === 'refresh_failure') throw new Error('quota refresh failed');
+        return null;
+      }),
     };
+    const sendToAllDevicesAsync = vi.fn(async (_title: string, _body: string, _data: Record<string, unknown>) => {
+      if (mode === 'notification_pending') await new Promise<void>(() => {});
+      if (mode === 'notification_throws') throw new Error('push unavailable');
+    });
     const coordinator = new ConnectedServiceQuotasCoordinator({
       api,
       credentials: { token: 'happy-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) } },
       quotaFetchers: [fetcher],
+      onAutomaticQuotaResetConsumed: async (event) => {
+        await dispatchConnectedServiceAutomaticQuotaResetNotificationAsync({
+          settings: accountSettingsParse({ notificationChannelsV1: [{ v: 1, id: 'expo', kind: 'expo_push', enabled: true,
+            topics: { ready: false, permissionRequest: false, userActionRequest: false, connectedServiceQuotaRecovered: true },
+            readyIncludeMessageText: false }] }),
+          expoPushSender: { sendToAllDevicesAsync }, event, dedupeWindowMs: 0,
+        });
+      },
       now: () => now,
       randomBytes: (length: number) => randomBytes(length),
     });
 
     await expect(coordinator.consumeRecoveryCreditForProfile({
       serviceId: 'openai-codex', profileId: 'work', idempotencyKey: `req-${providerOutcome}`,
+      automaticResetContext: { groupId: 'team' },
     })).resolves.toEqual(expect.objectContaining({
-      ok: true,
+      ok: mode !== 'refresh_failure',
       receipt: { idempotencyKey: `req-${providerOutcome}`, status: expectedStatus },
     }));
+    await coordinator.consumeRecoveryCreditForProfile({
+      serviceId: 'openai-codex', profileId: 'work', idempotencyKey: `req-${providerOutcome}`,
+      automaticResetContext: { groupId: 'team', sessionId: 'another-session' },
+    });
+    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(providerOutcome === 'consumed' ? 1 : 0);
+    if (providerOutcome === 'consumed') {
+      expect(sendToAllDevicesAsync.mock.calls[0]).toEqual([
+        expect.stringContaining('reset credit used'),
+        expect.stringContaining('work in pool team'),
+        expect.objectContaining({ recoveryReason: 'automatic_quota_reset', profileId: 'work', groupId: 'team' }),
+      ]);
+      expect(sendToAllDevicesAsync.mock.calls[0]?.[2].sessionId).toBeUndefined();
+    }
+  });
+
+  it.each(['concrete', 'aggregate', 'unavailable', 'missing'] as const)('selects canonical %s recovery inventory and shares manual reset receipts', async (inventory) => {
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now, serviceId: 'openai-codex', profileId: 'work', kind: 'oauth', expiresAt: now + 60_000,
+      oauth: { accessToken: 'access', refreshToken: 'refresh', idToken: null, scope: null,
+        tokenType: null, providerAccountId: 'acct', providerEmail: null },
+    });
+    const snapshot: ConnectedServiceQuotaSnapshotV1 = {
+      v: 1, serviceId: 'openai-codex', profileId: 'work', fetchedAt: now, staleAfterMs: 300_000,
+      planLabel: null, accountLabel: null, meters: [],
+      recoveryCredits: {
+        kind: 'usage_limit_resets', availableCount: inventory === 'unavailable' ? 0 : 2,
+        credits: inventory === 'concrete' ? [
+          { kind: 'usage_limit_reset', status: 'available', providerCreditId: 'later', expiresAtMs: now + 100 },
+          { kind: 'usage_limit_reset', status: 'available', providerCreditId: 'expired', expiresAtMs: now - 1 },
+          { kind: 'usage_limit_reset', status: 'unknown', providerCreditId: 'unknown', expiresAtMs: now + 1 },
+          { kind: 'usage_limit_reset', status: 'available', providerCreditId: 'earlier', expiresAtMs: now + 50 },
+        ] : [],
+      },
+    };
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record } })),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => inventory === 'missing' ? null : ({ content: { t: 'plain' as const, v: snapshot } })),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+    } as unknown as QuotaApi;
+    const consumeRecoveryCredit = vi.fn(async () => 'consumed' as const);
+    const sendToAllDevicesAsync = vi.fn(async () => {});
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials: { token: 'happy-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) } },
+      quotaFetchers: [{ serviceId: 'openai-codex', consumeRecoveryCredit, fetch: vi.fn(async () => null) }],
+      onAutomaticQuotaResetConsumed: async (event) => dispatchConnectedServiceAutomaticQuotaResetNotificationAsync({
+        settings: accountSettingsParse({ notificationChannelsV1: [{ v: 1, id: 'expo', kind: 'expo_push', enabled: true,
+          topics: { ready: false, permissionRequest: false, userActionRequest: false, connectedServiceQuotaRecovered: true },
+          readyIncludeMessageText: false }] }),
+        expoPushSender: { sendToAllDevicesAsync }, event, dedupeWindowMs: 0,
+      }),
+      now: () => now,
+      randomBytes,
+    });
+    const result = await coordinator.consumeAvailableRecoveryCreditForProfile({ serviceId: 'openai-codex', profileId: 'work',
+      automaticResetContext: { groupId: 'main', sessionId: 'origin-session' } });
+    if (inventory === 'unavailable' || inventory === 'missing') {
+      expect(result).toMatchObject({ ok: false, errorCode: 'connected_service_quota_recovery_credit_not_available' });
+      expect(consumeRecoveryCredit).not.toHaveBeenCalled();
+      expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
+      return;
+    }
+    const idempotencyKey = `connected-service-quota-recovery-credit:v1:openai-codex:work:${inventory === 'concrete' ? 'credit:earlier' : `aggregate:${now}`}`;
+    expect(result).toMatchObject({ ok: true, receipt: { idempotencyKey, status: 'consumed' } });
+    await coordinator.consumeRecoveryCreditForProfile({
+      serviceId: 'openai-codex', profileId: 'work', idempotencyKey,
+      ...(inventory === 'concrete' ? { providerCreditId: 'earlier' } : {}),
+    });
+    if (inventory === 'aggregate') {
+      await coordinator.consumeRecoveryCreditForProfile({
+        serviceId: 'openai-codex', profileId: 'work',
+        idempotencyKey: 'connected-service-quota-recovery-credit:v1:openai-codex:work:aggregate:unknown',
+      });
+    }
+    expect(consumeRecoveryCredit).toHaveBeenCalledTimes(1);
+    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when a quota fetcher returns no recovery-credit outcome', async () => {
@@ -806,6 +907,70 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     expect(fetcher.consumeRecoveryCredit).toHaveBeenCalledTimes(1);
     expect(refreshConnectedServiceCredentialForQuota).not.toHaveBeenCalled();
     expect(fetcher.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['network', 'codex_reset_credit_consume_network_error', true],
+    ['malformed', 'invalid_consume_response', true],
+    ['server', 'server_error', true],
+    ['unauthorized', 'unauthorized', false],
+  ] as const)('preserves ambiguous provider reset outcome and does not repeat debit (%s)', async (failure, errorCode, ambiguous) => {
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now, serviceId: 'openai-codex', profileId: 'work', kind: 'oauth', expiresAt: now + 60_000,
+      oauth: { accessToken: 'access', refreshToken: 'refresh', idToken: null, scope: null, tokenType: null,
+        providerAccountId: 'acct', providerEmail: null },
+    });
+    let releaseProvider: (() => void) | undefined;
+    const providerPending = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    const fetchMock = vi.fn(async () => {
+      if (failure === 'network') await providerPending;
+      if (failure === 'network') throw new Error('response lost after debit');
+      return new Response(JSON.stringify({ code: failure === 'malformed' ? 'unknown_outcome' : errorCode }), {
+        status: failure === 'malformed' ? 200 : failure === 'server' ? 503 : 401,
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let fetchedAt = now;
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record } })),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: {
+        v: 1, serviceId: 'openai-codex', profileId: 'work', fetchedAt, staleAfterMs: 300_000,
+        planLabel: null, accountLabel: null, meters: [],
+        recoveryCredits: { kind: 'usage_limit_resets', availableCount: 2, credits: [] },
+      } } })),
+    } as unknown as QuotaApi;
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api, credentials: { token: 'happy-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) } },
+      quotaFetchers: [createOpenAiCodexQuotaFetcher()], now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+    });
+    const request = { serviceId: 'openai-codex' as const, profileId: 'work', idempotencyKey: 'ambiguous-reset' };
+    const firstPending = coordinator.consumeRecoveryCreditForProfile(request);
+    let overlapping: ReturnType<typeof coordinator.consumeAvailableRecoveryCreditForProfile> | undefined;
+    if (failure === 'network') {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      fetchedAt += 30_000;
+      overlapping = coordinator.consumeAvailableRecoveryCreditForProfile(request);
+      await vi.waitFor(() => expect(api.getConnectedServiceQuotaSnapshotPlain).toHaveBeenCalled());
+      releaseProvider?.();
+    }
+    const first = await firstPending;
+    if (overlapping) expect(await overlapping).toEqual(first);
+    expect(first).toEqual({
+      ok: false, errorCode, error: errorCode,
+      ...(ambiguous ? { receipt: { idempotencyKey: request.idempotencyKey, status: 'unknown_after_timeout' } } : {}),
+    });
+    expect(await coordinator.consumeRecoveryCreditForProfile(request)).toEqual(first);
+    expect(fetchMock).toHaveBeenCalledTimes(ambiguous ? 1 : 2);
+    if (ambiguous) {
+      fetchedAt += 60_000;
+      expect(await coordinator.consumeAvailableRecoveryCreditForProfile(request)).toEqual(first);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await coordinator.consumeRecoveryCreditForProfile({ ...request, idempotencyKey: 'manual-selected', providerCreditId: 'next-credit' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    }
   });
 
   it('returns the same unknown timeout receipt without a second provider consume for the same idempotency key', async () => {

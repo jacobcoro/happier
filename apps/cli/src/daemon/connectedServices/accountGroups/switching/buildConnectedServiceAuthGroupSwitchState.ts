@@ -46,10 +46,22 @@ export function mergePersistedMemberRuntimeState(
 ): ConnectedServiceAuthGroupMemberRuntimeState {
   const record = readRecord(persistedState);
   if (!record) return runtimeState ?? {};
+  const persistedLastFailureKind = readString(record.lastFailureKind);
   const persistedProviderResetsAtMs = readNonNegativeNumber(record.providerResetsAtMs);
   const runtimeProviderResetsAtMs = readNonNegativeNumber(runtimeState?.providerResetsAtMs);
-  const providerResetsAtMs =
-    persistedProviderResetsAtMs !== null
+  const persistedResetDescribesLimiterFailure = persistedProviderResetsAtMs !== null && (
+    persistedLastFailureKind === 'usage_limit'
+    || persistedLastFailureKind === 'rate_limit'
+    || persistedLastFailureKind === 'capacity'
+    || readNonNegativeNumber(record.exhaustedUntilMs) !== null
+    || readNonNegativeNumber(record.quotaExhaustedUntilMs) !== null
+    || readNonNegativeNumber(record.rateLimitedUntilMs) !== null
+    || readNonNegativeNumber(record.capacityLimitedUntilMs) !== null
+    || readNonNegativeNumber(record.cooldownUntilMs) !== null
+  );
+  const providerResetsAtMs = persistedResetDescribesLimiterFailure
+    ? persistedProviderResetsAtMs
+    : persistedProviderResetsAtMs !== null
       && (runtimeProviderResetsAtMs === null || persistedProviderResetsAtMs > runtimeProviderResetsAtMs)
       ? persistedProviderResetsAtMs
       : runtimeProviderResetsAtMs;
@@ -65,7 +77,7 @@ export function mergePersistedMemberRuntimeState(
     planUnavailableUntilMs: readNonNegativeNumber(record.planUnavailableUntilMs),
     validationBlockedUntilMs: readNonNegativeNumber(record.validationBlockedUntilMs),
     providerResetsAtMs,
-    lastFailureKind: readString(record.lastFailureKind),
+    lastFailureKind: persistedLastFailureKind,
     lastObservedAtMs: readNonNegativeNumber(record.lastObservedAtMs),
   };
 }

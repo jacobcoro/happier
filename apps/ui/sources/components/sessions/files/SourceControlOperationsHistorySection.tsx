@@ -10,6 +10,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 
 type SourceControlOperationsHistorySectionProps = Readonly<{
     theme: any;
+    historyIdentity: string;
+    onCommitLayout?: (sha: string, y: number, height: number) => void;
     historyLoading: boolean;
     historyEntries: ScmLogEntry[];
     historyHasMore: boolean;
@@ -23,15 +25,20 @@ export function SourceControlOperationsHistorySection(props: SourceControlOperat
     const LOAD_MORE_STEP = 20;
     const [visibleCount, setVisibleCount] = React.useState(DEFAULT_VISIBLE_COUNT);
 
-    const firstSha = historyEntries.at(0)?.sha ?? null;
-    const lastFirstShaRef = React.useRef<string | null>(firstSha);
-    React.useEffect(() => {
-        // Reset when the list is replaced (e.g., refresh/reset pagination).
-        if (lastFirstShaRef.current !== firstSha) {
-            lastFirstShaRef.current = firstSha;
-            setVisibleCount(DEFAULT_VISIBLE_COUNT);
-        }
-    }, [firstSha]);
+    const [historyContext, setHistoryContext] = React.useState({
+        identity: props.historyIdentity,
+        entries: historyEntries,
+    });
+    if (historyContext.identity !== props.historyIdentity) {
+        setHistoryContext({ identity: props.historyIdentity, entries: historyEntries });
+        setVisibleCount(DEFAULT_VISIBLE_COUNT);
+    } else if (historyContext.entries !== historyEntries) {
+        // Keep the oldest displayed commit visible when new commits arrive above it.
+        const lastVisibleSha = historyContext.entries[Math.min(visibleCount, historyContext.entries.length) - 1]?.sha;
+        const nextIndex = historyEntries.findIndex((entry) => entry.sha === lastVisibleSha);
+        setHistoryContext({ identity: props.historyIdentity, entries: historyEntries });
+        if (visibleCount > DEFAULT_VISIBLE_COUNT && nextIndex >= visibleCount) setVisibleCount(nextIndex + 1);
+    }
 
     if (historyLoading && historyEntries.length === 0) {
         return <ActivitySpinner size="small" color={theme.colors.text.secondary} />;
@@ -62,6 +69,10 @@ export function SourceControlOperationsHistorySection(props: SourceControlOperat
                     key={entry.sha}
                     testID={`scm-commit-entry-${entry.sha}`}
                     onPress={() => onOpenCommit(entry.sha)}
+                    onLayout={props.onCommitLayout ? (event) => {
+                        const { y, height } = event.nativeEvent.layout;
+                        props.onCommitLayout?.(entry.sha, y, height);
+                    } : undefined}
                     style={(p) => ({
                         paddingVertical: 10,
                         paddingHorizontal: 10,

@@ -532,37 +532,6 @@ vi.mock('@/components/sessions/files/content/review/useChangedFilesReviewDiffLoa
     },
 }));
 
-vi.mock('@/components/sessions/files/content/review/useChangedFilesReviewFocusPath', () => ({
-    useChangedFilesReviewFocusPath: (input: any) => {
-        const [highlightedPath, setHighlightedPath] = React.useState<string | null>(null);
-        const appliedFocusPathRef = React.useRef<string | null>(null);
-        const expandPathRef = React.useRef(input.expandPath);
-        const scrollToPathRef = React.useRef(input.scrollToPath);
-        expandPathRef.current = input.expandPath;
-        scrollToPathRef.current = input.scrollToPath;
-
-        React.useEffect(() => {
-            const resolved = typeof input.focusPath === 'string' ? input.focusPath : null;
-            if (!resolved) {
-                appliedFocusPathRef.current = null;
-                return;
-            }
-            if (appliedFocusPathRef.current === resolved) return;
-            if (!Array.isArray(input.reviewFiles) || !input.reviewFiles.some((f: any) => f.fullPath === resolved)) return;
-            appliedFocusPathRef.current = resolved;
-            setHighlightedPath(resolved);
-            expandPathRef.current(resolved);
-            const scrollTimer = setTimeout(() => scrollToPathRef.current(resolved), 50);
-            const clearTimer = setTimeout(() => setHighlightedPath(null), 8000);
-            return () => {
-                clearTimeout(scrollTimer);
-                clearTimeout(clearTimer);
-            };
-        }, [input.focusPath, input.reviewFiles]);
-
-        return highlightedPath;
-    },
-}));
 
 vi.mock('@/components/sessions/files/content/review/useScmDiffExpandedKeys', () => ({
     useScmDiffExpandedKeys: (input: any) => {

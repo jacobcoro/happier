@@ -91,6 +91,11 @@ export function resolveActivityAttentionSessions(params: Readonly<{
         if (seenSessionIds.has(session.id)) return;
         seenSessionIds.add(session.id);
         const canonical = sessionsById.get(session.id) ?? session;
+        // Archived sessions belong only to the archived surface. Keep this
+        // exclusion in the shared attention source so inbox, badges, and
+        // native activity consumers cannot independently re-promote them from
+        // stale pending/unread fields.
+        if (session.archivedAt != null || canonical.archivedAt != null) return;
         if (!isUserFacingSession(canonical)) return;
         resolvedSessions.push(canonical);
     };
@@ -117,6 +122,7 @@ export function resolveActivityAttentionSessionsFromRecords(params: Readonly<{
         if (seenSessionIds.has(session.id)) return;
         seenSessionIds.add(session.id);
         const canonical = params.sessionsById[session.id] ?? session;
+        if (session.archivedAt != null || canonical.archivedAt != null) return;
         if (!isUserFacingSession(canonical)) return;
         resolvedSessions.push(canonical);
     };

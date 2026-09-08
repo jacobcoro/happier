@@ -555,7 +555,7 @@ describe('useFilesScmOperations integration', () => {
         await hook.unmount();
     });
 
-    it('keeps virtual commit selection when post-commit refresh fails', async () => {
+    it('clears committed virtual selection when only the post-commit refresh fails', async () => {
         const workspace = mkdtempSync(join(tmpdir(), 'happier-ui-hook-atomic-selection-refresh-fail-'));
         initRepo(workspace);
         writeFileSync(join(workspace, 'a.txt'), 'base-a\n');
@@ -597,7 +597,7 @@ describe('useFilesScmOperations integration', () => {
         });
 
         expect(git(workspace, ['show', '--pretty=', '--name-only', 'HEAD'])).toBe('a.txt');
-        expect(storage.getState().getSessionProjectScmCommitSelectionPaths(sessionId)).toEqual(['a.txt']);
+        expect(storage.getState().getSessionProjectScmCommitSelectionPaths(sessionId)).toEqual([]);
         expect(modalAlert).toHaveBeenCalledTimes(1);
 
         await hook.unmount();

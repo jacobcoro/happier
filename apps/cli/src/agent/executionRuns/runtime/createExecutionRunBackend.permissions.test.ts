@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createExecutionRunPermissionHandler } from './createExecutionRunBackend';
 
@@ -25,11 +25,28 @@ describe('createExecutionRunPermissionHandler', () => {
     });
   });
 
-  it('fails closed for write-like tools in the admitted default mode', async () => {
-    const handler = createExecutionRunPermissionHandler({ backendId: 'codex', permissionMode: 'default' });
-    await expect(handler.handleToolCall('tool-default', 'bash', { command: 'echo write' })).resolves.toEqual({
-      decision: 'denied',
+  it('routes write-like tools in the admitted default mode through the session permission owner', async () => {
+    const interactiveHandler = {
+      handleToolCall: vi.fn(async () => ({ decision: 'approved' as const })),
+      cancelPendingRequest: vi.fn(() => true),
+    };
+    const handler = createExecutionRunPermissionHandler({
+      backendId: 'codex',
+      permissionMode: 'default',
+      interactiveHandler,
     });
+
+    await expect(handler.handleToolCall('tool-default', 'bash', { command: 'echo write' })).resolves.toEqual({
+      decision: 'approved',
+    });
+    expect(interactiveHandler.handleToolCall).toHaveBeenCalledWith(
+      'tool-default',
+      'bash',
+      { command: 'echo write' },
+      { permissionMode: 'default' },
+    );
+    expect(handler.cancelPendingRequest?.('tool-default', 'run cancelled')).toBe(true);
+    expect(interactiveHandler.cancelPendingRequest).toHaveBeenCalledWith('tool-default', 'run cancelled');
   });
 
   it('auto-approves read-like ACP tools for read-only execution runs', async () => {

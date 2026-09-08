@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { TerminalHostAdapter } from '@/integrations/terminalHost/_types';
 import type { Credentials } from '@/persistence';
@@ -53,6 +53,57 @@ function createMetadata(overrides: Record<string, unknown> = {}): Record<string,
 }
 
 describe('recoverStrandedTerminalControlServiceability', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ['ESRCH', { status: 'stopped' }],
+    ['EPERM', { status: 'incomplete', reason: 'tracked_runner_absent' }],
+    ['EACCES', { status: 'incomplete', reason: 'tracked_runner_absent' }],
+    [null, { status: 'incomplete', reason: 'tracked_runner_absent' }],
+  ])('requires positive process death for a plain session (%s)', async (code, expected) => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      if (code) throw Object.assign(new Error('process probe'), { code });
+      return true;
+    });
+    const sessionMetadata = { machineId: 'machine-current', hostPid: 4321 };
+    const retire = vi.fn(async () => 'retired' as const);
+    await expect(recoverStrandedTerminalControlServiceability({
+      credentials,
+      happyHomeDir: '/happy-home',
+      fetchSession: async () => createRawSession(sessionMetadata),
+      currentMachineId: 'machine-current',
+      sessionId: 'session-1',
+      loadTerminalHostAdapters: async () => ({}),
+      retireExactTerminalControlServiceability: retire,
+    })).resolves.toEqual(expected);
+    expect(retire).not.toHaveBeenCalled();
+  });
+
+  it('does not probe a remote, malformed, or attachment-bound plain runner', async () => {
+    const probe = vi.spyOn(process, 'kill');
+    for (const [machineId, pid, expectedAttachmentId, expected] of [
+      ['machine-other', 4321, undefined, null],
+      ['machine-current', undefined, undefined, { status: 'incomplete', reason: 'missing_topology_proof' }],
+      ['machine-current', 0, undefined, { status: 'incomplete', reason: 'missing_topology_proof' }],
+      ['machine-current', '4321', undefined, { status: 'incomplete', reason: 'missing_topology_proof' }],
+      ['machine-current', 4321, 'attachment-old', { status: 'incomplete', reason: 'attachment_mismatch' }],
+    ] as const) {
+      const sessionMetadata = { machineId, hostPid: pid, terminal: { mode: 'plain' } };
+      await expect(recoverStrandedTerminalControlServiceability({
+      credentials,
+      happyHomeDir: '/happy-home',
+      fetchSession: async () => createRawSession(sessionMetadata),
+        currentMachineId: 'machine-current',
+        sessionId: 'session-1',
+        expectedAttachmentId,
+        loadTerminalHostAdapters: async () => ({}),
+        retireExactTerminalControlServiceability: async () => 'retired',
+      })).resolves.toEqual(expected);
+    }
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+
   it('retires exact stranded serviceability only after the canonical host probe proves death', async () => {
     const evaluateLiveness = vi.fn(async () => ({ paneAlive: false, paneDead: true, observedAt: 200 }));
     const retireExactTerminalControlServiceability = vi.fn(async () => 'retired' as const);
@@ -128,7 +179,11 @@ describe('recoverStrandedTerminalControlServiceability', () => {
         loadTerminalHostAdapters: async () => ({ tmux: createAdapter(evaluateLiveness) }),
         fetchSession: async () => createRawSession(metadata),
         retireExactTerminalControlServiceability: retire,
-      })).resolves.toBeNull();
+      })).resolves.toEqual(
+        (metadata.terminal as { mode?: string } | undefined)?.mode === 'plain'
+          ? { status: 'incomplete', reason: 'missing_topology_proof' }
+          : null,
+      );
     }
     expect(evaluateLiveness).not.toHaveBeenCalled();
     expect(retire).not.toHaveBeenCalled();

@@ -1,12 +1,37 @@
 import React from 'react';
-import { FlatList, View } from 'react-native';
+import { FlatList, Platform, View } from 'react-native';
 
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import type { CodeLinesSyntaxHighlightingConfig } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 
 import { CodeLineRow } from './CodeLineRow';
+import { CodeLinesReadingAnchor, type NativeCodeReadingAnchor } from './CodeLinesReadingAnchor';
 import { resolveEffectiveSyntaxHighlighting } from './resolveEffectiveSyntaxHighlighting';
 import { buildCodeLineRange, isCodeLineRangeSelectionEvent } from '../interactions/resolveCodeLineRangeSelection';
+
+export type CodeLinesExternalScrollView = Readonly<{
+    scrollRef: React.RefObject<{ scrollTo: (options: { y: number; animated: boolean }) => void } | null>;
+    contentRef?: React.RefObject<View | null>;
+    viewportRef?: React.RefObject<View | null>;
+    offsetRef: React.RefObject<number>;
+}>;
+
+function measureExternalLayout(
+    owner: CodeLinesExternalScrollView,
+    row: View,
+    measured: (x: number, y: number, width: number, height: number) => void,
+): void {
+    const content = owner.contentRef?.current;
+    if (content) {
+        row.measureLayout(content, measured);
+        return;
+    }
+    owner.viewportRef?.current?.measureInWindow((_x, viewportY) => {
+        row.measureInWindow((x, y, width, height) => {
+            measured(x, y - viewportY + owner.offsetRef.current, width, height);
+        });
+    });
+}
 
 export type CodeLinesViewProps = {
     lines: readonly CodeLine[];
@@ -26,6 +51,9 @@ export type CodeLinesViewProps = {
     showPrefix?: boolean;
     syntaxHighlighting?: CodeLinesSyntaxHighlightingConfig;
     scrollToLineId?: string;
+    /** Inline native viewers delegate measured targets to their enclosing scroll owner. */
+    onScrollToLine?: (windowY: number) => void;
+    externalScrollView?: CodeLinesExternalScrollView;
     highlightLineId?: string;
     highlightLineIds?: ReadonlySet<string>;
     testID?: string;
@@ -56,6 +84,47 @@ export function CodeLinesViewCore(
         advancedTokensRevision?: number;
     }>
 ) {
+    const lineRefs = React.useRef(new Map<string, View>());
+    const externalRowLayouts = React.useRef(new Map<string, { y: number; height: number }>());
+    const measureExternalRow = React.useCallback((id: string) => {
+        const owner = props.externalScrollView;
+        const row = lineRefs.current.get(id);
+        if (Platform.OS === 'web' || !owner || !row) return;
+        measureExternalLayout(owner, row, (_x, y, _width, height) => {
+            if (lineRefs.current.get(id) === row) externalRowLayouts.current.set(id, { y, height });
+        });
+    }, [props.externalScrollView]);
+    const lineNativeIdPrefix = React.useId();
+    const completedScrollTarget = React.useRef<string | null>(null);
+    const contentRef = React.useRef<View | null>(null);
+    const nativeReadingAnchor = React.useRef<NativeCodeReadingAnchor | null>(null);
+    const pendingReadingScroll = React.useRef<NativeCodeReadingAnchor | null>(null);
+    const nativeScrollOffset = React.useRef(0);
+    const readingLinesRef = React.useRef(props.lines);
+    readingLinesRef.current = props.lines;
+    const measureNativeReadingAnchor = React.useCallback(() => {
+        if (Platform.OS === 'web') return;
+        const anchor = nativeReadingAnchor.current;
+        if (!anchor) return;
+        const lines = readingLinesRef.current;
+        const line = lines[anchor.index];
+        const row = line ? lineRefs.current.get(line.id) : null;
+        const scrollView = listRef.current?.getNativeScrollRef?.();
+        if (!row || !scrollView || !('measureInWindow' in scrollView)) return;
+        scrollView.measureInWindow((_x, viewportY) => {
+            row.measureInWindow((_rowX, rowY) => {
+                if (nativeReadingAnchor.current !== anchor || readingLinesRef.current !== lines) return;
+                nativeReadingAnchor.current = { index: anchor.index, offset: rowY - viewportY };
+            });
+        });
+    }, []);
+    const onViewableItemsChanged = React.useCallback(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
+        const index = viewableItems.find((item) => item.index !== null)?.index;
+        if (index !== undefined && index !== null) {
+            nativeReadingAnchor.current = { index, offset: 0 };
+            measureNativeReadingAnchor();
+        }
+    }, [measureNativeReadingAnchor]);
     const selected = props.selectedLineIds ?? EMPTY_LINE_ID_SET;
     const highlighted = props.highlightLineIds ?? EMPTY_LINE_ID_SET;
     const paddingHorizontal = props.contentPaddingHorizontal ?? 0;
@@ -122,7 +191,15 @@ export function CodeLinesViewCore(
     }, [props.lines, props.syntaxHighlighting]);
 
     const renderLine = React.useCallback((item: CodeLine, index: number) => (
-        <View>
+        <View
+            collapsable={false}
+            nativeID={`${lineNativeIdPrefix}-${item.id}`}
+            onLayout={props.externalScrollView ? () => measureExternalRow(item.id) : undefined}
+            ref={(node) => {
+                if (node) lineRefs.current.set(item.id, node);
+                else lineRefs.current.delete(item.id);
+            }}
+        >
             <CodeLineRow
                 line={item}
                 selected={selected.has(item.id)}
@@ -144,6 +221,9 @@ export function CodeLinesViewCore(
             {props.renderAfterLine ? props.renderAfterLine(item) : null}
         </View>
     ), [
+        lineNativeIdPrefix,
+        measureExternalRow,
+        props.externalScrollView,
         effectiveSyntaxHighlighting,
         highlighted,
         onBeginLineRangeSelection,
@@ -196,9 +276,12 @@ export function CodeLinesViewCore(
     }, [estimatedRowHeight]);
 
     React.useEffect(() => {
-        if (scrollIndex < 0) return;
         const targetId = props.scrollToLineId;
-        if (!targetId) return;
+        if (!targetId) {
+            completedScrollTarget.current = null;
+            return;
+        }
+        if (scrollIndex < 0 || completedScrollTarget.current === targetId) return;
         const firstLineId = props.lines[0]?.id ?? null;
 
         let cancelled = false;
@@ -206,7 +289,7 @@ export function CodeLinesViewCore(
         const tryScrollIntoView = (): boolean => {
             if (typeof document === 'undefined') return false;
             // React Native Web maps `nativeID` to DOM `id`.
-            const el = (document as any)?.getElementById?.(String(targetId));
+            const el = (document as any)?.getElementById?.(`${lineNativeIdPrefix}-${targetId}`);
             if (!el) return false;
             if (typeof el.scrollIntoView !== 'function') return false;
             try {
@@ -220,8 +303,8 @@ export function CodeLinesViewCore(
         const tryScrollDomOffset = (): boolean => {
             if (typeof document === 'undefined') return false;
             const doc: any = document as any;
-            const fallbackAnchor = doc?.getElementById?.(String(targetId))
-                ?? (firstLineId ? doc?.getElementById?.(String(firstLineId)) : null);
+            const fallbackAnchor = doc?.getElementById?.(`${lineNativeIdPrefix}-${targetId}`)
+                ?? (firstLineId ? doc?.getElementById?.(`${lineNativeIdPrefix}-${firstLineId}`) : null);
             if (!fallbackAnchor) return false;
 
             let el = fallbackAnchor.parentElement;
@@ -257,15 +340,40 @@ export function CodeLinesViewCore(
 
         const attemptScroll = () => {
             if (cancelled) return;
+            pendingReadingScroll.current = null;
+            if (!virtualized && typeof document === 'undefined') {
+                const row = lineRefs.current.get(targetId);
+                const owner = props.externalScrollView;
+                if (row && owner) {
+                    measureExternalLayout(owner, row, (_x, y) => {
+                        if (cancelled) return;
+                        const scrollY = Math.max(0, y);
+                        completedScrollTarget.current = targetId;
+                        owner.offsetRef.current = scrollY;
+                        owner.scrollRef.current?.scrollTo({ y: scrollY, animated: true });
+                    });
+                    return;
+                }
+                if (!props.onScrollToLine) return;
+                row?.measureInWindow((_x, y) => {
+                    if (cancelled) return;
+                    completedScrollTarget.current = targetId;
+                    props.onScrollToLine?.(y);
+                });
+                return;
+            }
             // Defer until after layout to avoid "no item at index" on first paint.
             try {
-                listRef.current?.scrollToIndex({ index: scrollIndex, viewPosition: 0.25, animated: true });
+                if (listRef.current) {
+                    listRef.current.scrollToIndex({ index: scrollIndex, viewPosition: 0.25, animated: true });
+                    completedScrollTarget.current = targetId;
+                }
             } catch {
                 // ignore
             }
             // React Native Web sometimes fails to forward FlatList refs; fall back to DOM scrollTop.
-            tryScrollDomOffset();
-            tryScrollIntoView();
+            const offsetScrolled = tryScrollDomOffset();
+            if (tryScrollIntoView() || offsetScrolled) completedScrollTarget.current = targetId;
         };
 
         let attempts = 0;
@@ -285,7 +393,7 @@ export function CodeLinesViewCore(
             cancelled = true;
             clearTimeout(timer);
         };
-    }, [estimatedRowHeight, props.lines, props.scrollToLineId, scrollIndex]);
+    }, [estimatedRowHeight, lineNativeIdPrefix, props.lines, props.externalScrollView, props.onScrollToLine, props.scrollToLineId, scrollIndex, virtualized]);
 
     // FlatList is a PureComponent: when behavior depends on props outside `data`, we must provide `extraData`
     // to ensure rows get re-rendered. This matters for "selected" state and inline review-comment composers.
@@ -324,9 +432,64 @@ export function CodeLinesViewCore(
         wrapLines,
     ]);
 
+    const preserveReadingAnchor = (children: React.ReactNode) => (
+        <CodeLinesReadingAnchor
+            lines={props.lines}
+            viewId={lineNativeIdPrefix}
+            scrollToLineId={props.scrollToLineId}
+            getRoot={() => virtualized ? listRef.current?.getNativeScrollRef?.() : contentRef.current}
+            nativeAnchor={Platform.OS === 'web' ? undefined : nativeReadingAnchor}
+            getNativeAnchor={!virtualized && props.externalScrollView ? (lines) => {
+                const scrollY = props.externalScrollView!.offsetRef.current;
+                const first = lines[0] ? externalRowLayouts.current.get(lines[0].id) : null;
+                // Inline siblings share one viewport: only its top passage owns restoration.
+                if (!first || scrollY < first.y) return null;
+                const index = lines.findIndex((line) => {
+                    const layout = externalRowLayouts.current.get(line.id);
+                    return layout !== undefined && layout.y + layout.height > scrollY;
+                });
+                const layout = index >= 0 ? externalRowLayouts.current.get(lines[index].id) : null;
+                return layout ? { index, offset: layout.y - scrollY } : null;
+            } : undefined}
+            scrollToIndex={virtualized ? (index, offset) => {
+                pendingReadingScroll.current = { index, offset };
+                const lines = props.lines;
+                const target = lines[index];
+                const row = target ? lineRefs.current.get(target.id) : null;
+                const scrollView = listRef.current?.getNativeScrollRef?.();
+                if (Platform.OS !== 'web' && row && scrollView && 'measureInWindow' in scrollView) {
+                    scrollView.measureInWindow((_x, viewportY) => {
+                        row.measureInWindow((_rowX, rowY) => {
+                            if (readingLinesRef.current !== lines) return;
+                            const nextOffset = Math.max(0, nativeScrollOffset.current + rowY - viewportY - offset);
+                            nativeScrollOffset.current = nextOffset;
+                            listRef.current?.scrollToOffset({ offset: nextOffset, animated: false });
+                        });
+                    });
+                } else {
+                    listRef.current?.scrollToIndex({ index, viewOffset: offset, animated: false });
+                }
+            } : props.externalScrollView ? (index, offset) => {
+                const owner = props.externalScrollView;
+                const line = props.lines[index];
+                const row = line ? lineRefs.current.get(line.id) : null;
+                if (!owner || !row || !line) return;
+                measureExternalLayout(owner, row, (_x, y, _width, height) => {
+                    if (readingLinesRef.current !== props.lines) return;
+                    externalRowLayouts.current.set(line.id, { y, height });
+                    const scrollY = Math.max(0, y - offset);
+                    owner.offsetRef.current = scrollY;
+                    owner.scrollRef.current?.scrollTo({ y: scrollY, animated: false });
+                });
+            } : undefined}
+        >
+            {children}
+        </CodeLinesReadingAnchor>
+    );
+
     if (!virtualized) {
-        return (
-            <View style={{ paddingHorizontal, paddingVertical }}>
+        return preserveReadingAnchor(
+            <View ref={contentRef} style={{ paddingHorizontal, paddingVertical }}>
                 {props.lines.map((line, index) => (
                     <React.Fragment key={line.id}>
                         {renderLine(line, index)}
@@ -337,7 +500,7 @@ export function CodeLinesViewCore(
         );
     }
 
-    return (
+    return preserveReadingAnchor(
         <FlatList
             ref={(node) => {
                 // react-test-renderer does not provide a stable ref object; we store it manually.
@@ -356,21 +519,30 @@ export function CodeLinesViewCore(
             ListFooterComponent={listFooterComponent}
             onLayout={props.onLayout}
             onContentSizeChange={props.onContentSizeChange}
-            onScroll={props.onScroll}
+            onViewableItemsChanged={onViewableItemsChanged}
+            onScroll={(event) => {
+                nativeScrollOffset.current = event.nativeEvent.contentOffset.y;
+                measureNativeReadingAnchor();
+                props.onScroll?.(event);
+            }}
             scrollEventThrottle={props.scrollEventThrottle}
             onScrollToIndexFailed={(info) => {
+                const readingTarget = pendingReadingScroll.current?.index === info.index ? pendingReadingScroll.current : null;
+                pendingReadingScroll.current = null;
                 // Best-effort retry: FlatList can fail if measurement hasn't completed yet.
                 try {
                     listRef.current?.scrollToOffset({
-                        offset: info.averageItemLength * info.index,
-                        animated: true,
+                        offset: info.averageItemLength * info.index - (readingTarget?.offset ?? 0),
+                        animated: !readingTarget,
                     });
                 } catch {
                     // ignore
                 }
                 setTimeout(() => {
                     try {
-                        listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.25, animated: true });
+                        listRef.current?.scrollToIndex(readingTarget
+                            ? { index: info.index, viewOffset: readingTarget.offset, animated: false }
+                            : { index: info.index, viewPosition: 0.25, animated: true });
                     } catch {
                         // ignore
                     }

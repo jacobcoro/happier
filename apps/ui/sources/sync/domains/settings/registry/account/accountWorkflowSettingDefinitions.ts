@@ -43,6 +43,7 @@ export const ACCOUNT_WORKFLOW_SETTING_DEFINITIONS = defineSettingDefinitions({
                 pushEnabled: value.pushEnabled,
                 ready: value.ready,
                 readyIncludeMessageText: value.readyIncludeMessageText,
+                requestIncludeMessageText: value.requestIncludeMessageText,
                 permissionRequest: value.permissionRequest,
                 userActionRequest: value.userActionRequest,
                 foregroundBehavior: value.foregroundBehavior,

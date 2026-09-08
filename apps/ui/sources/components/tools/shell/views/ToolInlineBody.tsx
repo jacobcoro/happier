@@ -12,7 +12,7 @@ import { ToolHeaderActionsContext } from '@/components/tools/shell/presentation/
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
 import { ToolSectionSpacingProvider, ToolSectionView } from '@/components/tools/shell/presentation/ToolSectionView';
 import { CodeView } from '@/components/ui/media/CodeView';
-import { maybeParseJson } from '@/components/tools/normalization/parse/parseJson';
+import { maybeParseJson } from '@happier-dev/protocol';
 import { Text, TextSelectabilityScope } from '@/components/ui/text/Text';
 import { parseToolUseError } from '@/utils/errors/toolErrorParser';
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';

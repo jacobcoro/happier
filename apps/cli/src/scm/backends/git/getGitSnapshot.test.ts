@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as scmRuntime from '../../runtime';
+import { gitDiffFile } from './operations/readOperations';
 import type { ScmBackendContext } from '../../types';
 import { getGitSnapshot, getGitWorktreesEnrichment } from './repository';
 
@@ -53,6 +55,85 @@ describe('getGitSnapshot — worktree status enrichment wiring', () => {
 
     afterEach(async () => {
         await Promise.all(cleanups.map((c) => c().catch(() => undefined)));
+    });
+
+    it.each(['included', 'pending'] as const)('marks tracked statistics incomplete when %s numstat fails', async (area) => {
+        const repoRoot = await initRepoWithCommit('git-snap-failed-stats-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        await writeFile(join(repoRoot, 'other.txt'), 'original\n');
+        await runGit(repoRoot, ['add', 'other.txt']);
+        await runGit(repoRoot, ['commit', '-m', 'add other']);
+        await writeFile(join(repoRoot, 'README.md'), 'staged\n');
+        await runGit(repoRoot, ['add', 'README.md']);
+        await writeFile(join(repoRoot, 'README.md'), 'pending\n');
+        await writeFile(join(repoRoot, 'new.txt'), 'new\n');
+        await writeFile(join(repoRoot, 'other.txt'), 'other\n');
+        if (area === 'pending') await runGit(repoRoot, ['add', 'other.txt']);
+        const originalCommand = scmRuntime.runScmCommand;
+        const command = vi.spyOn(scmRuntime, 'runScmCommand').mockImplementation((input) => {
+            if (input.args.includes('--numstat') && input.args.includes('--cached') === (area === 'included')) {
+                return Promise.resolve({ success: false, stdout: '', stderr: 'diff failed', exitCode: 1 });
+            }
+            return originalCommand(input);
+        });
+        try {
+            const response = await getGitSnapshot({ context: buildContext(repoRoot) });
+            expect(response.success).toBe(true);
+            expect.soft(response.snapshot?.entries.find((entry) => entry.path === 'README.md')?.stats.isComplete).toBe(false);
+            expect.soft(response.snapshot?.entries.find((entry) => entry.path === 'new.txt')?.stats.isComplete).toBeUndefined();
+            expect.soft(response.snapshot?.entries.find((entry) => entry.path === 'other.txt')?.stats.isComplete).toBeUndefined();
+            expect.soft(response.snapshot?.totals.isComplete).toBe(false);
+        } finally {
+            command.mockRestore();
+        }
+    });
+
+    it('counts untracked text lines without inventing a trailing line or classifying skipped text as binary', async () => {
+        const repoRoot = await initRepoWithCommit('git-snap-untracked-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        await writeFile(join(repoRoot, 'one.txt'), 'hello\n');
+        await writeFile(join(repoRoot, 'large.txt'), 'x'.repeat(5_000_001));
+        const response = await getGitSnapshot({ context: buildContext(repoRoot) });
+        expect(response.success).toBe(true);
+        expect.soft(response.snapshot?.entries.find((entry) => entry.path === 'one.txt')?.stats.pendingAdded).toBe(1);
+        expect.soft(response.snapshot?.entries.find((entry) => entry.path === 'large.txt')?.stats.isBinary).toBe(false);
+        expect.soft(response.snapshot?.entries.find((entry) => entry.path === 'large.txt')?.stats).toMatchObject({ isComplete: false });
+        expect.soft(response.snapshot?.totals).toMatchObject({ isComplete: false });
+    });
+
+    it('uses porcelain untracked paths without a second repository enumeration', async () => {
+        const repoRoot = await initRepoWithCommit('git-snap-enumeration-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        await writeFile(join(repoRoot, 'new.txt'), 'hello');
+        const command = vi.spyOn(scmRuntime, 'runScmCommand');
+        try {
+            const response = await getGitSnapshot({ context: buildContext(repoRoot) });
+            expect(response.snapshot?.entries.find((entry) => entry.path === 'new.txt')?.stats.pendingAdded).toBe(1);
+            expect(command.mock.calls.filter(([input]) => input.args[0] === 'ls-files')).toHaveLength(0);
+        } finally {
+            command.mockRestore();
+        }
+    });
+
+    it('keeps included-only diffs empty for untracked files and reads both areas in an unborn repository', async () => {
+        const repoRoot = await makeTempDir('git-diff-unborn-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        await runGit(repoRoot, ['init']);
+        await writeFile(join(repoRoot, 'new.txt'), 'hello\n');
+        const context = buildContext(repoRoot);
+        expect.soft(await gitDiffFile({ context, request: { path: 'new.txt', area: 'included' } })).toEqual({ success: true, diff: '' });
+        expect.soft(await gitDiffFile({ context, request: { path: 'new.txt', area: 'both' } })).toMatchObject({ success: true, diff: expect.stringContaining('+hello') });
+        await runGit(repoRoot, ['add', 'new.txt']);
+        await writeFile(join(repoRoot, 'new.txt'), 'latest\n');
+        expect.soft(await gitDiffFile({ context, request: { path: 'new.txt', area: 'both' } })).toMatchObject({ success: true, diff: expect.stringContaining('+latest') });
+    });
+
+    it.each(['file\tname.txt', 'file\nname.txt', 'café.txt', 'literal[1].txt'])('reads actual untracked filenames %j', async (path) => {
+        if (process.platform === 'win32' && /[\t\n]/.test(path)) return;
+        const repoRoot = await initRepoWithCommit('git-diff-literal-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        await writeFile(join(repoRoot, path), 'hello\n');
+        expect(await gitDiffFile({ context: buildContext(repoRoot), request: { path, area: 'pending' } })).toMatchObject({ success: true, diff: expect.stringContaining('+hello') });
     });
 
     it('omits per-worktree changeCount and lastActivityAt when includeWorktreeStatus is not set', async () => {

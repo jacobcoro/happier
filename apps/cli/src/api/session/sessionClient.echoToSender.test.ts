@@ -5,6 +5,7 @@ import {
   type ApiSessionSocketStub,
   createApiSessionSocketStub,
 } from '@/testkit/backends/apiSessionSocketHarness';
+import { ApiSessionClient } from './sessionClient';
 
 let sessionSocketStub: ApiSessionSocketStub | null = null;
 let userSocketStub: ApiSessionSocketStub | null = null;
@@ -47,22 +48,18 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
 
 describe('ApiSessionClient socket message commits', () => {
   it('requests sender echo so broadcasts can clear pending localIds', async () => {
-    vi.resetModules();
     sessionSocketStub = createApiSessionSocketStub({
       connected: true,
       emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1' },
     });
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
 
-    const { ApiSessionClient } = await import('./sessionClient');
-
     const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
     await client.sendUserTextMessageCommitted('hello', { localId: 'l1' });
 
-    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledTimes(1);
-    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
-      'message',
-      expect.objectContaining({ echoToSender: true, messageRole: 'user' }),
-    );
+    const messageEmits = sessionSocketStub.emitWithAck.mock.calls.filter(([event]) => event === 'message');
+    expect(messageEmits).toEqual([
+      ['message', expect.objectContaining({ echoToSender: true, messageRole: 'user' })],
+    ]);
   });
 });

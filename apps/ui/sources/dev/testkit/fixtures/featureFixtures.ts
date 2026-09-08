@@ -85,8 +85,10 @@ const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
         connectedServices: {
             enabled: true,
             quotas: { enabled: true },
+            subscription: { enabled: false },
             accountGroups: { enabled: false },
             accountFallback: { enabled: false },
+            autoQuotaReset: { enabled: false },
         },
         updates: {
             ota: { enabled: true },

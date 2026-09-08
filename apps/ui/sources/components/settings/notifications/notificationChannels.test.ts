@@ -30,8 +30,18 @@ describe('notificationChannels helpers', () => {
                 signingSecret: null,
                 topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: true,
             },
         ]);
+    });
+
+    it('disables webhook request previews while retaining its topics', () => {
+        const channels = addWebhookNotificationChannel({ channels: [], url: 'https://hooks.example.test/private' });
+        const next = updateNotificationChannelById({ channels, channelId: channels[0].id,
+            patch: { requestIncludeMessageText: false } });
+        expect(channels[0].requestIncludeMessageText).toBe(true);
+        expect(next[0].requestIncludeMessageText).toBe(false);
+        expect(next[0].topics).toEqual(channels[0].topics);
     });
 
     it('updates a webhook channel without changing other channels', () => {
@@ -44,6 +54,7 @@ describe('notificationChannels helpers', () => {
                     enabled: true,
                     topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: true,
+                    requestIncludeMessageText: false,
                 },
                 {
                     v: 1,
@@ -54,6 +65,7 @@ describe('notificationChannels helpers', () => {
                     signingSecret: null,
                     topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: false,
                 },
             ],
             channelId: 'webhook-primary',
@@ -75,6 +87,7 @@ describe('notificationChannels helpers', () => {
                 enabled: true,
                 topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                 readyIncludeMessageText: true,
+                requestIncludeMessageText: false,
             },
             {
                 v: 1,
@@ -89,6 +102,7 @@ describe('notificationChannels helpers', () => {
                     userActionRequest: false,
                 },
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
         ]);
     });
@@ -105,6 +119,7 @@ describe('notificationChannels helpers', () => {
                     signingSecret: null,
                     topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: false,
                 },
             ],
             channelId: 'webhook-primary',
@@ -118,6 +133,7 @@ describe('notificationChannels helpers', () => {
             notifications: {
                 ...DEFAULT_NOTIFICATIONS_SETTINGS_V1,
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
             webhookChannels: [
                 {
@@ -132,6 +148,7 @@ describe('notificationChannels helpers', () => {
                         permissionRequest: false,
                     },
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: false,
                 },
             ],
         });
@@ -140,6 +157,7 @@ describe('notificationChannels helpers', () => {
             notificationsSettingsV1: {
                 ...DEFAULT_NOTIFICATIONS_SETTINGS_V1,
                 readyIncludeMessageText: false,
+                requestIncludeMessageText: false,
             },
             notificationChannelsV1: [
                 {
@@ -149,6 +167,7 @@ describe('notificationChannels helpers', () => {
                     enabled: true,
                     topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: false,
                 },
                 {
                     v: 1,
@@ -162,6 +181,7 @@ describe('notificationChannels helpers', () => {
                         permissionRequest: false,
                     },
                     readyIncludeMessageText: false,
+                    requestIncludeMessageText: false,
                 },
             ],
         });

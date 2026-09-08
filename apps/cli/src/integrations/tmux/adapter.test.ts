@@ -124,7 +124,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const spawnInTmux = vi.spyOn(tmux, 'spawnInTmux');
     vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
       returncode: 0,
-      stdout: '0\t12345\tclaude\n',
+      stdout: '0|12345|claude\n',
       stderr: '',
       command: [],
     });
@@ -184,7 +184,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
       returncode: 0,
-      stdout: '0\t12345\tclaude\n',
+      stdout: '0|12345|claude\n',
       stderr: '',
       command: [],
     });
@@ -214,7 +214,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const bufferName = loadArgs?.[2];
     expect(typeof bufferName).toBe('string');
     expect(calls.map((call) => call[0])).toEqual([
-      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}'],
+      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}|#{pane_pid}|#{pane_current_command}'],
       ['display-message', '-p', '#{cursor_x}\t#{cursor_y}'],
       ['display-message', '-p', '#{cursor_x}\t#{cursor_y}'],
       ['load-buffer', '-b', bufferName, '-'],
@@ -228,7 +228,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
       returncode: 0,
-      stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+      stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
       stderr: '',
       command: [...args],
     }));
@@ -270,7 +270,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       order.push(args[0] ?? '');
       return {
         returncode: 0,
-        stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+        stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
         stderr: '',
         command: [...args],
       };
@@ -306,7 +306,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
       returncode: 0,
-      stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+      stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
       stderr: '',
       command: [...args],
     }));
@@ -335,7 +335,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
       returncode: 0,
-      stdout: '0\t12345\tclaude\n',
+      stdout: '0|12345|claude\n',
       stderr: '',
       command: [],
     });
@@ -362,7 +362,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const calls = executeTmuxCommand.mock.calls;
     const bufferName = calls[1]?.[0]?.[2];
     expect(calls.map((call) => call[0])).toEqual([
-      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}'],
+      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}|#{pane_pid}|#{pane_current_command}'],
       ['load-buffer', '-b', bufferName, '-'],
       ['paste-buffer', '-p', '-r', '-d', '-b', bufferName, '-t', 'happy:claude.1'],
       ['send-keys', '-t', 'happy:claude.1', 'C-m'],
@@ -383,7 +383,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
       returncode: 0,
-      stdout: '0\t12345\tclaude\n',
+      stdout: '0|12345|claude\n',
       stderr: '',
       command: [],
     });
@@ -410,7 +410,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const calls = executeTmuxCommand.mock.calls;
     const bufferName = calls[1]?.[0]?.[2];
     expect(calls.map((call) => call[0])).toEqual([
-      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}'],
+      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}|#{pane_pid}|#{pane_current_command}'],
       ['load-buffer', '-b', bufferName, '-'],
       ['paste-buffer', '-p', '-r', '-d', '-b', bufferName, '-t', 'happy:claude.1'],
       ['send-keys', '-t', 'happy:claude.1', 'C-m'],
@@ -432,7 +432,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       order.push(args[0] ?? '');
       return {
         returncode: 0,
-        stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+        stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
         stderr: '',
         command: [...args],
       };
@@ -478,7 +478,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
       returncode: 0,
-      stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+      stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
       stderr: '',
       command: [...args],
     }));
@@ -513,7 +513,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
       returncode: 0,
-      stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+      stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
       stderr: '',
       command: [...args],
     }));
@@ -551,7 +551,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
       returncode: 0,
-      stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+      stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
       stderr: '',
       command: [...args],
     }));
@@ -589,7 +589,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
       returncode: 0,
-      stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+      stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
       stderr: '',
       command: [...args],
     }));
@@ -639,7 +639,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       const tmux = new TmuxUtilities();
       const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
         returncode: 0,
-        stdout: '0\t12345\tclaude\n',
+        stdout: '0|12345|claude\n',
         stderr: '',
         command: [],
       });
@@ -665,7 +665,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       const calls = executeTmuxCommand.mock.calls;
       const bufferName = calls[1]?.[0]?.[2];
       expect(calls.map((call) => call[0])).toEqual([
-        ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}'],
+        ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}|#{pane_pid}|#{pane_current_command}'],
         ['load-buffer', '-b', bufferName, '-'],
         ['paste-buffer', '-p', '-r', '-d', '-b', bufferName, '-t', 'happy:claude.1'],
         ['send-keys', '-t', 'happy:claude.1', 'C-m'],
@@ -764,7 +764,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
       returncode: 0,
-      stdout: '1\t12345\tzsh\n',
+      stdout: '1|12345|zsh\n',
       stderr: '',
       command: [],
     });
@@ -834,7 +834,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
       returncode: args[0] === 'paste-buffer' ? 1 : 0,
-      stdout: args[0] === 'display-message' ? '0\t12345\tclaude\n' : '',
+      stdout: args[0] === 'display-message' ? '0|12345|claude\n' : '',
       stderr: args[0] === 'paste-buffer' ? 'tmux unavailable' : '',
       command: [...args],
     }));
@@ -869,7 +869,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => {
       if (args[0] === 'display-message') {
-        return { returncode: 0, stdout: '0\t12345\tclaude\n', stderr: '', command: [...args] };
+        return { returncode: 0, stdout: '0|12345|claude\n', stderr: '', command: [...args] };
       }
       return {
         returncode: args[0] === 'load-buffer' || args[0] === 'delete-buffer' ? 0 : 1,
@@ -913,7 +913,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => {
       (calls as string[][]).push([...args]);
       if (args[0] === 'display-message') {
-        return { returncode: 0, stdout: '0\t12345\tclaude\n', stderr: '', command: [...args] };
+        return { returncode: 0, stdout: '0|12345|claude\n', stderr: '', command: [...args] };
       }
       if (args[0] === 'load-buffer') {
         return new Promise((resolve) => {
@@ -955,7 +955,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       recoverable: true,
     });
     expect(calls).toEqual([
-      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}'],
+      ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}|#{pane_pid}|#{pane_current_command}'],
       ['load-buffer', '-b', calls[1]?.[2] ?? '', '-'],
       ['delete-buffer', '-b', calls[1]?.[2] ?? ''],
     ]);
@@ -965,7 +965,7 @@ describe('createTmuxTerminalHostAdapter', () => {
     const tmux = new TmuxUtilities();
     const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
       returncode: 0,
-      stdout: '0\t12345\tclaude\n',
+      stdout: '0|12345|claude\n',
       stderr: '',
       command: [],
     });
@@ -1007,8 +1007,8 @@ describe('createTmuxTerminalHostAdapter', () => {
       order.push(String(args[0]));
       return {
         returncode: args[0] === 'paste-buffer' ? 1 : 0,
-        stdout: args[0] === 'display-message' && args.includes('#{pane_dead}\t#{pane_pid}\t#{pane_current_command}')
-          ? '0\t12345\tclaude\n'
+        stdout: args[0] === 'display-message' && args.includes('#{pane_dead}|#{pane_pid}|#{pane_current_command}')
+          ? '0|12345|claude\n'
           : '',
         stderr: '',
         command: [],

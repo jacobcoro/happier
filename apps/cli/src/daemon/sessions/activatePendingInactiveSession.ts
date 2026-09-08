@@ -6,28 +6,28 @@ import { buildInactiveSessionResumeSpawnOptions } from '@/daemon/sessions/runtim
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 
-type PendingInactiveSessionActivationResult =
+type PendingSessionRuntimeActivationResult =
   | Readonly<{
       status: 'activated';
       runnerAcceptance?: Extract<SpawnSessionResult, { type: 'success' }>['runnerAcceptance'];
     }>
   | Readonly<{
       status: 'not-needed';
-      reason: 'active' | 'pending-resolved' | 'authorization-stale' | 'target-mismatch' | 'snapshot-stale' | 'spawn-ambiguous';
+      reason: 'pending-resolved' | 'authorization-stale' | 'target-mismatch' | 'snapshot-stale' | 'spawn-ambiguous';
     }>
   | Readonly<{
       status: 'rejected';
       reason: 'ineligible' | 'identity-unavailable' | 'spawn-rejected';
     }>;
 
-export async function activatePendingInactiveSession(params: Readonly<{
+export async function activatePendingSessionRuntime(params: Readonly<{
   credentials: Credentials;
   machineId: string;
   sessionId: string;
   requestId: string;
   pendingVersion: number;
   spawnSession: (options: NonNullable<ReturnType<typeof buildInactiveSessionResumeSpawnOptions>>) => Promise<SpawnSessionResult>;
-}>): Promise<PendingInactiveSessionActivationResult> {
+}>): Promise<PendingSessionRuntimeActivationResult> {
   const rawSession = await fetchSessionByIdCompat({
     token: params.credentials.token,
     sessionId: params.sessionId,
@@ -44,12 +44,12 @@ export async function activatePendingInactiveSession(params: Readonly<{
   ) {
     return { status: 'not-needed', reason: 'authorization-stale' };
   }
-  if (rawSession.active === true) {
-    return { status: 'not-needed', reason: 'active' };
-  }
+  // `active` is a relay projection, not runner liveness. After a daemon restart it can remain
+  // true while this machine tracks no consumer. The spawn owner below is the single authority:
+  // it adopts a serviceable runner and spawns only after proving one absent.
   const rejectTerminal = async (
-    reason: Extract<PendingInactiveSessionActivationResult, { status: 'rejected' }>['reason'],
-  ): Promise<PendingInactiveSessionActivationResult> => {
+    reason: Extract<PendingSessionRuntimeActivationResult, { status: 'rejected' }>['reason'],
+  ): Promise<PendingSessionRuntimeActivationResult> => {
     const report = await reportPendingSessionActivationFailure({
       token: params.credentials.token,
       sessionId: params.sessionId,
@@ -113,7 +113,6 @@ export async function activatePendingInactiveSession(params: Readonly<{
   ) {
     return { status: 'not-needed', reason: 'authorization-stale' };
   }
-  if (currentSession.active === true) return { status: 'not-needed', reason: 'active' };
   if (currentSession.archivedAt !== null && currentSession.archivedAt !== undefined) {
     return { status: 'not-needed', reason: 'authorization-stale' };
   }

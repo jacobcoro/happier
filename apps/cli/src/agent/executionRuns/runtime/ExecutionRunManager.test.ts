@@ -320,6 +320,63 @@ describe('ExecutionRunManager (review intent)', () => {
     expect(meta?.happier?.kind).toBe('review_findings.v2');
   });
 
+  it('enqueues opted-in parent completion through Session input without replacing tool-result metadata', async () => {
+    const sent: Array<{ body: unknown; meta?: Record<string, unknown> }> = [];
+    const parentInputs: Array<{ text: string; meta?: Record<string, unknown> }> = [];
+    const manager = new ExecutionRunManager({
+      parentProvider: 'claude',
+      cwd: process.cwd(),
+      createBackend: () => createDelayedJsonBackend(JSON.stringify({ findings: [], summary: 'done' }), 1),
+      sendAcp: (_provider: string, body: ACPMessageData, opts?: { meta?: Record<string, unknown> }) => {
+        sent.push({ body, meta: opts?.meta });
+      },
+      enqueueParentSessionInput: async (input) => {
+        parentInputs.push(input);
+      },
+      getNowMs: () => 1_700_000_000_000,
+    });
+
+    const silent = await manager.start({
+      sessionId: 'parent_session_0',
+      intent: 'review',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      instructions: 'Review this repo.',
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable',
+      runClass: 'bounded',
+      ioMode: 'request_response',
+    });
+    await manager.waitForTerminal(silent.runId);
+    expect(parentInputs).toHaveLength(0);
+
+    const started = await manager.start({
+      sessionId: 'parent_session_1',
+      intent: 'review',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      instructions: 'Review this repo.',
+      permissionMode: 'read_only',
+      retentionPolicy: 'resumable',
+      runClass: 'bounded',
+      ioMode: 'request_response',
+      accountSettings: { executionRunsNotifyParentOnCompletionDefault: true },
+    });
+    await manager.waitForTerminal(started.runId);
+
+    expect(parentInputs).toHaveLength(1);
+    expect(parentInputs[0]?.text).toContain(started.runId);
+    expect((parentInputs[0]?.meta as any)?.happierStructuredInputV1).toMatchObject({
+      v: 1,
+      executionRunCompletion: {
+        v: 1,
+        runId: started.runId,
+        status: 'succeeded',
+        canInspect: true,
+      },
+    });
+    const toolResult = [...sent].reverse().find((m) => (m.body as any)?.type === 'tool-result');
+    expect((toolResult?.meta as any)?.happier?.kind).toBe('review_findings.v2');
+  });
+
   it('prefers a per-run bounded timeout over the manager default for bounded review runs', async () => {
     const manager = new ExecutionRunManager({
       parentProvider: 'claude',

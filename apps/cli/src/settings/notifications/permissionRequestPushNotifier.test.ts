@@ -10,6 +10,24 @@ describe('PermissionRequestPushNotifier', () => {
     vi.useRealTimers();
   });
 
+  it('delivers full questions and choices through the notifier', async () => {
+    const sendToAllDevicesAsync = vi.fn<PermissionRequestPushSender['sendToAllDevicesAsync']>(async () => {});
+    const notifier = new PermissionRequestPushNotifier({
+      pushSender: { sendToAllDevicesAsync },
+      getSettings: () => accountSettingsParse({ notificationsSettingsV1: { requestIncludeMessageText: true } }),
+      sessionId: 's1', logPrefix: '[test]',
+    });
+    notifier.notify({ permissionId: 'q1', toolName: 'AskUserQuestion', toolInput: {
+      questions: [{ question: 'Which environments should be updated?', multiSelect: true,
+        options: [{ label: 'Production', description: 'Customer-facing deployment' }, { label: 'Staging' }],
+        freeform: {} }],
+    } });
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalled());
+    const body = sendToAllDevicesAsync.mock.calls[0][1];
+    for (const text of ['Which environments should be updated?', 'Production', 'Customer-facing deployment', 'Staging', 'Select multiple', 'Custom answer']) expect(body).toContain(text);
+    notifier.dispose();
+  });
+
   it('does not send when disabled by settings', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => {});
     const notifier = new PermissionRequestPushNotifier({

@@ -310,6 +310,13 @@ const baseExpoConfig = {
                 NSAppTransportSecurity: {
                     NSAllowsLocalNetworking: true,
                     NSAllowsArbitraryLoads: false,
+                    // iOS 17+ supports explicit IP/CIDR exceptions. Dev clients
+                    // load Metro over tailnet HTTP; regular builds retain ATS.
+                    ...(devClientLaunchMode && !iosMemoryProfilingRuntime ? {
+                        NSExceptionDomains: {
+                            '100.64.0.0/10': { NSExceptionAllowsInsecureHTTPLoads: true },
+                        },
+                    } : {}),
                 },
             },
             associatedDomains: appEnvironmentConfig.enableAssociatedDomains ? iosAssociatedDomains : []

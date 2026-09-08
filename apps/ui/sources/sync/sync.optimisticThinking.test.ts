@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { scopedSessionLocalStateKey } from '@/sync/domains/state/sessionLocalStateKeys';
 import type { ManagedEndpointSupervisor } from '@happier-dev/connection-supervisor';
 import { createSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
 
@@ -158,8 +159,11 @@ function pendingOutboxFixture(params: Readonly<{
 }
 
 async function flushPendingOutboxRetryMicrotasks(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
         await Promise.resolve();
+        // fake-indexeddb commits transactions on the host's immediate queue, not the Promise
+        // queue. Alternate both queues so the retry can read, mutate, and commit durably.
+        await new Promise<void>((resolve) => setImmediate(resolve));
     }
 }
 
@@ -176,6 +180,14 @@ function createFallbackSafeSessionRpcErrors(): Error[] {
         new Error('read ECONNRESET'),
         new Error('connect ECONNREFUSED 127.0.0.1:3005'),
     ];
+}
+
+function usePendingSchedulerFakeTimers(): void {
+    // Fake only the retry scheduler's clock. IndexedDB's test implementation commits through
+    // setImmediate; faking that system-boundary queue can strand an open transaction forever.
+    vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
 }
 
 function createAuthFailedEndpointSupervisor(): ManagedEndpointSupervisor {
@@ -274,6 +286,47 @@ function createReadyEndpointSupervisor(): ManagedEndpointSupervisor {
 }
 
 describe('sync.sendMessage optimistic thinking', () => {
+    it('releases the pending retry slot when the storage boundary stays unavailable', async () => {
+        usePendingSchedulerFakeTimers();
+        try {
+            const sessionId = 'pending-storage-failure';
+            const localId = 'pending-storage-failure-local';
+            const profile = upsertServerProfile({ serverUrl: 'https://pending-storage-failure.example.test', name: 'Storage failure' });
+            const outboxScope = { serverId: profile.id, accountId: 'account-storage-failure' };
+            storage.getState().applySessions([{ ...createSession({ sessionId }), encryptionMode: 'plain' }]);
+            vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
+                token: tokenForSub(outboxScope.accountId),
+                secret: Buffer.from(new Uint8Array(32).fill(1)).toString('base64url'),
+            });
+            runtimeFetchWithServerReachabilityMock.mockResolvedValue(new Response(null, { status: 200 }));
+            const { MMKV } = await import('react-native-mmkv');
+            const key = scopedSessionLocalStateKey('session-pending-outbox-v1', outboxScope);
+            let failedReads = 0;
+            const originalGetString = MMKV.prototype.getString;
+            vi.spyOn(MMKV.prototype, 'getString').mockImplementation(function (this: InstanceType<typeof MMKV>, readKey: string) {
+                if (readKey === key) {
+                    failedReads += 1;
+                    throw new Error('Storage unavailable');
+                }
+                return originalGetString.call(this, readKey);
+            });
+            const { sync } = await import('./sync');
+            const retries = (sync as unknown as { pendingOutboxOperationRetryTimers: Map<string, unknown> }).pendingOutboxOperationRetryTimers;
+            sync.schedulePendingOutboxOperationRetry({ sessionId, localId, outboxScope });
+            expect(retries.size).toBe(1);
+            await vi.advanceTimersByTimeAsync(1_000);
+            await flushPendingOutboxRetryMicrotasks();
+            expect(failedReads).toBeGreaterThan(0);
+            expect(retries.size).toBe(0);
+            sync.schedulePendingOutboxOperationRetry({ sessionId, localId, outboxScope });
+            expect(retries.size).toBe(1);
+            await vi.advanceTimersByTimeAsync(1_000);
+            await flushPendingOutboxRetryMicrotasks();
+            expect(retries.size).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
     beforeEach(() => {
         resetServerFeaturesClientForTests();
         setRuntimeFetch(async () => Response.json(buildServerFeaturesResponse()));
@@ -400,8 +453,8 @@ describe('sync.sendMessage optimistic thinking', () => {
             ...createSession({ sessionId }),
             encryptionMode: 'plain',
         }]);
-        savePendingOutboxMessage(pending, outboxScope);
-        replayPersistedPendingOutboxForSession(sessionId, outboxScope);
+        (await savePendingOutboxMessage(pending, outboxScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, outboxScope));
 
         const { sync } = await import('./sync');
         sync.encryption = await Encryption.create(new Uint8Array(32).fill(7));
@@ -449,8 +502,8 @@ describe('sync.sendMessage optimistic thinking', () => {
             ...createSession({ sessionId }),
             encryptionMode: 'plain',
         }]);
-        savePendingOutboxMessage(pending, outboxScope);
-        replayPersistedPendingOutboxForSession(sessionId, outboxScope);
+        (await savePendingOutboxMessage(pending, outboxScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, outboxScope));
 
         const { sync } = await import('./sync');
         sync.encryption = await Encryption.create(new Uint8Array(32).fill(7));
@@ -851,8 +904,54 @@ describe('sync.sendMessage optimistic thinking', () => {
         requestSpy.mockRestore();
     });
 
+    it('reconciles a server-delivering row when its committed twin arrives without pending-changed', async () => {
+        const sessionId = 's_server_pending_commit_without_receipt';
+        const localId = 'delivered-local-id';
+        storage.getState().applySessions([{
+            ...createSession({ sessionId }),
+            encryptionMode: 'plain',
+        }]);
+        storage.getState().upsertPendingMessage(sessionId, {
+            id: localId,
+            localId,
+            createdAt: 1_000,
+            updatedAt: 1_100,
+            source: 'server_pending',
+            deliveryStatus: 'accepted',
+            pendingDeliveryStatus: 'server_delivering',
+            text: 'already delivered',
+            rawRecord: {
+                role: 'user',
+                content: { type: 'text', text: 'already delivered' },
+                meta: {},
+            },
+        });
+        const requestSpy = vi.spyOn(apiSocket, 'request').mockResolvedValue(
+            Response.json({ pending: [] }),
+        );
+        const { sync } = await import('./sync');
+
+        (sync as any).applyMessages(sessionId, [{
+            id: 'committed-message-id',
+            seq: 1,
+            localId,
+            createdAt: 1_200,
+            isSidechain: false,
+            role: 'user',
+            content: { type: 'text', text: 'already delivered' },
+        }]);
+
+        await vi.waitFor(() => {
+            expect(requestSpy).toHaveBeenCalledWith(
+                `/v2/sessions/${sessionId}/pending?includeDiscarded=1`,
+                { method: 'GET' },
+            );
+            expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([]);
+        });
+    });
+
     it('replays identical scoped enqueue identities independently through the real Sync scheduler', async () => {
-        vi.useFakeTimers();
+        usePendingSchedulerFakeTimers();
         try {
             const sessionId = 'same-session';
             const localId = 'same-local';
@@ -863,8 +962,8 @@ describe('sync.sendMessage optimistic thinking', () => {
             const scopeA = { serverId: profileA.id, accountId: 'account-a' } as const;
             const scopeB = { serverId: profileB.id, accountId: 'account-b' } as const;
             storage.getState().applySessions([{ ...createSession({ sessionId }), encryptionMode: 'plain' }]);
-            savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'scope A' }), scopeA);
-            savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'scope B' }), scopeB);
+            (await savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'scope A' }), scopeA));
+            (await savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'scope B' }), scopeB));
 
             runtimeFetchWithServerReachabilityMock.mockImplementation(async (request: { url?: string; init?: RequestInit }) => {
                 if (request.url?.endsWith('/v1/features')) {
@@ -892,10 +991,10 @@ describe('sync.sendMessage optimistic thinking', () => {
                 activeRequest: apiSocket.request,
             })).resolves.toEqual(expect.any(Function));
             // Replay A, then B, matching the order produced by a reload followed by a server switch.
-            for (const replayLocalId of replayPersistedPendingOutboxForSession(sessionId, scopeA)) {
+            for (const replayLocalId of (await replayPersistedPendingOutboxForSession(sessionId, scopeA))) {
                 (sync as any).schedulePendingOutboxOperationRetry({ sessionId, localId: replayLocalId, outboxScope: scopeA });
             }
-            for (const replayLocalId of replayPersistedPendingOutboxForSession(sessionId, scopeB)) {
+            for (const replayLocalId of (await replayPersistedPendingOutboxForSession(sessionId, scopeB))) {
                 (sync as any).schedulePendingOutboxOperationRetry({ sessionId, localId: replayLocalId, outboxScope: scopeB });
             }
 
@@ -911,15 +1010,15 @@ describe('sync.sendMessage optimistic thinking', () => {
                 pendingOutboxFixture({ sessionId, localId, text: 'scope A' }).request.body,
                 pendingOutboxFixture({ sessionId, localId, text: 'scope B' }).request.body,
             ].sort());
-            expect(loadPendingOutboxForSession(sessionId, scopeA)).toEqual([]);
-            expect(loadPendingOutboxForSession(sessionId, scopeB)).toEqual([]);
+            expect((await loadPendingOutboxForSession(sessionId, scopeA))).toEqual([]);
+            expect((await loadPendingOutboxForSession(sessionId, scopeB))).toEqual([]);
         } finally {
             vi.useRealTimers();
         }
     });
 
     it('replays identical scoped cancellations independently through the real Sync scheduler', async () => {
-        vi.useFakeTimers();
+        usePendingSchedulerFakeTimers();
         try {
             const sessionId = 'same-cancel-session';
             const localId = 'same-cancel-local';
@@ -930,8 +1029,8 @@ describe('sync.sendMessage optimistic thinking', () => {
             const scopeA = { serverId: profileA.id, accountId: 'cancel-account-a' } as const;
             const scopeB = { serverId: profileB.id, accountId: 'cancel-account-b' } as const;
             storage.getState().applySessions([{ ...createSession({ sessionId }), encryptionMode: 'plain' }]);
-            savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'cancel A', operation: 'cancel' }), scopeA);
-            savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'cancel B', operation: 'cancel' }), scopeB);
+            (await savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'cancel A', operation: 'cancel' }), scopeA));
+            (await savePendingOutboxMessage(pendingOutboxFixture({ sessionId, localId, text: 'cancel B', operation: 'cancel' }), scopeB));
 
             vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl) => ({
                 token: tokenForSub(serverUrl === serverAUrl ? 'cancel-account-a' : 'cancel-account-b'),
@@ -947,10 +1046,10 @@ describe('sync.sendMessage optimistic thinking', () => {
                 activeRequest: apiSocket.request,
             })).resolves.toEqual(expect.any(Function));
             // Replay A, then B, matching the order produced by a reload followed by a server switch.
-            for (const replayLocalId of replayPersistedPendingOutboxForSession(sessionId, scopeA)) {
+            for (const replayLocalId of (await replayPersistedPendingOutboxForSession(sessionId, scopeA))) {
                 (sync as any).schedulePendingOutboxOperationRetry({ sessionId, localId: replayLocalId, outboxScope: scopeA });
             }
-            for (const replayLocalId of replayPersistedPendingOutboxForSession(sessionId, scopeB)) {
+            for (const replayLocalId of (await replayPersistedPendingOutboxForSession(sessionId, scopeB))) {
                 (sync as any).schedulePendingOutboxOperationRetry({ sessionId, localId: replayLocalId, outboxScope: scopeB });
             }
 
@@ -963,8 +1062,8 @@ describe('sync.sendMessage optimistic thinking', () => {
             expect(deletes).toHaveLength(2);
             expect(deletes.map((request) => request.serverUrl).sort()).toEqual([serverAUrl, serverBUrl].sort());
             expect(deletes.every((request) => request.url.endsWith(`/v2/sessions/${sessionId}/pending/${localId}`))).toBe(true);
-            expect(loadPendingOutboxForSession(sessionId, scopeA)).toEqual([]);
-            expect(loadPendingOutboxForSession(sessionId, scopeB)).toEqual([]);
+            expect((await loadPendingOutboxForSession(sessionId, scopeA))).toEqual([]);
+            expect((await loadPendingOutboxForSession(sessionId, scopeB))).toEqual([]);
         } finally {
             vi.useRealTimers();
         }
@@ -1026,13 +1125,13 @@ describe('sync.sendMessage optimistic thinking', () => {
             if (transition === 'cleared_profile') {
                 storage.getState().clearProfileScope();
             }
-            savePendingOutboxMessage(pendingOutboxFixture({
+            (await savePendingOutboxMessage(pendingOutboxFixture({
                 sessionId,
                 localId,
                 text: 'scope B durable row',
                 operation,
-            }), scopeB);
-            expect(replayPersistedPendingOutboxForSession(sessionId, scopeB)).toEqual([localId]);
+            }), scopeB));
+            expect((await replayPersistedPendingOutboxForSession(sessionId, scopeB))).toEqual([localId]);
             expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
                 expect.objectContaining({
                     localId,
@@ -1053,7 +1152,7 @@ describe('sync.sendMessage optimistic thinking', () => {
                     pendingOutboxOperation: operation,
                 }),
             ]);
-            expect(loadPendingOutboxForSession(sessionId, scopeB)).toEqual([
+            expect((await loadPendingOutboxForSession(sessionId, scopeB))).toEqual([
                 expect.objectContaining({ localId, operation }),
             ]);
         },
@@ -1067,12 +1166,12 @@ describe('sync.sendMessage optimistic thinking', () => {
             sessionId,
             metadata: { flavor: 'codex', version: '999.0.0' } as Session['metadata'],
         })]);
-        savePendingOutboxMessage(pendingOutboxFixture({
+        (await savePendingOutboxMessage(pendingOutboxFixture({
             sessionId,
             localId,
             text: 'durable owner',
-        }), outboxScope);
-        replayPersistedPendingOutboxForSession(sessionId, outboxScope);
+        }), outboxScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, outboxScope));
 
         const { sync } = await import('./sync');
         sync.encryption = await Encryption.create(new Uint8Array(32).fill(4));
@@ -1094,7 +1193,7 @@ describe('sync.sendMessage optimistic thinking', () => {
                 pendingOutboxOperation: 'enqueue',
             }),
         ]);
-        expect(loadPendingOutboxForSession(sessionId, outboxScope)).toHaveLength(1);
+        expect((await loadPendingOutboxForSession(sessionId, outboxScope))).toHaveLength(1);
     });
 
     it('keeps an active runtime RPC ACK timeout as unconfirmed without fallback or retry', async () => {
@@ -1286,7 +1385,7 @@ describe('sync.sendMessage optimistic thinking', () => {
     });
 
     it('forces endpoint auth convergence before a pending retry keeps backing off on timeout', async () => {
-        vi.useFakeTimers();
+        usePendingSchedulerFakeTimers();
         try {
             const sessionId = 's_pending_retry_probe_auth';
             storage.getState().applySessions([createSession({ sessionId })]);
@@ -1377,7 +1476,7 @@ describe('sync.sendMessage optimistic thinking', () => {
     });
 
     it('retries pending message commits with plaintext envelopes for plaintext sessions', async () => {
-        vi.useFakeTimers();
+        usePendingSchedulerFakeTimers();
         try {
             const sessionId = 's_plain_pending_retry';
             storage.getState().applySessions([{ ...createSession({ sessionId }), encryptionMode: 'plain' }]);

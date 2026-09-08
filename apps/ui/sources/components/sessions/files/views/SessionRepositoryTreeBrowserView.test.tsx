@@ -8,6 +8,7 @@ import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTes
 (globalThis as any).__DEV__ = false;
 
 const stableExpandedPaths = vi.hoisted(() => [] as string[]);
+const setExpandedPathsSpy = vi.hoisted(() => vi.fn());
 
 installSessionFilesViewCommonModuleMocks({
     reactNative: async () => {
@@ -20,10 +21,10 @@ installSessionFilesViewCommonModuleMocks({
             },
         });
     },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
-            storage: { getState: () => ({ setSessionRepositoryTreeExpandedPaths: vi.fn() }) } as any,
+    storage: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
+            storage: { getState: () => ({ getSessionRepositoryTreeExpandedPaths: () => stableExpandedPaths, setSessionRepositoryTreeExpandedPaths: setExpandedPathsSpy }) } as any,
             useSession: () => ({ active: sessionActive, metadata: { machineId: 'm1', host: 'mbp', path: sessionPath } }) as any,
             useProjectForSession: () => ({ key: { machineId: 'm1', path: projectPath } }) as any,
             useAllMachines: () => (
@@ -97,7 +98,7 @@ vi.mock('@/components/sessions/files/content/SearchResultsList', () => ({
         const first = props.searchResults?.[0];
         return React.createElement('View' as any, {
             testID: first ? `search-results:${first.fullPath}` : 'search-results:empty',
-            onPress: () => props.onFilePress?.(first),
+            onPress: () => first?.fileType === 'folder' ? props.onFolderPress?.(first) : props.onFilePress?.(first),
         });
     },
 }));
@@ -127,13 +128,7 @@ vi.mock('@/sync/ops', () => ({
     sessionCreateDirectory: vi.fn(async () => ({ success: true })),
 }));
 
-vi.mock('@/utils/path/isSafeWorkspaceRelativePath', () => ({
-    isSafeWorkspaceRelativePath: () => true,
-}));
 
-vi.mock('@/components/sessions/files/repositoryTree/computeExpandedPathsForReveal', () => ({
-    computeExpandedPathsForReveal: ({ expandedPaths }: any) => expandedPaths,
-}));
 
 vi.mock('@/scm/scmStatusSync', () => ({
     scmStatusSync: { invalidateFromUser: (sessionId: string) => invalidateFromUserSpy(sessionId) },
@@ -185,6 +180,7 @@ async function waitForTestId(screen: Awaited<ReturnType<typeof renderRepositoryT
 describe('SessionRepositoryTreeBrowserView', () => {
     beforeEach(() => {
         searchFilesSpy.mockReset();
+        setExpandedPathsSpy.mockClear();
         latestWorkspaceTransferParams = null;
         repositoryTreeListProps = [];
         searchResultsListProps = [];
@@ -317,6 +313,33 @@ describe('SessionRepositoryTreeBrowserView', () => {
         expect(searchFilesSpy).toHaveBeenCalledWith(fileSuggestionScope, 'api', { limit: 200 });
         expect(onOpenFile).toHaveBeenCalledWith('src/api.ts');
     });
+
+    it('reveals a matching folder in the tree without opening or replacing file details', async () => {
+        searchFilesSpy.mockResolvedValueOnce([{ fileName: 'nested/', filePath: 'src/', fullPath: 'src/nested/', fileType: 'folder' }]);
+        const { screen, onOpenFile } = await renderRepositoryTreeBrowserView();
+        await updateSearchQuery(screen, 'nested');
+        await waitForTestId(screen, 'search-results:src/nested/');
+        await screen.pressByTestIdAsync('search-results:src/nested/');
+        expect(screen.findByTestId('repository-tree-search')?.props.value).toBe('');
+        expect(setExpandedPathsSpy).toHaveBeenCalledWith('s1', ['src', 'src/nested']);
+        expect(repositoryTreeListProps.at(-1).revealRequest?.path).toBe('src/nested');
+        expect(onOpenFile).not.toHaveBeenCalled();
+    });
+
+    it('retains previous query rows while searching but never shows them for another session', async () => {
+        searchFilesSpy.mockResolvedValueOnce([
+            { fileName: 'api.ts', filePath: 'src/', fullPath: 'src/api.ts', fileType: 'file' },
+        ]);
+        const { screen, SessionRepositoryTreeBrowserView } = await renderRepositoryTreeBrowserView();
+        await updateSearchQuery(screen, 'api');
+        await waitForTestId(screen, 'search-results:src/api.ts');
+        searchFilesSpy.mockImplementation(() => new Promise(() => {}));
+        await updateSearchQuery(screen, 'api.ts');
+        expect(searchResultsListProps.at(-1).searchResults[0]?.fullPath).toBe('src/api.ts');
+        expect(searchResultsListProps.at(-1).isSearching).toBe(true);
+        await screen.update(<SessionRepositoryTreeBrowserView sessionId="s2" onOpenFile={vi.fn()} searchQuery="api.ts" />);
+        expect(searchResultsListProps.at(-1).searchResults).toEqual([]);
+    }, 300_000);
 
     it('keeps search result action props stable across unchanged parent rerenders', async () => {
         searchFilesSpy.mockResolvedValue([

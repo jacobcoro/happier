@@ -281,6 +281,17 @@ describe('useConnectedServiceQuotaSnapshot', () => {
     vi.useRealTimers();
   });
 
+  it('does not fetch or refresh when account observations are disabled', async () => {
+    const hook = await renderHook(() => useConnectedServiceQuotaSnapshot({
+      serviceId: 'openai-codex', profileId: 'work', enabled: false,
+    }));
+    await flushHookEffects();
+    expect(fetchAccountEncryptionModeSpy).not.toHaveBeenCalled();
+    expect(hook.getCurrent().canRefresh).toBe(false);
+    await hook.getCurrent().refresh();
+    expect(requestConnectedServiceQuotaSnapshotRefreshSpy).not.toHaveBeenCalled();
+  });
+
   it('does not restart an equivalent automatic load while the first quota request is unresolved', async () => {
     fetchAccountEncryptionModeSpy.mockResolvedValue({ mode: 'plain', updatedAt: 0 });
     let resolvePlain!: (value: Awaited<ReturnType<typeof getConnectedServiceQuotaSnapshotPlain>>) => void;

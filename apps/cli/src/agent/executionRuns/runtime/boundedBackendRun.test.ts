@@ -209,8 +209,8 @@ describe('executeBoundedBackendRun', () => {
     });
 
     await withTimeout(externalAck, 250);
-    expect(getSendPromptCount()).toBe(2);
     await withTimeout(runPromise, 1_000);
+    expect(getSendPromptCount()).toBe(2);
   });
 
   it('acks external cancel+send promptly even when cancel is slow', async () => {
@@ -477,8 +477,8 @@ describe('executeBoundedBackendRun', () => {
     });
 
     await withTimeout(externalAck, 50);
-    expect(sendPromptCount).toBe(2);
     await withTimeout(runPromise, 1_000);
+    expect(sendPromptCount).toBe(2);
   });
 
   it('logs unexpected canceled turn completion errors (without surfacing them as unhandled rejections)', async () => {

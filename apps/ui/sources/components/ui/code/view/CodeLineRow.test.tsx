@@ -276,34 +276,13 @@ describe('CodeLineRow', () => {
             onPressLine={() => {}}
         />);
 
-        const row = findTestInstanceByTypeWithProps(screen.tree, 'View' as any, { nativeID: 'selected-line' })!;
+        const row = screen.tree.findAll((node) => String(node.type) === 'View')[0]!;
         const theme = createThemeFixture() as any;
 
         expect(flattenTestStyle(row.props.style)).toMatchObject({
             borderLeftColor: theme.colors.state.success.foreground,
             borderLeftWidth: 3,
         });
-    });
-
-    it('sets nativeID to enable deep-link line scrolling on web', async () => {
-        const { CodeLineRow } = await import('./CodeLineRow');
-
-        const screen = await renderScreen(<CodeLineRow
-            line={{
-                id: 'f:120',
-                sourceIndex: 0,
-                kind: 'context',
-                oldLine: 120,
-                newLine: 120,
-                renderPrefixText: '',
-                renderCodeText: 'const x = 1;',
-                renderIsHeaderLine: false,
-                selectable: false,
-            }}
-            selected={false}
-        />);
-
-        expect(findTestInstanceByTypeWithProps(screen.tree, 'View' as any, { nativeID: 'f:120' })).toBeTruthy();
     });
 
     it('preserves indentation on web by using pre-wrap whitespace', async () => {

@@ -269,7 +269,7 @@ export async function sendPreparedBackendLongLivedRun(
       await ctrl2.streamWriter?.flushAll({ reason: 'abort', interruptedReason: message });
       if (isCurrentController()) {
         const finishedAtMs = args.getNowMs();
-        args.finishRun(
+        await args.finishRun(
           args.runId,
           { status: 'failed', summary: message, finishedAtMs, error: { code: 'execution_run_failed', message } },
           {
@@ -332,7 +332,7 @@ export async function sendPreparedBackendLongLivedRun(
     if (isCurrentController()) {
       await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true }).catch(() => {});
       const finishedAtMs = args.getNowMs();
-      args.finishRun(
+      await args.finishRun(
         args.runId,
         { status: 'failed', summary: message, finishedAtMs, error: { code: 'execution_run_failed', message } },
         {

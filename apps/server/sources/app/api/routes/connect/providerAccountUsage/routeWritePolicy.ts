@@ -4,6 +4,7 @@ import type {
     ProviderAccountUsageSnapshotV1,
     SealedProviderAccountUsageSnapshotV1,
 } from "@happier-dev/protocol";
+import { mergeProviderAccountSubscription } from "@happier-dev/protocol";
 import { isPrismaErrorCode, type TransactionClient } from "@/storage/prisma";
 
 import { inTx } from "@/storage/inTx";
@@ -110,16 +111,25 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
         const clearsRefreshRequest = shouldClearRefreshRequest(existing.refreshRequestedAt, params.fetchedAt);
         const preservesRefreshRequest = shouldPreserveRefreshRequest(existing.refreshRequestedAt, params.fetchedAt);
 
+        const previousSubscription = existing.sealedPayload?.subscription;
+        const incomingSubscription = params.sealedPayload?.subscription;
+        const sealedSubscription = incomingSubscription && (!previousSubscription || incomingSubscription.observedAtMs > previousSubscription.observedAtMs)
+            ? incomingSubscription
+            : previousSubscription;
+        const plainSubscription = mergeProviderAccountSubscription(existing.snapshot?.subscription, params.snapshot?.subscription);
+        const subscriptionAdvanced = sealedSubscription !== previousSubscription
+            || JSON.stringify(plainSubscription) !== JSON.stringify(existing.snapshot?.subscription);
+
         let nextWrite;
         let result: "written" | "noop" | "stale";
         if (!incomingFingerprint) {
-            if (!isNewer) return "stale";
+            if (!isNewer && !subscriptionAdvanced) return "stale";
             nextWrite = buildWriteParams(params, {
                 ...(preservesRefreshRequest ? { refreshRequestedAt: existing.refreshRequestedAt } : {}),
             });
             result = "written";
         } else if (existingFingerprint === incomingFingerprint) {
-            if (!isNewer && !clearsRefreshRequest) return "noop";
+            if (!isNewer && !clearsRefreshRequest && !subscriptionAdvanced) return "noop";
             const preservedStatus = existing.status === "refresh_requested" ? params.status : existing.status;
             nextWrite = buildWriteParams(params, {
                 status: isNewer ? params.status : preservedStatus,
@@ -136,12 +146,37 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
             });
             result = "written";
         } else {
-            if (!isNewer) return "stale";
+            if (!isNewer && !subscriptionAdvanced) return "stale";
             nextWrite = buildWriteParams(params, {
                 materialFingerprint: incomingFingerprint,
                 ...(preservesRefreshRequest ? { refreshRequestedAt: existing.refreshRequestedAt } : {}),
             });
             result = "written";
+        }
+
+        if (params.payloadMode === "sealed_account_scoped_v1" && sealedSubscription) {
+            const basePayload = isNewer ? params.sealedPayload : existing.sealedPayload;
+            nextWrite = {
+                ...nextWrite,
+                ...(!isNewer ? {
+                    fetchedAt: existing.fetchedAt ?? params.fetchedAt,
+                    staleAfterMs: existing.staleAfterMs ?? params.staleAfterMs,
+                    status: existing.status === "refresh_requested" ? params.status : existing.status,
+                } : {}),
+                sealedPayload: basePayload ? { ...basePayload, subscription: sealedSubscription } : undefined,
+            };
+        }
+        if (params.payloadMode === "plain_json_v1" && plainSubscription) {
+            const baseSnapshot = isNewer ? params.snapshot : existing.snapshot;
+            nextWrite = {
+                ...nextWrite,
+                ...(!isNewer ? {
+                    fetchedAt: existing.fetchedAt ?? params.fetchedAt,
+                    staleAfterMs: existing.staleAfterMs ?? params.staleAfterMs,
+                    status: existing.status === "refresh_requested" ? params.status : existing.status,
+                } : {}),
+                snapshot: baseSnapshot ? { ...baseSnapshot, subscription: plainSubscription } : undefined,
+            };
         }
 
         const updated = await updateProviderAccountUsageRecordIfCurrent(nextWrite, {

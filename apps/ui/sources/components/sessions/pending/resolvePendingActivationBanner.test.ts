@@ -40,4 +40,8 @@ describe('resolvePendingActivationBanner', () => {
         expect(resolvePendingActivationBanner({ authorization: waiting, activeAt: 100, active: true, machineReachable: false, canWrite: true, pendingMessages: rows })).toMatchObject({ kind: 'waiting_offline' });
         expect(resolvePendingActivationBanner({ authorization: null, activeAt: 100, active: false, machineReachable: false, canWrite: true, pendingMessages: [{ ...rows[0], requestedActionMalformed: true }] })).toBeNull();
     });
+
+    it('hides the activation banner while the session is already resuming', () => {
+        expect(resolvePendingActivationBanner({ authorization: null, activeAt: 100, active: false, machineReachable: true, canWrite: true, resumingAt: 300, pendingMessages: rows })).toBeNull();
+    });
 });

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable } from 'react-native';
+import { Platform, Pressable, type View } from 'react-native';
 import type {
     AccessibilityRole,
     AccessibilityState,
@@ -12,6 +12,8 @@ import type {
 import { FocusRing, WEB_FOCUS_OUTLINE_RESET, type FocusRingPlacement } from '@/components/ui/interaction/FocusRing';
 import { useIsKeyboardModality } from '@/components/ui/interaction/inputModalityStore';
 import { usePressFeedback, type PressFeedbackTone } from '@/components/ui/interaction/usePressFeedback';
+
+import { DeferredAnchoredTooltip } from '@/components/ui/overlays/DeferredAnchoredTooltip';
 
 /**
  * A `Pressable` that already knows the two things every pressable in this app kept getting wrong:
@@ -45,7 +47,7 @@ export type PressableSurfaceProps = Readonly<{
      * — which is the ordering the adopting controls already had.
      */
     styleOverride?: StyleProp<ViewStyle>;
-    /** Native tooltip on web; a no-op elsewhere. */
+    /** Portaled hover/keyboard-focus tooltip on web; a no-op elsewhere. */
     webTooltip?: string;
     testID?: string;
 }>;
@@ -60,6 +62,8 @@ export const PressableSurface = React.memo((props: PressableSurfaceProps) => {
 
     const keyboardModality = useIsKeyboardModality();
     const [focused, setFocused] = React.useState(false);
+    const [hovered, setHovered] = React.useState(false);
+    const anchorRef = React.useRef<View | null>(null);
     const ringVisible = focused && keyboardModality && !disabled;
     // `FocusRing` runs a Reanimated animated style, so an always-mounted one would cost a shared
     // value per control on every surface in the app for a ring that native can never show (RN
@@ -69,6 +73,8 @@ export const PressableSurface = React.memo((props: PressableSurfaceProps) => {
 
     const handleFocus = React.useCallback(() => setFocused(true), []);
     const handleBlur = React.useCallback(() => setFocused(false), []);
+    const handleHoverIn = React.useCallback(() => setHovered(true), []);
+    const handleHoverOut = React.useCallback(() => setHovered(false), []);
 
     const resolveStyle = React.useCallback(({ pressed, hovered }: { pressed?: boolean; hovered?: boolean }) => {
         const backgroundColor = feedback.resolveBackgroundColor({ pressed, hovered });
@@ -82,21 +88,26 @@ export const PressableSurface = React.memo((props: PressableSurfaceProps) => {
 
     return (
         <Pressable
+            ref={anchorRef}
             testID={props.testID}
             onPress={disabled ? undefined : props.onPress}
             onLongPress={disabled ? undefined : props.onLongPress}
             onFocus={handleFocus}
             onBlur={handleBlur}
+            onHoverIn={props.webTooltip ? handleHoverIn : undefined}
+            onHoverOut={props.webTooltip ? handleHoverOut : undefined}
             hitSlop={props.hitSlop}
             disabled={disabled}
             accessibilityRole={props.accessibilityRole ?? 'button'}
             accessibilityLabel={props.accessibilityLabel}
             accessibilityHint={props.accessibilityHint}
             accessibilityState={{ ...props.accessibilityState, disabled }}
-            {...(props.webTooltip === undefined ? undefined : ({ title: props.webTooltip } as object))}
             style={resolveStyle}
         >
             {props.children}
+            {Platform.OS === 'web' && props.webTooltip && (hovered || ringVisible) ? (
+                <DeferredAnchoredTooltip activationKey={`${hovered}:${focused}`} anchorRef={anchorRef} label={props.webTooltip} testID={props.testID ? `${props.testID}-tooltip` : undefined} />
+            ) : null}
             {ringMounted ? (
                 <FocusRing
                     testID={props.testID === undefined ? undefined : `${props.testID}-focus-ring`}

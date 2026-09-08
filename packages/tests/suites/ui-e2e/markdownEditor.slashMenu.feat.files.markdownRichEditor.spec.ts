@@ -19,6 +19,7 @@ import {
   openMarkdownFileInRichEditor,
   saveOpenFileDetails,
 } from '../../src/testkit/uiE2e/markdownRichEditorFlow';
+import { appendBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -159,7 +160,7 @@ test.describe('UI e2e: markdown rich editor slash menu', () => {
         .poll(async () => await readFile(absoluteFilePath, 'utf8'), { timeout: 60_000 })
         .toContain('- Bullet by E2E');
     } catch (error) {
-      throw new Error(`${String(error)}\n\n${browserDiagnostics()}`);
+      throw appendBrowserDiagnostics(error, browserDiagnostics());
     }
   });
 });

@@ -81,7 +81,7 @@ Notes:
 
 Advanced:
 - To also print optional “configure server” links (rarely needed): `happier auth login --print-configure-links`
-- To stop waiting for approval after a fixed time instead of waiting indefinitely: `happier auth login --wait-timeout <seconds>`. The sign-in request stays approvable — rerun `happier auth login` to finish it. Guided setup uses this so it can hand the terminal back.
+- To stop waiting for approval after a fixed time instead of waiting indefinitely: `happier auth login --wait-timeout <seconds>`. When the timeout expires, that request ends and cannot be approved. Rerun `happier auth login` to create a new request. Guided setup uses this so it can hand the terminal back.
 
 User guide: [Features → Device linking & restore](/accounts/device-linking-and-restore)
 
@@ -138,6 +138,29 @@ and stored sign-in exactly as they are, says it could not check them, and offers
 retry or explicitly choosing another relay — an unreachable relay is never
 treated as a rejected sign-in or a reason to sign in somewhere else.
 
+<Callout type="info">
+  The current 0.2 checkout has the refreshed setup presentation; it is not part
+  of the public 0.2.11 installer. Wide terminals place the planet beside the
+  setup choices, slowly growing and shrinking while you choose. Use the arrow
+  keys to select and Enter to continue; letter shortcuts remain available.
+  Narrow terminals use a compact text layout. On a capable terminal, set
+  `HAPPIER_NO_ANIMATION=1` to keep the branded output static. `NO_COLOR`
+  disables colour, while `TERM=dumb` and non-interactive output suppress cursor
+  animation and decorative art automatically.
+</Callout>
+
+On capable terminals, the corresponding installer introduces Happier with a static numeric planet
+and groups its work into Download, Verify, and Install. It retains detailed
+failure output and hands over to setup without repeating the welcome. Colours
+use your terminal's capabilities; its font and background remain yours.
+
+The installer's automatic handoff to setup is best-effort: declining it or
+leaving setup incomplete does not turn a successful binary installation into a
+failed installation. An explicitly requested installer action, such as
+`--run setup`, is different: that action is part of the command you asked for,
+so its exit status is propagated. A non-zero result means the CLI was installed
+but the requested setup action did not finish.
+
 | Flag | Effect |
 | --- | --- |
 | `--cloud` | Use Happier Cloud without being asked |
@@ -164,11 +187,17 @@ get an account created on it. Ask for the work explicitly with `--yes`.
 
 Choosing to host the relay on this computer adds a reachability step, before and
 after the install: setup says whether Tailscale is running here, installed but
-stopped, or not installed at all, and what that means for your phone. A relay
-your phone cannot reach is otherwise only discovered later, and from somewhere
-else. When Tailscale is absent, setup offers to set it up — opt-in, defaulting to
-no. On macOS and Windows it opens the download page; on Linux it prints the
-install docs and moves on.
+stopped, or not installed at all, and what that means for your phone. Tailscale
+must be active on both devices, on the same tailnet, and the relay must actually
+be published with Tailscale Serve or listen on a reachable Tailscale address.
+Installation alone is not reachability. When Tailscale is absent, setup offers
+to set it up — opt-in, defaulting to no. On macOS and Windows it opens the
+download page; on Linux it prints the install docs and moves on.
+
+For LAN access, the relay must listen on a non-loopback address and its port must
+be allowed through the host firewall. `localhost` is local to the environment
+where the relay runs: a loopback listener inside a VM is not reachable as the
+host Mac or PC's `localhost`.
 
 That install also creates a master secret in the relay's data directory the
 first time the relay starts, and says so once, there. It encrypts what the relay
@@ -241,6 +270,11 @@ happier server use company
 ```
 
 `--use` (and `happier server use ...`) sets the **default server** for future commands, so you can usually omit `--server ...` once it’s selected.
+
+The selected server hosts the account and synchronized session state; coding
+agents still run on the machine that owns the session. Changing the default
+server selects that server's account context. It does not migrate an account,
+sessions, or settings from the previous server.
 
 ### Target a server for one command
 

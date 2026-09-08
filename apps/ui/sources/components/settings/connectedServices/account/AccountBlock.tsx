@@ -96,6 +96,10 @@ const GAUGE_LABEL_FORMATTER: ConnectedServiceQuotaGaugeLabelFormatter = {
         t('connectedServices.quota.duration.hoursMinutes', { hours, minutes }),
     durationHours: ({ hours }) => t('connectedServices.quota.duration.hours', { hours }),
     durationMinutes: ({ minutes }) => t('connectedServices.quota.duration.minutes', { minutes }),
+    subscriptionEnds: ({ date }) => t('connectedServices.subscription.ends', { date }),
+    subscriptionEndsInDays: ({ days }) => t('connectedServices.subscription.endsInDays', { days }),
+    subscriptionRenews: ({ date }) => t('connectedServices.subscription.renews', { date }),
+    subscriptionRenewsInDays: ({ days }) => t('connectedServices.subscription.renewsInDays', { days }),
 };
 
 const RESET_COUNTDOWN_DAYS_FORMATTER: ResetCountdownDaysFormatter = {
@@ -142,6 +146,7 @@ function buildQuotaView(hook: UseConnectedServiceQuotaSnapshotResult): AccountBl
     return {
         loading: hook.loading,
         hasSnapshot: snapshot != null,
+        nowMs,
         isStale: hook.isStale,
         canRefresh: hook.canRefresh,
         isRefreshing: hook.isRefreshing,
@@ -161,6 +166,7 @@ function buildQuotaView(hook: UseConnectedServiceQuotaSnapshotResult): AccountBl
         consumeRecoveryCreditPendingTarget: hook.consumeRecoveryCreditPendingTarget,
         // A reset can only be consumed when a target machine is resolved.
         canConsume: hook.canConsumeRecoveryCredit && hook.recoveryCreditMachineId != null,
+        subscription: snapshot?.subscription ?? null,
     };
 }
 
@@ -187,6 +193,7 @@ const QuotaConnectedAccountBlock = React.memo(function QuotaConnectedAccountBloc
 
 export const AccountBlock = React.memo(function AccountBlock(props: AccountBlockProps) {
     const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
+    const subscriptionEnabled = useFeatureEnabled('connectedServices.subscription');
 
     const testID = props.testID ?? defaultAccountBlockTestID({
         serviceId: props.serviceId,
@@ -223,7 +230,7 @@ export const AccountBlock = React.memo(function AccountBlock(props: AccountBlock
     // Usage display fails OPEN: hide quota only for an EXPLICIT needs_reauth
     // credential (shared with the snapshot hook). Absent/unknown status still
     // shows usage so healthy accounts never blank their capacity avatar.
-    if (!quotasEnabled || shouldHideQuotaForCredentialStatus(props.status)) {
+    if ((!quotasEnabled && !subscriptionEnabled) || shouldHideQuotaForCredentialStatus(props.status)) {
         return <AccountBlockView {...shared} quota={null} />;
     }
 

@@ -55,6 +55,7 @@ import {
     armPendingActivationAuthorizationInTx,
     markPendingActivationAuthorizationFailedInTx,
     reconcilePendingActivationAuthorizationForRemovedRequestInTx,
+    shouldArmPendingActivationAuthorization,
 } from "@/app/session/pending/pendingActivationAuthorization";
 import type { PendingActivationFailureCodeV1 } from "@happier-dev/protocol";
 
@@ -309,6 +310,8 @@ export async function enqueuePendingMessage(params: {
     deliveryMode?: "external_handoff";
     admissionMode?: "continuation_if_no_queued_user_input";
     requestedAction: PendingRequestedActionV1;
+    /** Arm the Session's existing one-shot activation authorization without changing row delivery priority. */
+    resumeWhenAvailable?: true;
 } & (
     | Readonly<{ ciphertext: string; content?: never }>
     | Readonly<{ content: PrismaJson.SessionPendingMessageContent; ciphertext?: never }>
@@ -574,8 +577,16 @@ export async function enqueuePendingMessage(params: {
                 },
             });
 
-            const activationTarget = requestedAction.kind === "send_now"
-                ? await armPendingActivationAuthorizationInTx({ tx, sessionId, requestId: localId })
+            const activationTarget = shouldArmPendingActivationAuthorization({
+                requestedAction,
+                resumeWhenAvailable: params.resumeWhenAvailable,
+            })
+                ? await armPendingActivationAuthorizationInTx({
+                    tx,
+                    sessionId,
+                    requestId: localId,
+                    ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
+                })
                 : undefined;
             const { pendingCount, pendingBlockedCount, pendingVersion, participantCursors, badgeAttentionChanged } = await applyPendingSessionStateChange({
                 tx,
@@ -696,6 +707,8 @@ export async function updatePendingRequestedAction(params: {
     sessionId: string;
     localId: string;
     requestedAction: PendingRequestedActionV1;
+    /** Explicitly arm or clear the Session's one-shot activation authorization. */
+    resumeWhenAvailable?: boolean;
 }): Promise<UpdatePendingRequestedActionResult> {
     const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
     const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
@@ -761,12 +774,24 @@ export async function updatePendingRequestedAction(params: {
                 if (updated.count === 0) {
                     return { ok: false, error: "action-conflict" } as const;
                 }
+                const activationTarget = shouldArmPendingActivationAuthorization({
+                    requestedAction: requestedActionResult.data,
+                    resumeWhenAvailable: params.resumeWhenAvailable,
+                })
+                    ? await armPendingActivationAuthorizationInTx({
+                        tx,
+                        sessionId,
+                        requestId: localId,
+                        ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
+                    })
+                    : await reconcilePendingActivationAuthorizationForRemovedRequestInTx({ tx, sessionId, requestId: localId });
                 const state = await applyPendingSessionStateChange({
                     tx,
                     sessionId,
                     pendingBlockedCountDelta: -1,
+                    activationTarget,
                 });
-                return { ok: true, didUpdate: true, ...state } as const;
+                return { ok: true, didUpdate: true, ...(activationTarget ? { activationTarget } : {}), ...state } as const;
             }
 
             // Lifecycle fencing is authoritative even for a same-action retry. Once provider
@@ -788,7 +813,11 @@ export async function updatePendingRequestedAction(params: {
                 if (retained === 0) {
                     return { ok: false, error: "action-conflict" } as const;
                 }
-                if (requestedActionResult.data.kind !== "send_now") {
+                const shouldArmActivation = shouldArmPendingActivationAuthorization({
+                    requestedAction: requestedActionResult.data,
+                    resumeWhenAvailable: params.resumeWhenAvailable,
+                });
+                if (!shouldArmActivation && params.resumeWhenAvailable !== false) {
                     const session = await reconcileSessionPendingQueueStateInTx(tx, sessionId);
                     const participantCursors = session.didRepair
                         ? await markPendingStateChangedParticipants({
@@ -810,11 +839,18 @@ export async function updatePendingRequestedAction(params: {
                     } as const;
                 }
                 // Preserve the existing idempotent-retry repair contract before the
-                // explicit send_now retry refreshes durable activation authorization.
+                // explicit retry refreshes or clears durable activation authorization.
                 await reconcileSessionPendingQueueStateInTx(tx, sessionId);
-                const activationTarget = await armPendingActivationAuthorizationInTx({ tx, sessionId, requestId: localId });
+                const activationTarget = shouldArmActivation
+                    ? await armPendingActivationAuthorizationInTx({
+                        tx,
+                        sessionId,
+                        requestId: localId,
+                        ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
+                    })
+                    : await reconcilePendingActivationAuthorizationForRemovedRequestInTx({ tx, sessionId, requestId: localId });
                 const state = await applyPendingSessionStateChange({ tx, sessionId, activationTarget });
-                return { ok: true, didUpdate: true, activationTarget, ...state } as const;
+                return { ok: true, didUpdate: true, ...(activationTarget ? { activationTarget } : {}), ...state } as const;
             }
 
             const updated = await tx.sessionPendingMessage.updateMany({
@@ -833,8 +869,16 @@ export async function updatePendingRequestedAction(params: {
             if (updated.count === 0) {
                 return { ok: false, error: "action-conflict" } as const;
             }
-            const activationTarget = requestedActionResult.data.kind === "send_now"
-                ? await armPendingActivationAuthorizationInTx({ tx, sessionId, requestId: localId })
+            const activationTarget = shouldArmPendingActivationAuthorization({
+                requestedAction: requestedActionResult.data,
+                resumeWhenAvailable: params.resumeWhenAvailable,
+            })
+                ? await armPendingActivationAuthorizationInTx({
+                    tx,
+                    sessionId,
+                    requestId: localId,
+                    ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
+                })
                 : await reconcilePendingActivationAuthorizationForRemovedRequestInTx({ tx, sessionId, requestId: localId });
             const state = await applyPendingSessionStateChange({ tx, sessionId, activationTarget });
             return { ok: true, didUpdate: true, ...(activationTarget ? { activationTarget } : {}), ...state } as const;

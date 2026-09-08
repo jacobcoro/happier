@@ -1,5 +1,6 @@
 import type { ScmBackendDescribeResponse } from '@happier-dev/protocol';
 
+import { classifyGitDirectoryIgnores } from './directoryIgnores';
 import type { ScmBackend } from '../../types';
 import { detectGitRepo, getGitSnapshot, getGitWorktreesEnrichment } from './repository';
 import { createGitCapabilities } from './statusSnapshot';
@@ -82,6 +83,7 @@ function createUnsupportedGitModeCapabilities() {
 export function createGitBackend(): ScmBackend {
     return {
         id: 'git',
+        classifyDirectoryIgnores: classifyGitDirectoryIgnores,
         selection: {
             modeSelectionScores: {
                 '.git': 200,

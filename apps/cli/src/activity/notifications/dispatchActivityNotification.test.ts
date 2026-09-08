@@ -25,6 +25,27 @@ describe('dispatchActivityNotificationAsync', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps full permission details only in channels that include request text', async () => {
+    const sendToAllDevicesAsync = vi.fn(async () => {});
+    const settings = accountSettingsParse({ notificationChannelsV1: [true, false, undefined].map((include, index) => ({
+      v: 1, id: `hook-${index}`, kind: 'webhook', enabled: true,
+      url: 'https://hooks.example.test/happier', requestIncludeMessageText: include,
+      topics: { permissionRequest: true },
+    })) });
+    await dispatchActivityNotificationAsync({ settings, expoPushSender: { sendToAllDevicesAsync }, event: {
+      topic: 'permission_request', sessionId: 's1', requestId: 'p1', toolName: 'Bash',
+      toolInput: { command: 'git diff -- apps/cli/src/main.ts', justification: 'Review the complete patch' },
+    } });
+    const payloads = fetchSpy.mock.calls.map((call) => JSON.parse(call[1].body));
+    expect(payloads).toHaveLength(3);
+    expect(payloads[0].content.body).toContain('git diff -- apps/cli/src/main.ts');
+    expect(payloads[0].request.toolDetails).toContain('Review the complete patch');
+    expect(payloads[1].content.body).not.toContain('git diff');
+    expect(payloads[1].request.toolDetails).toBeNull();
+    expect(payloads[2].request.toolDetails).toContain('Review the complete patch');
+    expect(payloads[2].content.body).toContain('git diff -- apps/cli/src/main.ts');
+  });
+
   it('falls back to the builtin expo push channel when explicit channels are missing', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => {});
     const settings = accountSettingsParse({
@@ -125,7 +146,7 @@ describe('dispatchActivityNotificationAsync', () => {
     });
   });
 
-  it('sends sanitized request payloads to webhook channels', async () => {
+  it('keeps request contents private on webhook channels when previews are disabled', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => {});
     const settings = accountSettingsParse({
       notificationChannelsV1: [
@@ -145,6 +166,7 @@ describe('dispatchActivityNotificationAsync', () => {
             userActionRequest: true,
           },
           readyIncludeMessageText: false,
+          requestIncludeMessageText: false,
         },
       ],
     });
@@ -177,11 +199,11 @@ describe('dispatchActivityNotificationAsync', () => {
       requestId: 'request-9',
       kind: 'permission',
       toolName: 'Bash',
-      toolDetails: 'Command: git',
+      toolDetails: null,
     });
     expect(payload.content.title).toBe('Fix prod issue');
     expect(payload.content.body).toContain('Claude asks permission to use Bash');
-    expect(payload.content.body).toContain('Command: git');
+    expect(payload.content.body).not.toContain('Command: git');
     expect(JSON.stringify(payload)).not.toContain('secret-token');
   });
 
@@ -652,6 +674,25 @@ describe('dispatchActivityNotificationAsync', () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])('delivers sessionless automatic reset webhooks only on enabled recovered channels (%s)', async (enabled) => {
+    const settings = accountSettingsParse({ notificationChannelsV1: [{
+      v: 1, id: 'reset-webhook', kind: 'webhook', enabled: true,
+      url: 'https://hooks.example.test/reset', signingSecret: null,
+      topics: { ready: false, permissionRequest: false, userActionRequest: false, connectedServiceQuotaRecovered: enabled },
+      readyIncludeMessageText: false,
+    }] });
+    await dispatchActivityNotificationAsync({ settings, event: {
+      topic: 'connected_service_quota_recovered', serviceId: 'openai-codex', groupId: 'team', profileId: 'work',
+      recoveryReason: 'automatic_quota_reset', issueFingerprint: 'sessionless-reset',
+    }, dedupeWindowMs: 0 });
+    expect(fetchSpy).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    if (enabled) {
+      const body = JSON.parse(fetchSpy.mock.calls[0]?.[1].body as string);
+      expect(body).not.toHaveProperty('session');
+      expect(body.content.body).toContain('work in pool team');
+    }
   });
 
   it('reports duplicate suppression separately from undeliverable channels', async () => {

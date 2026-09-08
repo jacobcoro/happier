@@ -1,4 +1,4 @@
-import { maybeParseJson } from './parseJson';
+import { maybeParseJson } from './parseJson.js';
 
 type UnknownRecord = Record<string, unknown>;
 

@@ -3,6 +3,40 @@ import { describe, expect, it } from 'vitest';
 import { resolveAgentProbeVariant } from './resolveAgentProbeVariant';
 
 describe('resolveAgentProbeVariant', () => {
+  it('uses the effective probe environment when partitioning Codex controls by auth method', () => {
+    const apiKeyProfile = resolveAgentProbeVariant({
+      agentId: 'codex',
+      accountSettings: { codexBackendMode: 'appServer' },
+      processEnv: { OPENAI_API_KEY: 'profile-key', CODEX_HOME: '/missing-profile-home' },
+    });
+    const nativeProfile = resolveAgentProbeVariant({
+      agentId: 'codex',
+      accountSettings: { codexBackendMode: 'appServer' },
+      processEnv: { CODEX_HOME: '/missing-native-home' },
+    });
+
+    expect(apiKeyProfile).toContain('api_key_env');
+    expect(nativeProfile).toContain('unknown');
+    expect(apiKeyProfile).not.toBe(nativeProfile);
+  });
+
+  it('uses the effective probe environment when partitioning Kimi by ACP selector', () => {
+    const profileSelector = resolveAgentProbeVariant({
+      agentId: 'kimi',
+      accountSettings: { kimiAcpPythonSelector: 'auto' },
+      processEnv: { HAPPIER_KIMI_ACP_SELECTOR: 'poll' },
+    });
+    const settingsSelector = resolveAgentProbeVariant({
+      agentId: 'kimi',
+      accountSettings: { kimiAcpPythonSelector: 'auto' },
+      processEnv: {},
+    });
+
+    expect(profileSelector).toContain('poll');
+    expect(settingsSelector).toContain('auto');
+    expect(profileSelector).not.toBe(settingsSelector);
+  });
+
   it('partitions the Claude models probe cache by connected account', () => {
     const profileA = resolveAgentProbeVariant({
       agentId: 'claude',

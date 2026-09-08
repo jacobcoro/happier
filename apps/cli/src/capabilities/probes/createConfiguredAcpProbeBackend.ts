@@ -14,6 +14,7 @@ export async function createConfiguredAcpProbeBackend(params: Readonly<{
   cwd: string;
   accountSettings?: Readonly<Record<string, unknown>> | null;
   credentials?: Credentials | null;
+  processEnv?: NodeJS.ProcessEnv;
 }>): Promise<AgentBackend | null> {
   if (params.agentId !== 'customAcp') return null;
   if (params.backendTarget?.kind !== 'configuredAcpBackend') return null;
@@ -25,11 +26,20 @@ export async function createConfiguredAcpProbeBackend(params: Readonly<{
   );
   if (!backend) return null;
 
-  const launchEnv = materializeConfiguredAcpEnvironment({
-    backend,
-    accountSettings: params.accountSettings,
-    credentials: params.credentials,
-  });
+  const selectedEnvironmentOverlay = Object.fromEntries(
+    Object.entries(params.processEnv ?? {}).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string' && process.env[entry[0]] !== entry[1],
+    ),
+  );
+  const launchEnv = {
+    ...selectedEnvironmentOverlay,
+    ...materializeConfiguredAcpEnvironment({
+      backend,
+      accountSettings: params.accountSettings,
+      credentials: params.credentials,
+      processEnv: params.processEnv,
+    }),
+  };
 
   const permissionHandler: AcpPermissionHandler = {
     handleToolCall: async () => ({ decision: 'abort' }),

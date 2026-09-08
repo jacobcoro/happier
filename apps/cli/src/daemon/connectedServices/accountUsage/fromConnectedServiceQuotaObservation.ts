@@ -78,6 +78,7 @@ export function buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObserv
         : 'loaded_empty',
     planLabel: snapshot.planLabel,
     accountLabel: snapshot.accountLabel,
+    ...(snapshot.subscription ? { subscription: snapshot.subscription } : {}),
     ...(snapshot.recoveryCredits ? { recoveryCredits: snapshot.recoveryCredits } : {}),
     meters: snapshot.meters,
   });

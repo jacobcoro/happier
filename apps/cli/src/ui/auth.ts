@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { logger } from './logger';
 import { ensureDaemonRunningForSessionCommand, shouldAutoStartDaemonAfterAuth } from '@/daemon/ensureDaemon';
 import { buildConfigureServerLinks, buildTerminalConnectLinks } from '@happier-dev/cli-common/links';
+import { createStepPrinter } from '@happier-dev/cli-common/output';
 import { tailscaleServeHttpsUrlForInternalServerUrl } from '@/integrations/tailscale/tailscaleServe';
 import { isLoopbackHttpServerUrl, isLoopbackServerHost } from '@/server/serverUrlClassification';
 import { buildServerUrlReachabilityHintLines } from '@/server/reachability/serverUrlReachabilityHint';
@@ -178,9 +179,6 @@ export async function doAuth(): Promise<Credentials | null> {
     // (it will crash with "Raw mode is not supported on the current process.stdin").
     const hasRawMode = Boolean(process.stdin.isTTY && typeof (process.stdin as any).setRawMode === 'function');
     const isInteractive = Boolean(hasRawMode && process.stdout.isTTY);
-    if (isInteractive) {
-        console.clear();
-    }
     const debugRaw = (process.env.DEBUG ?? '').toString();
     const debugEnabled = Boolean(debugRaw) && debugRaw !== '0' && debugRaw.toLowerCase() !== 'false';
 
@@ -257,10 +255,6 @@ async function doBothAuth(params: Readonly<{
     pairing: TerminalPairingAuthentication;
     pairingRequirement: TerminalPairingRequirement | null;
 }>): Promise<Credentials | null> {
-    if (process.stdout.isTTY) {
-        console.clear();
-    }
-
     const publicKeyB64Url = encodeBase64Url(params.keypair.publicKey);
     const terminalLinks = buildTerminalConnectLinks({
         webappUrl: configuration.webappUrl,
@@ -408,9 +402,6 @@ async function doMobileAuth(params: Readonly<{
     pairing: TerminalPairingAuthentication;
     pairingRequirement: TerminalPairingRequirement | null;
 }>): Promise<Credentials | null> {
-    if (process.stdout.isTTY) {
-        console.clear();
-    }
     console.log('\nMobile Authentication\n');
     console.log(`Relay URL: ${configuration.serverUrl}`);
     if (configuration.apiServerUrl !== configuration.serverUrl) {
@@ -478,9 +469,6 @@ async function doWebAuth(params: Readonly<{
     pairing: TerminalPairingAuthentication;
     pairingRequirement: TerminalPairingRequirement | null;
 }>): Promise<Credentials | null> {
-    if (process.stdout.isTTY) {
-        console.clear();
-    }
     console.log('\nWeb Authentication\n');
     console.log(`This terminal is connected to: ${configuration.serverUrl}`);
     if (configuration.apiServerUrl !== configuration.serverUrl) {
@@ -533,26 +521,33 @@ async function doWebAuth(params: Readonly<{
         printMobileLinkMissingServerUrlHint({ serverUrl: configuration.serverUrl, kind: 'terminalConnect' });
     }
 
-    return await waitForAuthentication(params);
+    return await waitForAuthentication(params, 'planet');
 }
 
 /**
  * Wait for authentication to complete and return credentials
  */
-async function waitForAuthentication(params: Readonly<{
-    keypair: tweetnacl.BoxKeyPair;
-    claimSecret: string;
-    pairing: TerminalPairingAuthentication;
-    pairingRequirement: TerminalPairingRequirement | null;
-}>): Promise<Credentials | null> {
-    process.stdout.write('Waiting for authentication');
-    let dots = 0;
+async function waitForAuthentication(
+    params: Readonly<{
+        keypair: tweetnacl.BoxKeyPair;
+        claimSecret: string;
+        pairing: TerminalPairingAuthentication;
+        pairingRequirement: TerminalPairingRequirement | null;
+    }>,
+    appearance: 'compact' | 'planet' = 'compact',
+): Promise<Credentials | null> {
+    const steps = createStepPrinter({ appearance });
+    const print = (...args: unknown[]): void => {
+        steps.pause();
+        console.log(...args);
+    };
+    steps.start('Waiting for authentication');
     let cancelled = false;
 
     // Handle Ctrl-C during waiting
     const handleInterrupt = () => {
         cancelled = true;
-        console.log('\n\nAuthentication cancelled.');
+        print('\n\nAuthentication cancelled.');
         process.exit(0);
     };
 
@@ -571,8 +566,8 @@ async function waitForAuthentication(params: Readonly<{
         };
         const waitExpired = (): boolean => waitDeadlineMs !== null && Date.now() >= waitDeadlineMs;
         const printWaitExpired = (): void => {
-            console.log('\n\nStopped waiting for the sign-in to be approved.');
-            console.log('Run `happier auth login` again to create a new sign-in request.');
+            print('\n\nStopped waiting for the sign-in to be approved.');
+            print('Run `happier auth login` again to create a new sign-in request.');
         };
 
         let mode: 'status-claim' | 'legacy-post' = 'status-claim';
@@ -594,7 +589,7 @@ async function waitForAuthentication(params: Readonly<{
                         nowMs: Date.now(),
                     });
                     if (!opened) {
-                        console.log(
+                        print(
                             params.pairingRequirement === 'v3'
                                 ? '\n\nAuthenticated terminal pairing v3 is required. Update the Happier mobile app and scan a new QR code.'
                                 : '\n\nFailed to decrypt response. Please try again.',
@@ -604,13 +599,13 @@ async function waitForAuthentication(params: Readonly<{
 
                     if (opened.type === 'legacy') {
                         await writeCredentialsLegacy({ secret: opened.key, token });
-                        console.log('\n\n✓ Authentication successful\n');
+                        print('\n\n✓ Authentication successful\n');
                         return { encryption: { type: 'legacy', secret: opened.key }, token };
                     }
 
                     const publicKeyBytes = tweetnacl.box.keyPair.fromSecretKey(opened.key).publicKey;
                     await writeCredentialsDataKey({ publicKey: publicKeyBytes, machineKey: opened.key, token });
-                    console.log('\n\n✓ Authentication successful\n');
+                    print('\n\n✓ Authentication successful\n');
                     return { encryption: { type: 'dataKey', publicKey: publicKeyBytes, machineKey: opened.key }, token };
                 };
 
@@ -657,7 +652,7 @@ async function waitForAuthentication(params: Readonly<{
 
                     const status = statusRes.data?.status;
                     if (status === 'not_found') {
-                        console.log('\n\nAuthentication request expired. Please run `happier auth login` again.');
+                        print('\n\nAuthentication request expired. Please run `happier auth login` again.');
                         return null;
                     }
 
@@ -675,7 +670,7 @@ async function waitForAuthentication(params: Readonly<{
                             }
 
                             if (typeof claimData.token !== 'string' || typeof claimData.response !== 'string') {
-                                console.log('\n\nUnexpected response from the relay. Please try again.');
+                                print('\n\nUnexpected response from the relay. Please try again.');
                                 return null;
                             }
 
@@ -692,7 +687,7 @@ async function waitForAuthentication(params: Readonly<{
                                     err === 'consumed'
                                         ? 'Authentication request was already claimed. Please run `happier auth login` again.'
                                         : 'Authentication request expired. Please run `happier auth login` again.';
-                                console.log(`\n\n${message}`);
+                                print(`\n\n${message}`);
                                 return null;
                             }
                             if (code === 404 || (code === 400 && err === 'claim_not_supported') || (code === 409 && err === 'claim_not_supported')) {
@@ -715,7 +710,7 @@ async function waitForAuthentication(params: Readonly<{
                     printWaitExpired();
                     return null;
                 }
-                console.log('\n\nFailed to check authentication status. Please try again.');
+                print('\n\nFailed to check authentication status. Please try again.');
                 return null;
             }
 
@@ -724,13 +719,10 @@ async function waitForAuthentication(params: Readonly<{
                 return null;
             }
 
-            // Animate waiting dots
-            process.stdout.write('\rWaiting for authentication' + '.'.repeat((dots % 3) + 1) + '   ');
-            dots++;
-
             await delay(pollIntervalMs);
         }
     } finally {
+        steps.pause();
         process.off('SIGINT', handleInterrupt);
     }
 

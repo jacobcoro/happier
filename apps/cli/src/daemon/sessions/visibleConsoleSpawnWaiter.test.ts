@@ -4,6 +4,7 @@ import type { ChildExit } from './onChildExited';
 import type { TrackedSession } from '../types';
 
 import { waitForVisibleConsoleSessionWebhook } from './visibleConsoleSpawnWaiter';
+import { createOnChildExited } from './onChildExited';
 
 function installProcessKillMock(aliveRef: { alive: boolean }): void {
   vi.spyOn(process, 'kill').mockImplementation(
@@ -36,6 +37,39 @@ describe('waitForVisibleConsoleSessionWebhook', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('reports incomplete exit cleanup and retains tracking when terminal custody is unavailable', async () => {
+    vi.useFakeTimers();
+    installProcessKillMock({ alive: false });
+    const pid = 12347;
+    const tracked: TrackedSession = {
+      pid,
+      startedBy: 'daemon',
+      happySessionId: 'session-terminal-custody-unavailable',
+      activeTurnId: 'turn-unsettled',
+    };
+    const pidToTrackedSession = new Map([[pid, tracked]]);
+    const state = createWaiterState();
+    const completion = waitForVisibleConsoleSessionWebhook({
+      ...state,
+      pid,
+      pollMs: 10,
+      onChildExited: createOnChildExited({
+        pidToTrackedSession,
+        spawnResourceCleanupByPid: new Map(),
+        sessionAttachCleanupByPid: new Map(),
+        getApiMachineForSessions: () => null,
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    await expect(completion).resolves.toMatchObject({
+      type: 'error',
+      errorCode: 'SPAWN_FAILED',
+    });
+    expect(pidToTrackedSession.get(pid)).toBe(tracked);
   });
 
   it('fails closed when webhook success is missing happySessionId', async () => {

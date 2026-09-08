@@ -1,3 +1,4 @@
+import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/CodeLinesViewCore';
 import * as React from 'react';
 import { Platform, View, useWindowDimensions } from 'react-native';
 
@@ -18,6 +19,10 @@ const DISABLED_INTRA_LINE_WORD_DIFF = { enabled: false, maxLines: 0, maxLineLeng
 export type DiffReviewCommentsViewerProps = Readonly<{
     filePath: string;
     unifiedDiff: string;
+    scrollToLineId?: string;
+    highlightLineId?: string;
+    onScrollToLine?: (windowY: number) => void;
+    externalScrollView?: CodeLinesExternalScrollView;
     reviewCommentsEnabled: boolean;
     reviewCommentDrafts: readonly ReviewCommentDraft[];
     onUpsertReviewCommentDraft?: (draft: ReviewCommentDraft) => void;
@@ -89,6 +94,10 @@ function DiffReviewCommentsViewerInner(props: DiffReviewCommentsViewerProps) {
     return (
         <View style={virtualizedContainerStyle}>
             <DiffViewer
+                scrollToLineId={props.scrollToLineId}
+                highlightLineId={props.highlightLineId}
+                onScrollToLine={props.onScrollToLine}
+                externalScrollView={props.externalScrollView}
                 mode="unified"
                 filePath={props.filePath}
                 unifiedDiff={props.unifiedDiff}

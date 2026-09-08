@@ -115,7 +115,7 @@ export function clampLegendScrollOffset(offset: number, contentLength: number, s
 
 export function resolveLegendStateHeldIntentLanding(params: Readonly<{
     index?: number;
-    intent: LegendHeldScrollIntent;
+    intent: Extract<LegendHeldScrollIntent, { kind: 'index' }>;
     state: LegendListState;
 }>): LegendHeldIntentLanding | null {
     const { intent, state } = params;
@@ -126,44 +126,37 @@ export function resolveLegendStateHeldIntentLanding(params: Readonly<{
     ) {
         return null;
     }
-    let targetOffset: number;
-    let rawTargetOffset: number | null = null;
-    let estimateBasis = false;
-    if (intent.kind === 'end') {
-        targetOffset = Math.max(0, state.contentLength - state.scrollLength);
-    } else if (intent.kind === 'index') {
-        const index = params.index;
-        if (typeof index !== 'number' || index < 0) return null;
-        const position = state.positionAtIndex?.(index);
-        if (!Number.isFinite(position)) return null;
-        const size = state.sizeAtIndex?.(index);
-        // Only a MOUNTED row's position is confirmation-grade layout truth: Legend keeps
-        // serving cached sizesKnown entries for unmounted rows while their positions are
-        // estimate-phase cumulative sums, and mid-expansion-cascade those estimates are
-        // garbage (live native S-C 2026-07-11: corrections steered into them, read
-        // themselves back as "aligned", and parked the viewport hours away). Estimate-basis
-        // landings never confirm and only steer within the bounded tracking range — the
-        // same CASCADE-FIX bar the web-dom anchor landing already obeys.
-        const startBuffered = Number.isFinite(state.startBuffered) ? state.startBuffered : state.start;
-        const endBuffered = Number.isFinite(state.endBuffered) ? state.endBuffered : state.end;
-        const mounted = Number.isFinite(startBuffered)
-            && Number.isFinite(endBuffered)
-            && index >= startBuffered
-            && index <= endBuffered;
-        estimateBasis = !mounted || !Number.isFinite(size);
-        // An unmeasured size degrades the viewPosition term to 0 instead of aborting the
-        // landing: the estimate-basis hold keeps steering toward the row and precise
-        // alignment resumes once the row mounts and measures.
-        const sizeForAlignment = Number.isFinite(size) ? (size as number) : 0;
-        rawTargetOffset = (position as number)
-            - intent.viewOffset
-            - intent.viewPosition * Math.max(0, state.scrollLength - sizeForAlignment);
-        targetOffset = clampLegendScrollOffset(
-            rawTargetOffset,
-            state.contentLength,
-            state.scrollLength,
-        );
-    } else return null;
+    const index = params.index;
+    if (typeof index !== 'number' || index < 0) return null;
+    const position = state.positionAtIndex?.(index);
+    if (!Number.isFinite(position)) return null;
+    const size = state.sizeAtIndex?.(index);
+    // Only a MOUNTED row's position is confirmation-grade layout truth: Legend keeps
+    // serving cached sizesKnown entries for unmounted rows while their positions are
+    // estimate-phase cumulative sums, and mid-expansion-cascade those estimates are
+    // garbage (live native S-C 2026-07-11: corrections steered into them, read
+    // themselves back as "aligned", and parked the viewport hours away). Estimate-basis
+    // landings never confirm and only steer within the bounded tracking range — the
+    // same CASCADE-FIX bar the web-dom anchor landing already obeys.
+    const startBuffered = Number.isFinite(state.startBuffered) ? state.startBuffered : state.start;
+    const endBuffered = Number.isFinite(state.endBuffered) ? state.endBuffered : state.end;
+    const mounted = Number.isFinite(startBuffered)
+        && Number.isFinite(endBuffered)
+        && index >= startBuffered
+        && index <= endBuffered;
+    const estimateBasis = !mounted || !Number.isFinite(size);
+    // An unmeasured size degrades the viewPosition term to 0 instead of aborting the
+    // landing: the estimate-basis hold keeps steering toward the row and precise
+    // alignment resumes once the row mounts and measures.
+    const sizeForAlignment = Number.isFinite(size) ? (size as number) : 0;
+    const rawTargetOffset = (position as number)
+        - intent.viewOffset
+        - intent.viewPosition * Math.max(0, state.scrollLength - sizeForAlignment);
+    const targetOffset = clampLegendScrollOffset(
+        rawTargetOffset,
+        state.contentLength,
+        state.scrollLength,
+    );
     return {
         basis: 'legend-state',
         currentOffset: state.scroll,
@@ -173,7 +166,7 @@ export function resolveLegendStateHeldIntentLanding(params: Readonly<{
         ...(estimateBasis
             ? {
                 estimateBasis: true,
-                rawResidual: (rawTargetOffset ?? targetOffset) - state.scroll,
+                rawResidual: rawTargetOffset - state.scroll,
                 viewportLength: state.scrollLength,
             }
             : {}),

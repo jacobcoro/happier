@@ -139,9 +139,6 @@ function mockCommonDeps() {
         PermissionFooter: () => null,
     }));
 
-    vi.doMock('@/components/tools/normalization/policy/permissionSummary', () => ({
-        formatPermissionRequestSummary: () => '',
-    }));
 
     vi.doMock('@/components/sessions/sourceControl/status', () => ({
         SourceControlStatusBadge: () => null,

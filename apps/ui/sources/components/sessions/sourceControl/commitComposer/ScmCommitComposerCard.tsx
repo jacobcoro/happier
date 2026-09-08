@@ -84,18 +84,6 @@ export function normalizeGeneratedCommitMessageSuggestion(value: string): string
     }
 }
 
-function selectionPillStyle(theme: any) {
-    return ({ pressed }: { pressed: boolean }) => ({
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.inset ?? theme.colors.surface.base,
-        opacity: pressed ? 0.75 : 1,
-    });
-}
-
 export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardProps) => {
     const trimmedMessage = String(props.draftMessage ?? '').trim();
     const commitDisabled = props.busy || !props.commitAllowed || trimmedMessage.length === 0;
@@ -149,52 +137,35 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
         >
             {props.commitSelectionAvailable ? (
                 props.selectionModeActive ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
                         <Text
                             testID="scm-commit-selection-summary"
-                            style={{ flex: 1, fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}
+                            style={{ flexGrow: 1, fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}
                         >
                             {t('files.sourceControlOperations.selection', { count: props.selectionCount ?? 0 })}
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                             {props.onSelectAllSelection ? (
-                                <Pressable
-                                    accessibilityRole="button"
-                                    accessibilityLabel={t('common.all')}
+                                <ToolbarButton
+                                    label={t('common.all')}
                                     onPress={props.onSelectAllSelection}
-                                    style={selectionPillStyle(props.theme)}
-                                >
-                                    <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                                        {t('common.all')}
-                                    </Text>
-                                </Pressable>
+                                />
                             ) : null}
 
                             {((props.selectionCount ?? 0) > 0 && props.onClearSelection) ? (
-                                <Pressable
-                                    accessibilityRole="button"
+                                <ToolbarButton
+                                    label={t('files.sourceControlOperations.clear')}
                                     accessibilityLabel={t('files.fileActions.clearSelection')}
                                     onPress={props.onClearSelection}
-                                    style={selectionPillStyle(props.theme)}
-                                >
-                                    <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                                        {t('files.sourceControlOperations.clear')}
-                                    </Text>
-                                </Pressable>
+                                />
                             ) : null}
 
                             {((props.selectionCount ?? 0) === 0 && props.onExitSelectionMode) ? (
-                                <Pressable
+                                <ToolbarButton
                                     testID="scm-commit-exit-selection"
-                                    accessibilityRole="button"
-                                    accessibilityLabel={t('common.done')}
+                                    label={t('common.done')}
                                     onPress={props.onExitSelectionMode}
-                                    style={selectionPillStyle(props.theme)}
-                                >
-                                    <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                                        {t('common.done')}
-                                    </Text>
-                                </Pressable>
+                                />
                             ) : null}
                         </View>
                     </View>

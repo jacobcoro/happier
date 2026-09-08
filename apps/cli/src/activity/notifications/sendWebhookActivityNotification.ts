@@ -27,6 +27,7 @@ export async function sendWebhookActivityNotificationAsync(params: Readonly<{
 }>): Promise<void> {
   const built = buildActivityNotificationContent(params.event, {
     readyIncludeMessageText: params.channel.readyIncludeMessageText !== false,
+    requestIncludeMessageText: params.channel.requestIncludeMessageText !== false,
   });
   const payload = buildActivityWebhookPayload({
     channelId: params.channel.id,
@@ -36,10 +37,10 @@ export async function sendWebhookActivityNotificationAsync(params: Readonly<{
       title: built.title,
       body: built.body,
     },
-    session: {
+    session: params.event.sessionId ? {
       sessionId: params.event.sessionId,
       title: params.event.sessionTitle ?? null,
-    },
+    } : null,
     request: params.event.topic === 'permission_request' || params.event.topic === 'user_action_request'
       ? {
         requestId: params.event.requestId,

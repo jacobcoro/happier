@@ -57,6 +57,10 @@ const NOOP_GAUGE_LABEL_FORMATTER: ConnectedServiceQuotaGaugeLabelFormatter = {
     durationHoursMinutes: () => '',
     durationHours: () => '',
     durationMinutes: () => '',
+    subscriptionEnds: () => '',
+    subscriptionEndsInDays: () => '',
+    subscriptionRenews: () => '',
+    subscriptionRenewsInDays: () => '',
 };
 
 const HEALTH_SEVERITY_RANK: Readonly<Record<AccountHealth, number>> = {

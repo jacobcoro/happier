@@ -48,6 +48,7 @@ const settingsState = vi.hoisted(() => ({
 const featureState = vi.hoisted(() => ({
   connectedServices: true,
   quotas: true,
+  subscription: true,
   accountGroups: true,
 }));
 
@@ -105,6 +106,7 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
   useFeatureEnabled: (featureId: string) => {
     if (featureId === 'connectedServices') return featureState.connectedServices;
     if (featureId === 'connectedServices.quotas') return featureState.quotas;
+    if (featureId === 'connectedServices.subscription') return featureState.subscription;
     if (featureId === 'connectedServices.accountGroups') return featureState.accountGroups;
     return true;
   },
@@ -216,6 +218,7 @@ beforeEach(() => {
   reducedMotionRef.value = true;
   featureState.connectedServices = true;
   featureState.quotas = true;
+  featureState.subscription = true;
   featureState.accountGroups = true;
   profileState.current = {
     connectedServicesV2: [
@@ -307,6 +310,7 @@ describe('ConnectedServiceProfileDetailView', () => {
 
   it('does not repeat an unlabeled token profile id in the account subtitle', async () => {
     featureState.quotas = false;
+    featureState.subscription = false;
     routeParams.profileId = 'native-token';
     profileState.current = {
       connectedServicesV2: [

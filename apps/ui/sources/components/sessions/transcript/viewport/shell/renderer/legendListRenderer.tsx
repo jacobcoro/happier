@@ -290,6 +290,10 @@ function LegendListTranscriptRendererInner<TItem>(
     const heldScrollIntentRef = React.useRef<LegendHeldScrollIntent | null>(
         props.frame.rendererOptions.initialPlacement.atEnd ? { kind: 'end' } : null,
     );
+    // `emitRendererAtEndState` is declared before the full settle machinery below, but native
+    // quiet at-end observations can still need to acquire the same held-end transaction. Keep a
+    // stable pointer to that one owner instead of making the per-commit observer reopen it.
+    const latchHeldEndIntentRef = React.useRef<() => void>(() => {});
     const nativePhysicalEntryMeasurementRef = React.useRef<Readonly<{
         element: LegendNativePhysicalEntryElement;
         generation: object;
@@ -951,7 +955,7 @@ function LegendListTranscriptRendererInner<TItem>(
             && !isUserScrollInputLive()
         ) {
             if (!hasLiveKeyedHeldIntent() && heldScrollIntentRef.current?.kind !== 'end') {
-                setHeldScrollIntent({ kind: 'end' });
+                latchHeldEndIntentRef.current();
             }
         }
         // A keyed anchor/index hold is the semantic viewport truth until the canonical
@@ -1008,7 +1012,7 @@ function LegendListTranscriptRendererInner<TItem>(
         lastPublishedAtEndStateRef.current = state;
         lastPublishedAtEndCauseRef.current = cause;
         emit(state, { cause });
-    }, [hasLiveKeyedHeldIntent, isUserScrollInputLive, isWebFrame, props.onRendererAtEndChange, readRendererAtEndObservation, resolveNativeAtEndPublicationCause, setHeldScrollIntent]);
+    }, [hasLiveKeyedHeldIntent, isUserScrollInputLive, isWebFrame, props.onRendererAtEndChange, readRendererAtEndObservation, resolveNativeAtEndPublicationCause]);
 
     const cancelScheduledHeldIntentSettle = React.useCallback(() => {
         const cancelAnimationFrame = globalThis.cancelAnimationFrame;
@@ -1030,6 +1034,7 @@ function LegendListTranscriptRendererInner<TItem>(
         outcome: 'preempted' | 'superseded' = 'preempted',
     ) => {
         finishEntryPlacement(heldScrollIntentRef.current, outcome);
+        legendListRef.current?.cancelScroll();
         setHeldScrollIntent(null);
         heldIntentSettleUntilRef.current = 0;
         lastHeldIntentCorrectionRef.current = null;
@@ -1041,8 +1046,8 @@ function LegendListTranscriptRendererInner<TItem>(
         finishEntryPlacement,
         setHeldScrollIntent,
     ]);
-    const cancelLegendInitialScrollPreservation = React.useCallback(() => {
-        legendListRef.current?.cancelInitialScrollPreservation();
+    const cancelLegendScroll = React.useCallback(() => {
+        legendListRef.current?.cancelScroll();
     }, []);
 
     // IDENTITY AMPLIFICATION — the two resolvers below are the root of the held-intent callback
@@ -1223,7 +1228,7 @@ function LegendListTranscriptRendererInner<TItem>(
         resolveHeldIntentIndex,
     ]);
 
-    const readHeldIntentLanding = React.useCallback((intent: LegendHeldScrollIntent): LegendHeldIntentLanding | null => {
+    const readHeldIntentLanding = React.useCallback((intent: Exclude<LegendHeldScrollIntent, { kind: 'end' }>): LegendHeldIntentLanding | null => {
         if (intent.kind === 'anchor') {
             const metrics = readWebScrollMetrics();
             if (!metrics) return null;
@@ -1274,9 +1279,8 @@ function LegendListTranscriptRendererInner<TItem>(
         }
         const state = legendListRef.current?.getState();
         if (!state) return null;
-        const index = intent.kind === 'index' ? resolveHeldIntentIndex(intent) : undefined;
+        const index = resolveHeldIntentIndex(intent);
         const stateLanding = resolveLegendStateHeldIntentLanding({ index, intent, state });
-        if (intent.kind === 'end') return stateLanding;
         const metrics = readWebScrollMetrics();
         if (!metrics) return stateLanding;
         const element = state.elementAtIndex?.(index ?? -1) as unknown as HTMLElement | null | undefined;
@@ -1467,33 +1471,9 @@ function LegendListTranscriptRendererInner<TItem>(
             } else if (
                 landing.basis !== 'native-physical'
                 && previous.currentOffset === landing.currentOffset
-                // ONE TAIL WRITE PER OBSERVED MOVEMENT — the native twin of the landed-offset
-                // guard above. A native write has no synchronously readable landing, so the
-                // only evidence that our previous correction reached the scroller is
-                // `state.scroll` moving off the offset we corrected FROM. Until it does, the
-                // transaction is reading its own un-applied write.
-                //
-                // For a held-'end' transaction a MOVED TARGET is not independent evidence: the
-                // target IS the tail, and the write already in flight already commands the
-                // tail. Legend advances `state.scroll` optimistically inside `requestAdjust`
-                // and then discards the reconciling native scroll observations
-                // (`ignoreScrollFromMVCP`, cleared by a 100ms timeout a stalled JS thread
-                // cannot run), so through a content mutation the offset stands still while
-                // `contentLength` walks the tail a few px per commit — and target equality,
-                // the only guard here before, never fires. Measured on the send crossover
-                // (UNIT M, 2026-08-01, S11): scrollToOffset(101360.5) then
-                // scrollToOffset(101352.5) 79ms later, both spent on state.scroll 101142.666,
-                // one of three writers issuing eleven writes in 3.4s for one send.
-                //
-                // A KEYED hold keeps target-equality semantics: its destination is a row
-                // identity whose measured position genuinely relocates (expansion cascade,
-                // late row measurement), and that relocation is new evidence even while our
-                // own write is unobserved.
-                //
-                // This is a precondition on evidence, never a delay or suppression window:
-                // nothing is scheduled, and the first settle frame in which the scroller has
-                // actually moved corrects the remainder against the geometry it then reports.
-                && (targetUnchanged || intent.kind === 'end')
+                // A keyed destination may relocate while the prior physical write is
+                // unobserved; only the same target and same observed offset is redundant.
+                && targetUnchanged
             ) {
                 return false;
             }
@@ -1599,28 +1579,8 @@ function LegendListTranscriptRendererInner<TItem>(
             // residual survives into the very next settle frame — which the bounded cadence is
             // already polling — and is written there, while a one-frame seam artifact does not.
             const previousObservation = lastLandingObservationRef.current;
-            // NATIVE HELD-'END' JOINS THE SAME PRECONDITION (Rank 2, 2026-08-02). Web never
-            // reaches this evaluation for an 'end' intent — `verifyLanding` hands the tail to
-            // Legend's maintain-at-end lifecycle unconditionally — so the guard above was
-            // web-keyed by accident of reachability, not by design. On native the SAME branch is
-            // reachable the moment an MVCP excursion pushes `isWithinMaintainScrollAtEndThreshold`
-            // false, and BOTH numbers this transaction reads are mid-transaction there:
-            // `currentOffset` is `state.scroll`, which Legend advances optimistically inside
-            // `requestAdjust` and then declines to reconcile while `ignoreScrollFromMVCP` is
-            // armed, and `maxOffset` is `contentLength - scrollLength`, which walks every commit.
-            // Measured (UNIT M, 2026-08-01, send S11): the corrector wrote absolute offsets from
-            // single in-motion reads while Legend's own compensation was mid-flight — three
-            // writers, eleven writes, 3.4s, for one send.
-            //
-            // This closes the half of that hazard the one-write-per-observed-movement guard in
-            // `writeHeldIntentResidual` cannot see: that guard only withholds while our own write
-            // is UNOBSERVED (`currentOffset` unchanged). Through a crossover `state.scroll` is
-            // swinging (M: -188.25 then +182.00 in two frames), so it reads as "observed
-            // movement" on nearly every settle frame and authorizes a fresh absolute write each
-            // time. The two rules compose: one write per observed movement, and none at all while
-            // the geometry that movement is measured in is still moving.
-            const isNativeTailLanding = !isWebFrame && intent.kind === 'end';
-            const hasComparableScrollRange = (landing.basis === 'web-dom' || isNativeTailLanding)
+            // DOM keyed correction requires a stable observed offset and content range.
+            const hasComparableScrollRange = landing.basis === 'web-dom'
                 && typeof landing.maxOffset === 'number'
                 && Number.isFinite(landing.maxOffset);
             if (hasComparableScrollRange) {
@@ -1635,12 +1595,8 @@ function LegendListTranscriptRendererInner<TItem>(
                 && previousObservation.intent === intent
                 ? previousObservation
                 : null;
-            // A transaction's FIRST read has nothing to disagree with; entry restore and every
-            // fresh hold must still land promptly. Only an observed CHANGE withholds. That
-            // exemption is deliberate and load-bearing on native too — nine live-captured
-            // scenarios (session-open footer race, giant-row remeasure, far jump-to-bottom
-            // repair, fling resume, clamp boundary) depend on the beyond-threshold fallback
-            // landing on the read that first observes the gap.
+            // A fresh keyed placement can land promptly; an observed geometry change waits
+            // for a coherent subsequent read.
             const geometryStableSinceLastRead = !hasComparableScrollRange
                 || comparableObservation === null
                 || (
@@ -1737,23 +1693,11 @@ function LegendListTranscriptRendererInner<TItem>(
             }
             if (requestWebHeldEndMaterialization(intent)) return false;
             if (intent.kind === 'end') {
-                if (isWebFrame) {
-                    // After the one-shot final-row materialization above, Legend's semantic
-                    // maintain-at-end lifecycle is the sole steady web positioning owner.
-                    // Its public isAtEnd fact can remain cached while a row remeasurement has
-                    // already changed DOM geometry, so DOM residual is not a settled-gap signal.
-                    pendingLargeResidualConfirmationRef.current = null;
-                    return true;
-                }
-                if (
-                    legendListRef.current?.getState()?.isWithinMaintainScrollAtEndThreshold
-                    === true
-                ) {
-                    // Stock Legend owns native item/footer/layout/data maintenance while this
-                    // fact is true. The app residual is only the beyond-threshold fallback.
-                    pendingLargeResidualConfirmationRef.current = null;
-                    return true;
-                }
+                // Legend consumes this same held-end intent on every platform, including
+                // beyond its physical threshold. An old native acknowledgement or transient
+                // DOM gap is not permission for a second absolute-offset writer.
+                pendingLargeResidualConfirmationRef.current = null;
+                return true;
             }
             if (
                 entryPlacementActive
@@ -1803,7 +1747,12 @@ function LegendListTranscriptRendererInner<TItem>(
                 );
                 return;
             }
-            verifyLanding();
+            if (verifyLanding() && intent.kind === 'end') {
+                // End-follow has handed off to Legend. Retain the geometry provenance
+                // deadline for event classification, but do not poll a retired writer.
+                finishHeldIntentSettle('settled');
+                return;
+            }
             const requestAnimationFrame = globalThis.requestAnimationFrame;
             if (typeof requestAnimationFrame !== 'function') {
                 finishHeldIntentSettle('unavailable');
@@ -1841,7 +1790,10 @@ function LegendListTranscriptRendererInner<TItem>(
             // synchronously. Legend's item-size callback is different: 3.3.3 invokes it
             // before its position/MVCP recalculation, so that signal joins the already-owned
             // settle frame and reads only post-commit geometry.
-            if (!deferFirstVerification) verifyLanding();
+            if (!deferFirstVerification && verifyLanding() && intent.kind === 'end') {
+                finishHeldIntentSettle('settled');
+                return;
+            }
             const scheduled = heldIntentSettleFrameRef.current;
             // Already polling for THIS intent: one frame per transaction, unchanged. A frame
             // belonging to a superseded intent is not this transaction's poll and must not
@@ -2049,6 +2001,9 @@ function LegendListTranscriptRendererInner<TItem>(
         ));
     }, [cancelScheduledHeldIntentSettle, invalidateUserInertiaContinuation, setHeldScrollIntent]);
 
+    // Native quiet at-end observations use the same hold-plus-settle transaction as explicit
+    // commands. A flag-only acquisition leaves Legend maintenance without a bounded geometry
+    // confirmation after a late row/footer change.
     const latchHeldEndIntent = React.useCallback(() => {
         setHeldScrollIntent({ kind: 'end' });
         heldIntentSettleUntilRef.current = Date.now() + LEGEND_HELD_INTENT_SETTLE_MS;
@@ -2057,6 +2012,7 @@ function LegendListTranscriptRendererInner<TItem>(
         cancelScheduledHeldIntentSettle();
         requestHeldIntentSettle();
     }, [cancelScheduledHeldIntentSettle, requestHeldIntentSettle, setHeldScrollIntent]);
+    latchHeldEndIntentRef.current = latchHeldEndIntent;
 
     const affirmWebHeldEndFromTowardEndInput = React.useCallback((): boolean => {
         if (!isWebFrame) return false;
@@ -2386,12 +2342,11 @@ function LegendListTranscriptRendererInner<TItem>(
                 && deltaY > 0
                 && affirmWebHeldEndFromTowardEndInput();
             if (!followAffirming) {
-                cancelLegendInitialScrollPreservation();
                 releaseHeldScrollIntent();
             }
         }
         props.platformInteractionProps?.onWheel?.(event);
-    }, [affirmWebHeldEndFromTowardEndInput, cancelLegendInitialScrollPreservation, invalidateNativePhysicalViewportCapture, isWebFrame, props.platformInteractionProps, props.webDomObservation, releaseHeldScrollIntent, userScrollIntent]);
+    }, [affirmWebHeldEndFromTowardEndInput, invalidateNativePhysicalViewportCapture, isWebFrame, props.platformInteractionProps, props.webDomObservation, releaseHeldScrollIntent, userScrollIntent]);
 
     const handleLegendScrollBeginDrag = React.useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         invalidateNativePhysicalViewportCapture();
@@ -2409,11 +2364,10 @@ function LegendListTranscriptRendererInner<TItem>(
             // any held-tail intent and cancels the in-flight settle window so the user's drag
             // detaches normally. Ending the drag at the tail re-latches through the next
             // at-end observation.
-            cancelLegendInitialScrollPreservation();
             releaseHeldScrollIntent();
         }
         props.onScrollBeginDrag?.(event);
-    }, [cancelLegendInitialScrollPreservation, invalidateNativePhysicalViewportCapture, isWebFrame, props.onScrollBeginDrag, props.webDomObservation, releaseHeldScrollIntent, userScrollIntent]);
+    }, [invalidateNativePhysicalViewportCapture, isWebFrame, props.onScrollBeginDrag, props.webDomObservation, releaseHeldScrollIntent, userScrollIntent]);
 
     const handleLegendScrollEndDrag = React.useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
         if (userScrollIntent.isGestureActive()) {
@@ -2500,10 +2454,9 @@ function LegendListTranscriptRendererInner<TItem>(
                     : heldScrollIntentRef.current?.kind === 'end'
             );
         if (!followAffirmingHeldEndInput) {
-            cancelLegendInitialScrollPreservation();
             releaseHeldScrollIntent();
         }
-    }, [affirmWebHeldEndFromTowardEndInput, cancelLegendInitialScrollPreservation, invalidateNativePhysicalViewportCapture, isWebFrame, props.webDomObservation, releaseHeldScrollIntent, userScrollIntent]);
+    }, [affirmWebHeldEndFromTowardEndInput, invalidateNativePhysicalViewportCapture, isWebFrame, props.webDomObservation, releaseHeldScrollIntent, userScrollIntent]);
     const handleLegendTouchMove = React.useCallback((event: unknown) => {
         const previousCoordinate = webTouchVerticalCoordinateRef.current;
         const currentCoordinate = readTouchVerticalCoordinate(event);
@@ -2532,8 +2485,10 @@ function LegendListTranscriptRendererInner<TItem>(
         };
         const alreadyActive = explicitJumpTakeoverOperationRef.current !== null;
         explicitJumpTakeoverOperationRef.current = operationId;
-        cancelLegendInitialScrollPreservation();
-        if (alreadyActive) return releaseOperation;
+        if (alreadyActive) {
+            cancelLegendScroll();
+            return releaseOperation;
+        }
         const hadHeldEndOwnership = heldScrollIntentRef.current?.kind === 'end';
         invalidateUserInertiaContinuation();
         suppressAutoEndLatchRef.current = true;
@@ -2542,7 +2497,7 @@ function LegendListTranscriptRendererInner<TItem>(
         // keep maintenance disabled, but publish the explicit takeover phase synchronously.
         if (!hadHeldEndOwnership) renderPositioningPhase();
         return releaseOperation;
-    }, [cancelLegendInitialScrollPreservation, invalidateUserInertiaContinuation, releaseHeldScrollIntent]);
+    }, [cancelLegendScroll, invalidateUserInertiaContinuation, releaseHeldScrollIntent]);
 
     /**
      * Legend answers its mounted window from list state. Before that state exists
@@ -2838,7 +2793,7 @@ function LegendListTranscriptRendererInner<TItem>(
             nowMs: Date.now(),
         });
         userScrollIntent.setGestureActive({ active: true, atMs: Date.now(), gesture: 'drag' });
-        cancelLegendInitialScrollPreservation();
+        cancelLegendScroll();
         if (webScrollbarDragCleanupRef.current) return;
         const listenerHost = globalThis.window ?? globalThis;
         if (typeof listenerHost.addEventListener !== 'function') return;
@@ -2851,7 +2806,7 @@ function LegendListTranscriptRendererInner<TItem>(
             listenerHost.removeEventListener('pointercancel', onRelease);
             listenerHost.removeEventListener('mouseup', onRelease);
         };
-    }, [cancelLegendInitialScrollPreservation, endWebScrollbarDrag, props.webDomObservation, userScrollIntent]);
+    }, [cancelLegendScroll, endWebScrollbarDrag, props.webDomObservation, userScrollIntent]);
     React.useEffect(() => () => {
         webScrollbarDragCleanupRef.current?.();
         webScrollbarDragCleanupRef.current = null;
@@ -2981,25 +2936,15 @@ function LegendListTranscriptRendererInner<TItem>(
             <LayoutCommitObserver
                 onCommitLayoutEffect={() => {
                     invalidateNativePhysicalViewportCapture();
-                    // IDLE FRAME COST, MEASURED AND DELIBERATELY LEFT — this observer is a
-                    // `useLayoutEffect` with no dependency array
-                    // (`@shopify/flash-list/.../LayoutCommitObserver.js`), so it fires on EVERY
-                    // commit of this subtree, including one that changed no row, no size and no
-                    // layout. The `end` hold is durable by design (`finishHeldIntentSettle` closes
-                    // the window, never the intent), so this settle request re-opens a full
-                    // LEGEND_HELD_INTENT_SETTLE_MS window of per-frame polling for every such
-                    // commit: 94 `requestAnimationFrame` calls, against 0 at true rest
-                    // (`legendIdleFrameCost.fabric.native.real.integration.test.tsx`).
-                    //
-                    // Gating it on a moved content height was tried and reverted: an open settle
-                    // window is ALSO the fact `handleLegendScroll` reads (`heldIntentSettleInFlight`)
-                    // to tell a renderer/layout offset rollback from a reader detach, so closing
-                    // these windows made a bare touch plus content growth release the tail hold
-                    // ('does not let a bare native touch reuse recent drag evidence for a later
-                    // layout detach', legendListRenderer.test.tsx). Cheapening this poll requires
-                    // giving that classifier its own liveness fact first; it is not a free change.
+                    // LayoutCommitObserver is a no-dependency useLayoutEffect shim on Legend and
+                    // therefore runs for every React commit, including commits with no transcript
+                    // row, size, or viewport news. Keep this callback limited to the shell's
+                    // committed-layout observation and synthesized content-size publication.
+                    // The existing data/measurement/viewport callbacks request a settle only when
+                    // they have real geometry evidence. Reopening a 1500ms requestAnimationFrame
+                    // window here made idle cost proportional to unrelated Markdown/UI commits
+                    // (94 frames for one content-free commit in the shipped native harness).
                     emitSynthesizedContentSize();
-                    requestHeldIntentSettle();
                     props.onCommitLayoutEffect?.();
                 }}
             >

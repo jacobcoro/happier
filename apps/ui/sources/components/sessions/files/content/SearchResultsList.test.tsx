@@ -76,6 +76,33 @@ const searchResultsTheme = {
 } as any;
 
 describe('SearchResultsList', () => {
+    it('keeps the mounted result list and rows while a refined query is searching', async () => {
+        const { SearchResultsList } = await import('./SearchResultsList');
+        const file = { fileType: 'file' as const, fileName: 'a.ts', filePath: 'src/', fullPath: 'src/a.ts' };
+        const props = { theme: searchResultsTheme, searchQuery: 'a', searchResults: [file], onFilePress: vi.fn() };
+        const screen = await renderScreen(<SearchResultsList {...props} isSearching={false} />);
+        const list = screen.tree.findByType('FlatList');
+        await act(async () => { screen.tree.update(<SearchResultsList {...props} searchQuery="a.ts" isSearching />); });
+        expect(screen.tree.findByType('FlatList')).toBe(list);
+        expect(screen.tree.findAllByType('Item')).toHaveLength(1);
+        expect(screen.tree.findAllByType('Text').some(node => React.Children.toArray(node.props.children).includes('files.previousSearchResults'))).toBe(true);
+        await screen.update(<SearchResultsList {...props} searchQuery="a.ts" searchResultsQuery="a" isSearching={false} />);
+        expect(screen.tree.findAllByType('Text').some(node => React.Children.toArray(node.props.children).includes('files.previousSearchResults'))).toBe(true);
+    });
+
+    it('activates matching folders through the reveal callback without opening a file', async () => {
+        const { SearchResultsList } = await import('./SearchResultsList');
+        const folder = { fileType: 'folder' as const, fileName: 'nested/', filePath: 'src/', fullPath: 'src/nested/' };
+        const onFolderPress = vi.fn();
+        const onFilePress = vi.fn();
+        const screen = await renderScreen(<SearchResultsList theme={searchResultsTheme} searchQuery="nested" searchResults={[folder]} isSearching={false} onFilePress={onFilePress} onFolderPress={onFolderPress} />);
+        const item = screen.tree.findByType('Item');
+        expect(typeof item.props.onPress).toBe('function');
+        await act(async () => { item.props.onPress(); });
+        expect(onFolderPress).toHaveBeenCalledWith(folder);
+        expect(onFilePress).not.toHaveBeenCalled();
+    });
+
     it('does not render string children under View when searchQuery is empty', async () => {
         const { SearchResultsList } = await import('./SearchResultsList');
 

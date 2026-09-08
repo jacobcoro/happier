@@ -1,4 +1,5 @@
 import {
+    PendingActivationAuthorizationV1Schema,
     V2SessionListResponseSchema,
     V2SessionByIdNotFoundSchema,
     type V2SessionListResponse,
@@ -232,6 +233,7 @@ function coerceLegacySessionRecord(raw: unknown): V2SessionRecord | null {
         pendingCount: readNumber(raw.pendingCount) ?? undefined,
         pendingBlockedCount: readNumber(raw.pendingBlockedCount) ?? undefined,
         pendingVersion: readNumber(raw.pendingVersion) ?? undefined,
+        pendingActivationAuthorization: PendingActivationAuthorizationV1Schema.safeParse(raw.pendingActivationAuthorization).data,
         thinking: readOptionalBoolean(raw.thinking),
         thinkingAt: readNumber(raw.thinkingAt) ?? undefined,
         dataEncryptionKey: readNullableString(raw.dataEncryptionKey) ?? null,

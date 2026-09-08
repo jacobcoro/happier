@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RawJSONLines } from '../types';
+import { ClaudeLocalPermissionBridge } from '../localPermissions/localPermissionBridge';
+import { OutgoingMessageQueue } from '../utils/OutgoingMessageQueue';
+import { createPermissionHandlerSessionStub } from '../utils/permissionHandler.testkit';
 import { getProjectPath } from '../utils/path';
 import type { SessionHookData } from '../utils/startHookServer';
 import { createClaudeUnifiedAcceptedPromptTranscriptDiscovery } from './acceptedPromptTranscriptDiscovery';
@@ -85,6 +88,75 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
       }));
     } finally {
       await bridge.dispose();
+    }
+  });
+
+  it('commits mixed assistant context and question before the native question is answered', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unanswered-context-'));
+    tempDirs.push(dir);
+    const transcriptPath = join(dir, 'pending_question.jsonl');
+    await writeFile(transcriptPath, '');
+    const { session, client } = createPermissionHandlerSessionStub('pending_question');
+    const permissionBridge = new ClaudeLocalPermissionBridge(session);
+    permissionBridge.activate();
+    const committed: RawJSONLines[] = [];
+    // The send callback is the server transport boundary; scanner, permission state and queue stay real.
+    const queue = new OutgoingMessageQueue(async (message: RawJSONLines) => { committed.push(message); });
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId: 'pending_question',
+      transcriptPath,
+      workingDirectory: dir,
+      onMessage: (message) => queue.enqueue(message, { delay: 250, toolCallIds: ['question_1'] }),
+      transcriptMissingWarningMs: 0,
+    });
+    const toolInput = {
+      questions: [{
+        header: 'Cleanup', question: 'Remove scratch files?', multiSelect: false,
+        options: [
+          { label: 'Remove', description: 'Delete scratch files' },
+          { label: 'Keep', description: 'Keep for inspection' },
+        ],
+      }],
+    };
+    let answered = false;
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      const pending = permissionBridge.handlePermissionHook({
+        hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion',
+        tool_input: toolInput, tool_use_id: 'question_1',
+      }).then((result) => { answered = true; return result; });
+      await waitUntil(() => Boolean(client.agentState.requests.question_1));
+      const assistantRow = {
+        type: 'assistant', uuid: 'context_and_question', sessionId: 'pending_question',
+        message: { role: 'assistant', content: [
+          { type: 'text', text: 'The scratch files are no longer needed by the build.' },
+          { type: 'tool_use', id: 'question_1', name: 'AskUserQuestion', input: toolInput },
+        ] },
+      } as RawJSONLines;
+      await appendJsonl(transcriptPath, assistantRow);
+      await waitUntil(() => committed.length === 1);
+      expect(answered).toBe(false);
+      expect(client.agentState.requests.question_1).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action' });
+      expect(committed[0]).toMatchObject({ message: { content: [
+        { type: 'text', text: 'The scratch files are no longer needed by the build.' },
+        { type: 'tool_use', id: 'question_1', name: 'AskUserQuestion' },
+      ] } });
+
+      await client.rpcHandlerManager.getHandler('permission')?.({
+        id: 'question_1', approved: true, answers: { 'Remove scratch files?': 'Keep' },
+      });
+      await expect(pending).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+      await appendJsonl(transcriptPath, assistantRow);
+      await appendJsonl(transcriptPath, {
+        type: 'user', uuid: 'question_result', sessionId: 'pending_question',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'question_1', content: 'Keep' }] },
+      } as RawJSONLines);
+      await waitUntil(() => committed.some((row) => row.uuid === 'question_result'));
+      expect(committed.filter((row) => row.uuid === 'context_and_question')).toHaveLength(1);
+    } finally {
+      permissionBridge.dispose();
+      await bridge.dispose();
+      queue.destroy();
     }
   });
 
@@ -607,6 +679,94 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
       });
       expect(onSessionFound).toHaveBeenCalledTimes(1);
       expect(onSessionFound).toHaveBeenCalledWith('sess_main', expect.objectContaining({ session_id: 'sess_main' }));
+    } finally {
+      await bridge.dispose();
+    }
+  });
+
+  it('follows the same main Claude session when a later trusted hook reports a moved transcript path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-moved-'));
+    tempDirs.push(dir);
+    const originalTranscriptPath = join(dir, 'project-a', 'sess_main.jsonl');
+    const movedTranscriptPath = join(dir, 'project-b', 'sess_main.jsonl');
+    const sidechainTranscriptPath = join(dir, 'project-b', 'sess_sidechain.jsonl');
+    await mkdir(join(dir, 'project-a'), { recursive: true });
+    await mkdir(join(dir, 'project-b'), { recursive: true });
+    await writeFile(originalTranscriptPath, '');
+    await writeFile(movedTranscriptPath, '');
+    await writeFile(sidechainTranscriptPath, '');
+
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const onMessage = vi.fn();
+    const onSessionFound = vi.fn();
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId: null,
+      transcriptPath: null,
+      workingDirectory: dir,
+      onMessage,
+      onSessionFound,
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      transcriptMissingWarningMs: 0,
+    });
+
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({
+        hook_event_name: 'SessionStart',
+        source: 'startup',
+        session_id: 'sess_main',
+        transcript_path: originalTranscriptPath,
+      });
+      await appendJsonl(originalTranscriptPath, {
+        type: 'assistant',
+        uuid: 'assistant_before_move',
+        sessionId: 'sess_main',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'before move' }] },
+      } as RawJSONLines);
+      await waitUntil(() => onMessage.mock.calls.some(([message]) => message?.uuid === 'assistant_before_move'));
+
+      hook({
+        hook_event_name: 'PostToolUse',
+        session_id: 'sess_main',
+        transcript_path: sidechainTranscriptPath,
+        agent_id: 'subagent-1',
+      });
+      expect(onSessionFound).toHaveBeenCalledTimes(1);
+
+      const movedHook: SessionHookData = {
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'sess_main',
+        transcript_path: movedTranscriptPath,
+      };
+      hook(movedHook);
+      expect(onSessionFound).toHaveBeenCalledTimes(2);
+      expect(onSessionFound).toHaveBeenLastCalledWith('sess_main', movedHook);
+
+      await appendJsonl(movedTranscriptPath, {
+        type: 'assistant',
+        uuid: 'assistant_after_move',
+        sessionId: 'sess_main',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'after move' }] },
+      } as RawJSONLines);
+      await waitUntil(() => onMessage.mock.calls.some(([message]) => message?.uuid === 'assistant_after_move'));
+
+      await appendJsonl(originalTranscriptPath, {
+        type: 'assistant',
+        uuid: 'stale_assistant_after_move',
+        sessionId: 'sess_main',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'stale after move' }] },
+      } as RawJSONLines);
+      await waitMs(150);
+      expect(onMessage.mock.calls.map(([message]) => message?.uuid)).not.toContain('stale_assistant_after_move');
     } finally {
       await bridge.dispose();
     }

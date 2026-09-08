@@ -1,6 +1,7 @@
 import {
   hasConnectedServiceAuthGroupCandidateEvidenceForSwitchReason,
   selectConnectedServiceAuthGroupCandidate,
+  resolveConnectedServiceAuthGroupQuotaResetCandidates,
   type ConnectedServiceAuthGroupCandidateDecisionTrace,
   type ConnectedServiceAuthGroupMember,
   type ConnectedServiceAuthGroupMemberRuntimeState,
@@ -13,7 +14,9 @@ import {
 } from '../../runtimeAuth/connectedServiceAuthGenerationApplyFailure';
 import type { AcceptedConnectedServiceAccountVerificationByServiceId } from '../../accountTransitions/acceptedConnectedServiceAccountVerification';
 import { evaluatePredictiveSoftSwitchSessionApplyPolicy } from './predictiveSoftSwitchPolicy';
-import type { ConnectedServiceGroupQuotaProbeResult } from '../../quotas/ConnectedServiceQuotasCoordinator';
+import type { ConnectedServiceGroupQuotaProbeResult, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../../quotas/ConnectedServiceQuotasCoordinator';
+import { logger } from '@/ui/logger';
+import type { ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1 } from '@happier-dev/protocol';
 import {
   buildGenerationApplyResult,
   buildLeaseCompletion,
@@ -100,6 +103,11 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     leases: InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry;
     nowMs: () => number;
     quotaFreshnessMs: number;
+    consumeAvailableRecoveryCreditForProfile?(input: Readonly<{
+      serviceId: string;
+      profileId: string;
+      automaticResetContext: Readonly<{ groupId: string; sessionId?: string }>;
+    }>): Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult>;
     loadState(input: Readonly<{
       serviceId: string;
       groupId: string;
@@ -142,6 +150,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
       groupId: string;
       loaded: ConnectedServiceAuthGroupSwitchState;
       reason: string;
+      limitCategory?: string | null;
       observedProfileId?: string | null;
       retryAtMs?: number | null;
       retryAfterMs?: number | null;
@@ -253,6 +262,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     allowCurrentProfileRetry?: boolean;
   }>): Promise<ReturnType<typeof selectConnectedServiceAuthGroupCandidate>> {
     const memberStatesByProfileId = new Map(input.state.memberStatesByProfileId);
+    const unavailableProfileIds = new Set<string>();
     for (;;) {
       const selected = selectConnectedServiceAuthGroupCandidate({
         nowMs: this.deps.nowMs(),
@@ -261,6 +271,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
         policy: input.state.policy,
         members: input.state.members,
         memberStatesByProfileId,
+        unavailableProfileIds,
         ...(input.allowCurrentProfileRetry === undefined
           ? {}
           : { allowCurrentProfileRetry: input.allowCurrentProfileRetry }),
@@ -273,6 +284,9 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
         reason: input.reason,
       });
       if (prepared.status === 'ready') return selected;
+      // Retryable health remains globally usable, but a failed preflight must not be retried
+      // indefinitely in this operation or disappear from the selector's exclusion evidence.
+      unavailableProfileIds.add(selected.selected.profileId);
       const existing = memberStatesByProfileId.get(selected.selected.profileId) ?? {};
       memberStatesByProfileId.set(selected.selected.profileId, {
         ...existing,
@@ -485,6 +499,8 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
         activeProfileId: completion.activeProfileId,
         generation: completion.generation,
         credentialRevision: completion.credentialRevision ?? null,
+        ...(completion.result.status === 'observed_generation' && completion.result.quotaRecovery
+          ? { quotaRecovery: completion.result.quotaRecovery } : {}),
         ...applyFields,
         ...(decisionTrace === undefined
           ? {}
@@ -520,6 +536,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     groupId: string;
     loaded: ConnectedServiceAuthGroupSwitchState;
     reason: string;
+    limitCategory?: string | null;
     observedProfileId?: string | null;
     retryAtMs?: number | null;
     retryAfterMs?: number | null;
@@ -539,6 +556,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
           groupId: input.groupId,
           loaded,
           reason: input.reason,
+          limitCategory: input.limitCategory,
           observedProfileId: input.observedProfileId,
           retryAtMs: input.retryAtMs,
           retryAfterMs: input.retryAfterMs,
@@ -974,6 +992,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
           groupId: input.groupId,
           loaded,
           reason: input.reason,
+          limitCategory: input.limitCategory,
           observedProfileId: input.observedProfileId,
           retryAtMs: input.retryAtMs,
           retryAfterMs: input.retryAfterMs,
@@ -1189,12 +1208,90 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
             activeProfileId: loaded.activeProfileId,
           })
         : false;
-      const selected = await this.selectPreparedCandidate({
+      let selected = await this.selectPreparedCandidate({
         state: loaded,
         activeProfileId: trigger === 'pre_turn' ? loaded.activeProfileId : selectionActiveProfileId,
         reason: input.reason,
         ...(trigger === 'pre_turn' ? { allowCurrentProfileRetry: allowLoadedActiveProfileRetry } : {}),
       });
+      let resetAttempted = false;
+      let quotaRecovery: Extract<ConnectedServiceAuthGroupSwitchResult, { status: 'observed_generation' }>['quotaRecovery'];
+      if (!selected.selected && loaded.policy.autoUseQuotaResetsWhenExhausted === true
+        && (input.reason === 'usage_limit' || input.reason === 'same_provider_account_exhausted')
+        && this.deps.consumeAvailableRecoveryCreditForProfile) {
+        const unavailableProfileIds = new Set(selected.excluded.filter((entry) => entry.reason === 'credential_unavailable').map((entry) => entry.profileId));
+        const resetCandidates = () => resolveConnectedServiceAuthGroupQuotaResetCandidates({
+          nowMs: this.deps.nowMs(), quotaFreshnessMs: this.deps.quotaFreshnessMs,
+          activeProfileId: loaded.activeProfileId, policy: loaded.policy,
+          members: loaded.members, memberStatesByProfileId: loaded.memberStatesByProfileId,
+          unavailableProfileIds,
+        });
+        const reconsider = async (receipt?: ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1) => {
+          loaded = await this.deps.loadState({ serviceId: input.serviceId, groupId: input.groupId, trigger });
+          const policyResult = this.resolvePolicyResult({ trigger, request: input, loaded });
+          if (policyResult) {
+            return this.completePipelineResult({
+              trigger, phase: policyResult.phase, lease, request: input, loaded,
+              result: policyResult.result, startedAtMs,
+            });
+          }
+          selected = await this.selectPreparedCandidate({
+            state: loaded, activeProfileId: loaded.activeProfileId, reason: input.reason, allowCurrentProfileRetry: true,
+          });
+          for (const excluded of selected.excluded) {
+            if (excluded.reason === 'credential_unavailable') unavailableProfileIds.add(excluded.profileId);
+          }
+          resetAttempted = true;
+          const chosen = selected.selected;
+          const evidence = selected.decisionTrace.candidates.find((entry) => entry.profileId === chosen?.profileId)?.quotaEvidence;
+          const snapshot = chosen ? loaded.memberStatesByProfileId.get(chosen.profileId)?.quotaSnapshot : null;
+          if (chosen?.profileId === loaded.activeProfileId && snapshot && evidence?.status === 'fresh'
+            && chosen.leastLimitedScore !== null && chosen.leastLimitedScore > 0 && receipt?.status !== 'unknown_after_timeout') {
+            quotaRecovery = {
+              ...(receipt ? { receipt } : {}),
+              quotaSnapshot: { capturedAtMs: snapshot.capturedAtMs, effectiveRemainingPercent: snapshot.effectiveRemainingPercent },
+            };
+          } else if (chosen?.profileId === loaded.activeProfileId) {
+            selected = await this.selectPreparedCandidate({ state: loaded, activeProfileId: loaded.activeProfileId, reason: input.reason });
+          }
+          return null;
+        };
+        const candidates = resetCandidates();
+        for (const candidate of candidates) {
+          const prepared = await this.deps.prepareCandidateForSwitch?.({
+            serviceId: input.serviceId, groupId: input.groupId, profileId: candidate.profileId, reason: input.reason,
+          });
+          if (prepared?.status === 'ineligible') {
+            unavailableProfileIds.add(candidate.profileId);
+            selected = selectConnectedServiceAuthGroupCandidate({
+              nowMs: this.deps.nowMs(), quotaFreshnessMs: this.deps.quotaFreshnessMs,
+              activeProfileId: loaded.activeProfileId, allowCurrentProfileRetry: true,
+              policy: loaded.policy, members: loaded.members, memberStatesByProfileId: loaded.memberStatesByProfileId,
+              unavailableProfileIds,
+            });
+            break;
+          }
+          const beforeResetPolicyResult = await reconsider();
+          if (beforeResetPolicyResult) return beforeResetPolicyResult;
+          if (selected.selected || loaded.policy.autoUseQuotaResetsWhenExhausted !== true) break;
+          if (!resetCandidates().some((member) => member.profileId === candidate.profileId)) break;
+          const reset = await this.deps.consumeAvailableRecoveryCreditForProfile({
+            serviceId: input.serviceId, profileId: candidate.profileId,
+            automaticResetContext: { groupId: input.groupId, ...(input.sessionId ? { sessionId: input.sessionId } : {}) },
+          });
+          logger.info('[ConnectedServiceAuthGroupSwitch] quota reset result', {
+            serviceId: input.serviceId, groupId: input.groupId, profileId: candidate.profileId,
+            ok: reset.ok, outcome: reset.receipt?.status ?? (!reset.ok ? reset.errorCode : 'no_receipt'),
+          });
+          // An ambiguous expenditure must never cascade to another account. Even successful
+          // receipts only permit normal selection after the quota owner publishes fresh evidence.
+          const afterResetPolicyResult = await reconsider(reset.receipt);
+          if (afterResetPolicyResult) return afterResetPolicyResult;
+          if (!selected.selected && ((!reset.ok && reset.errorCode === 'connected_service_quota_recovery_credit_not_available')
+            || reset.receipt?.status === 'not_available')) continue;
+          break;
+        }
+      }
       if (!selected.selected) {
         const result: ConnectedServiceAuthGroupSwitchResult = selected.reason === 'manual_strategy'
           ? shouldWaitForClassifiedFailure({
@@ -1228,14 +1325,27 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
 
       let selectedProfileId = selected.selected.profileId;
       let selectedDecisionTrace = selected.decisionTrace;
-      if (selectedProfileId === loaded.activeProfileId && trigger === 'pre_turn' && allowLoadedActiveProfileRetry) {
+      if (selectedProfileId === loaded.activeProfileId && (resetAttempted || (trigger === 'pre_turn' && allowLoadedActiveProfileRetry))) {
         const result: ConnectedServiceAuthGroupSwitchResult = {
           status: 'observed_generation',
           activeProfileId: loaded.activeProfileId,
           generation: loaded.generation,
           credentialRevision: loaded.credentialRevision ?? null,
+          ...(quotaRecovery ? { quotaRecovery } : {}),
           diagnostics: buildSwitchDecisionDiagnostics({ decisionTrace: selectedDecisionTrace }),
         };
+        if (resetAttempted) {
+          const completion = buildLeaseCompletion({
+            ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+            serviceId: input.serviceId, groupId: input.groupId,
+            activeProfileId: loaded.activeProfileId, generation: loaded.generation,
+            credentialRevision: loaded.credentialRevision, reason: input.reason,
+            fromProfileId: observedProfileId, result,
+          });
+          lease.complete(completion);
+          try { return await this.applyObservedGeneration(completion); }
+          finally { lease.finish(); }
+        }
         return this.completePipelineResult({
           trigger,
           phase: 'conflict_observed_generation',

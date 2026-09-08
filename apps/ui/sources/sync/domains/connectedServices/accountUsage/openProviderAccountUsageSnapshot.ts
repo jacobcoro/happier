@@ -1,6 +1,5 @@
 import {
-  openProviderAccountUsageSnapshotCiphertext,
-  ProviderAccountUsageSnapshotV1Schema,
+  openSealedProviderAccountUsageSnapshot,
   type ProviderAccountUsageSnapshotV1,
   type SealedProviderAccountUsageSnapshotV1,
 } from '@happier-dev/protocol';
@@ -14,9 +13,5 @@ export function openProviderAccountUsageSnapshot(
 ): ProviderAccountUsageSnapshotV1 | null {
   const material = resolveAccountScopedCryptoMaterialFromCredentials(credentials);
 
-  const opened = openProviderAccountUsageSnapshotCiphertext({ material, ciphertext: sealed.ciphertext });
-  if (!opened || !opened.value) return null;
-
-  const parsed = ProviderAccountUsageSnapshotV1Schema.safeParse(opened.value);
-  return parsed.success ? parsed.data : null;
+  return openSealedProviderAccountUsageSnapshot({ material, sealed });
 }

@@ -22,9 +22,7 @@ installServerSettingsHooksCommonModuleMocks({
 const promptSignedOutServerSwitchConfirmationMock = vi.hoisted(() => vi.fn(async () => true));
 const pendingTerminalConnectMock = vi.hoisted(() => ({
     current: null as { publicKeyB64Url: string; serverUrl: string } | null,
-    set: vi.fn((value: { publicKeyB64Url: string; serverUrl: string }) => {
-        pendingTerminalConnectMock.current = value;
-    }),
+    retarget: vi.fn(),
 }));
 
 vi.mock('@/components/settings/server/modals/ServerSwitchAuthPrompt', () => ({
@@ -33,7 +31,7 @@ vi.mock('@/components/settings/server/modals/ServerSwitchAuthPrompt', () => ({
 
 vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
     getPendingTerminalConnect: () => pendingTerminalConnectMock.current,
-    setPendingTerminalConnect: pendingTerminalConnectMock.set,
+    retargetPendingTerminalConnectToServerUrl: pendingTerminalConnectMock.retarget,
 }));
 
 vi.mock('expo-secure-store', () => ({}));
@@ -142,10 +140,7 @@ describe('useServerSettingsServerProfileActions (remove server)', () => {
 
         await actions.onSwitchServer(profile);
 
-        expect(pendingTerminalConnectMock.set).toHaveBeenCalledWith({
-            publicKeyB64Url: 'abc123',
-            serverUrl: 'https://correct.example.test',
-        });
+        expect(pendingTerminalConnectMock.retarget).toHaveBeenCalledWith('https://correct.example.test');
         expect(onSwitchServerById).toHaveBeenCalledWith('server-correct');
     });
 

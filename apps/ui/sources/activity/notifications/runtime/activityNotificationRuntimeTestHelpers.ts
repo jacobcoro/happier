@@ -21,6 +21,11 @@ export function createActivityNotificationTextModuleMock() {
                     return 'Session';
                 case 'notifications.activity.readyFallbackBody':
                     return 'Turn finished. Open the session to continue.';
+                case 'notifications.activity.requestLabels.command': return 'Command';
+                case 'notifications.activity.requestLabels.file': return 'File';
+                case 'notifications.activity.requestLabels.selectOne': return 'Select one';
+                case 'notifications.activity.requestLabels.selectMultiple': return 'Select multiple';
+                case 'notifications.activity.requestLabels.customAnswer': return 'Custom answer allowed';
                 case 'notifications.activity.permissionFallbackBody':
                     return 'Approval required.';
                 case 'notifications.activity.userActionFallbackBody':

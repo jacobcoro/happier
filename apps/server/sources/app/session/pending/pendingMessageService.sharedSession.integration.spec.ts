@@ -201,7 +201,7 @@ describe("pendingMessageService (shared sessions)", () => {
         });
     };
 
-    it("commits the exact inactive send-now activation into the existing account-change cursor", async () => {
+    it("commits resume authorization for an ordinary queued row without changing its delivery priority", async () => {
         const owner = await createAccount("inactive-ui-death-owner");
         const collaborator = await createAccount("inactive-ui-death-collaborator");
         const session = await createSession(owner.id);
@@ -219,7 +219,8 @@ describe("pendingMessageService (shared sessions)", () => {
             localId,
             ciphertext: "cipher-inactive-ui-death",
             messageRole: "user",
-            requestedAction: { v: 1, kind: "send_now" },
+            requestedAction: { v: 1, kind: "enqueue" },
+            resumeWhenAvailable: true,
         })).resolves.toMatchObject({
             ok: true,
             didWrite: true,
@@ -228,6 +229,11 @@ describe("pendingMessageService (shared sessions)", () => {
                 requestId: localId,
             },
         });
+
+        await expect(db.sessionPendingMessage.findUniqueOrThrow({
+            where: { sessionId_localId: { sessionId: session.id, localId } },
+            select: { requestedAction: true },
+        })).resolves.toEqual({ requestedAction: { v: 1, kind: "enqueue" } });
 
         await expect(db.accountChange.findUniqueOrThrow({
             where: {
@@ -259,6 +265,34 @@ describe("pendingMessageService (shared sessions)", () => {
                 pendingActivationRequestId: expect.anything(),
             }),
         });
+
+        await expect(updatePendingRequestedAction({
+            actorUserId: owner.id,
+            sessionId: session.id,
+            localId,
+            requestedAction: { v: 1, kind: "enqueue" },
+            resumeWhenAvailable: false,
+        })).resolves.toMatchObject({ ok: true, didUpdate: true });
+        await expect(db.session.findUniqueOrThrow({
+            where: { id: session.id },
+            select: { pendingActivationRequestId: true },
+        })).resolves.toEqual({ pendingActivationRequestId: null });
+
+        await expect(updatePendingRequestedAction({
+            actorUserId: owner.id,
+            sessionId: session.id,
+            localId,
+            requestedAction: { v: 1, kind: "enqueue" },
+            resumeWhenAvailable: true,
+        })).resolves.toMatchObject({
+            ok: true,
+            didUpdate: true,
+            activationTarget: { accountId: owner.id, requestId: localId },
+        });
+        await expect(db.sessionPendingMessage.findUniqueOrThrow({
+            where: { sessionId_localId: { sessionId: session.id, localId } },
+            select: { requestedAction: true },
+        })).resolves.toEqual({ requestedAction: { v: 1, kind: "enqueue" } });
     });
 
     type ResolveAcceptedPendingDeliveryParams = Parameters<typeof resolveAcceptedPendingDeliveryOwner>[0];

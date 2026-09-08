@@ -33,11 +33,11 @@ export const COMMAND_HELP_ORCHESTRATORS = {
   release: {
     summary: 'Orchestrate a full dev/preview/production release (recommended entrypoint).',
     usage:
-      'node scripts/pipeline/run.mjs release --confirm <action> --repository <owner/repo> [--deploy-environment dev|preview|production] [--deploy-targets <csv>] [--source-sha <sha>] [--workflow-control-sha <sha>] [--resume-run-id <run-id>] [--ci-run-id <run-id>] [--operation-id <id>] [--attempt-id <attempt_n>] [--release-notes-id <id>] [--waive-ci <bool>] [--include-validation-suites <csv>] [--waive-validation-suites <csv>] [--override-reason <text>] [--dry-run] [--json]',
+      'node scripts/pipeline/run.mjs release --confirm <action> --repository <owner/repo> [--deploy-environment dev|preview|production|preview-and-production] [--deploy-targets <csv>] [--source-sha <sha>] [--workflow-control-sha <sha>] [--resume-run-id <run-id>] [--ci-run-id <run-id>] [--operation-id <id>] [--attempt-id <attempt_n>] [--release-notes-id <id>] [--waive-ci <bool>] [--include-validation-suites <csv>] [--waive-validation-suites <csv>] [--override-reason <text>] [--dry-run] [--json]',
     options: [
       '--confirm <action>                Required safety confirmation.',
       '--repository <owner/repo>         Required; e.g. happier-dev/happier.',
-      "--deploy-environment <env>        dev|preview|production (default: preview).",
+      "--deploy-environment <env>        dev|preview|production|preview-and-production (default: preview).",
       '--deploy-targets <csv>            ui,server,website,docs,cli,stack,server_runner (default: ui,server,website,docs).',
       '--force-deploy <bool>             true|false (default: false).',
       '--waive-ci <bool>                Explicit maintainer waiver for exact-SHA source CI plus source-only MySQL/platform gates (default: false).',
@@ -46,7 +46,7 @@ export const COMMAND_HELP_ORCHESTRATORS = {
       '--override-reason <text>         Required single-line reason for a waiver.',
       '--ui-expo-action <mode>           none|ota|native|native_submit|full (default: none).',
       '--desktop-mode <mode>             none|build_only|build_and_publish (default: none).',
-      '--release-profile <profile>       integrated|stable|deep (default: integrated for dev/preview, stable for production; deep is manual-only).',
+      '--release-profile <profile>       integrated|stable|deep (default: integrated for dev/preview, stable for production or combined; deep is manual-only).',
       '--source-sha <sha>                Required for non-dry hosted dispatch; exact source commit to promote.',
       '--workflow-control-sha <sha>      Optional dispatcher-observed dev SHA for hosted workflow-control fencing.',
       '--resume-run-id <run-id>          Optional completed release run whose individually verified immutable candidates should be reused.',
@@ -62,6 +62,7 @@ export const COMMAND_HELP_ORCHESTRATORS = {
     bullets: [
       'Dry-run computes non-mutating release facts and prints hosted dispatch inputs without predicting hosted jobs.',
       'Non-dry preview/production releases dispatch release.yml; privileged release writes remain hosted.',
+      'Combined preview-and-production dispatches one thin wrapper that runs the canonical channel workflow twice in parallel; channel policy requires separate artifact bytes.',
       'Final release dispatches require an exact source SHA and never create a post-admission version-bump commit.',
       'When supplied by hmaint, workflow-control SHA must equal the hosted workflow SHA before actor authorization or mutation.',
       'Resume retains the current authorized source and operation while reusing only candidates admitted from the exact completed origin run.',

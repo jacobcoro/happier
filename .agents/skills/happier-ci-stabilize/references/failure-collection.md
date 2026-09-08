@@ -28,6 +28,8 @@ Use `--out <absolute-directory>` only when another temporary location is needed.
 
 If `collectionComplete` is false, treat the output as a progress snapshot, not the complete failure set. Wait for independent jobs with a 5-20 minute cadence unless a named stop condition applies.
 
+When push concurrency uses `cancel-in-progress: false`, later SHAs queue instead of destroying the evidence of an active run. Let the oldest useful run reach terminal collection when it can still reveal previously unknown clusters. After its complete failure set is retained, cancel only a superseded run that is already proven unable to satisfy the requested outcome and is blocking the corrected exact SHA; do not accumulate a queue of known-doomed full runs.
+
 ## Read compactly without losing evidence
 
 1. Start from `summary.json`, not raw run-level output.
@@ -37,6 +39,8 @@ If `collectionComplete` is false, treat the output as a progress snapshot, not t
 5. Record the earliest causal error in a job; teardown and aggregate exit-code messages are usually propagation.
 
 GitHub annotations are useful indexes but can omit child-process stderr, collapse repeated failures, or show only one test. The full job log remains deciding evidence. When a workflow uploads a richer failure artifact, inspect it only when the log does not decide the cause; avoid downloading unexpectedly huge artifacts before checking their metadata.
+
+For Playwright, `error-context.md`, the trace, screenshots, and boundary-process logs can distinguish an absent product result from a stale locator or fixture mode. Inspect the smallest deciding artifact first. A DOM snapshot that shows a healthy surface in the wrong selected mode is test setup evidence, not a reason to raise the wait.
 
 ## Compare with the last known green basis
 

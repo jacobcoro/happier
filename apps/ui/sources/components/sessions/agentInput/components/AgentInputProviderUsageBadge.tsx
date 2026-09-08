@@ -66,7 +66,18 @@ function areProviderUsageViewModelsEqual(
     left: ConnectedServiceQuotaGaugeViewModel,
     right: ConnectedServiceQuotaGaugeViewModel,
 ): boolean {
-    return left.serviceId === right.serviceId
+    const leftSubscription = left.subscription;
+    const rightSubscription = right.subscription;
+    const subscriptionEqual = leftSubscription === rightSubscription || (!!leftSubscription && !!rightSubscription
+        && leftSubscription.summary === rightSubscription.summary
+        && leftSubscription.period === rightSubscription.period
+        && leftSubscription.renewal === rightSubscription.renewal
+        && leftSubscription.renewalLabel === rightSubscription.renewalLabel
+        && leftSubscription.checkedLabel === rightSubscription.checkedLabel
+        && leftSubscription.notice === rightSubscription.notice
+        && leftSubscription.accessUntilLabel === rightSubscription.accessUntilLabel
+        && leftSubscription.isLastKnown === rightSubscription.isLastKnown);
+    return subscriptionEqual && left.serviceId === right.serviceId
         && left.providerDisplayName === right.providerDisplayName
         && left.activeAccountDisplayLabel === right.activeAccountDisplayLabel
         && left.remainingPct === right.remainingPct
@@ -129,6 +140,7 @@ export const AgentInputProviderUsageBadge = React.memo(function AgentInputProvid
             <Pressable
                 ref={anchorRef}
                 testID="agent-input-provider-usage-badge"
+                hitSlop={10}
                 accessibilityRole="button"
                 accessibilityLabel={accessibilityLabel}
                 onPress={() => {
@@ -177,14 +189,52 @@ export const AgentInputProviderUsageBadge = React.memo(function AgentInputProvid
                                 {t('agentInput.providerUsage.activeAccount', { account: props.viewModel.activeAccountDisplayLabel })}
                             </Text>
                         ) : null}
-                        <Text style={styles.popoverDetail}>
-                            {props.viewModel.detailRightLabel}
-                        </Text>
-                        {props.viewModel.allMeterRows.map((row) => (
+                        {props.viewModel.subscription ? (
+                            <View testID="agent-input-provider-usage-subscription" style={styles.subscription}>
+                                <View style={styles.subscriptionHeader}>
+                                    <Text style={styles.subscriptionLabel}>{t('connectedServices.subscription.title')}</Text>
+                                    <View style={styles.subscriptionStatus}>
+                                        <View style={[
+                                            styles.subscriptionStatusDot,
+                                            props.viewModel.subscription.renewal === 'on'
+                                                ? styles.subscriptionStatusDotOn
+                                                : props.viewModel.subscription.renewal === 'off'
+                                                    ? styles.subscriptionStatusDotOff
+                                                    : styles.subscriptionStatusDotUnknown,
+                                        ]} />
+                                        <Text
+                                            testID="agent-input-provider-usage-subscription:renewal"
+                                            style={styles.subscriptionRenewal}
+                                        >
+                                            {props.viewModel.subscription.renewalLabel}
+                                        </Text>
+                                    </View>
+                                </View>
+                                <Text
+                                    testID="agent-input-provider-usage-subscription:summary"
+                                    style={styles.subscriptionSummary}
+                                >
+                                    {props.viewModel.subscription.summary}
+                                </Text>
+                                {props.viewModel.subscription.period ? (
+                                    <Text style={styles.subscriptionMeta}>{props.viewModel.subscription.period}</Text>
+                                ) : null}
+                                <Text style={styles.subscriptionMeta}>{props.viewModel.subscription.checkedLabel}</Text>
+                                {props.viewModel.subscription.notice ? (
+                                    <Text style={styles.subscriptionNotice}>{props.viewModel.subscription.notice}</Text>
+                                ) : null}
+                            </View>
+                        ) : null}
+                        {props.viewModel.allMeterRows.map((row, index) => (
                             <View
                                 key={row.meterId}
                                 testID={`agent-input-provider-usage-meter:${row.meterId}`}
-                                style={styles.meterRow}
+                                style={[
+                                    styles.meterRow,
+                                    index === 0
+                                        ? props.viewModel.subscription ? styles.meterRowAfterSubscription : null
+                                        : styles.meterRowGap,
+                                ]}
                             >
                                 <View style={styles.meterHeader}>
                                     <Text style={styles.meterLabel} numberOfLines={1}>
@@ -215,14 +265,16 @@ export const AgentInputProviderUsageBadge = React.memo(function AgentInputProvid
                                 testID="agent-input-provider-usage-recovery-credit"
                                 style={styles.recoveryCredit}
                             >
-                                <Text style={styles.recoveryCreditTitle}>
-                                    {t('connectedServices.quota.recoveryCreditTitle', { count: recoveryCreditSummary.availableCount })}
-                                </Text>
-                                <Text style={styles.recoveryCreditSubtitle}>
-                                    {typeof recoveryCreditSummary.nextExpiresAtMs === 'number'
-                                        ? t('connectedServices.quota.recoveryCreditExpires', { time: new Date(recoveryCreditSummary.nextExpiresAtMs).toLocaleString() })
-                                        : t('connectedServices.quota.recoveryCreditSubtitle')}
-                                </Text>
+                                <View style={styles.recoveryCreditInfo}>
+                                    <Text style={styles.recoveryCreditTitle}>
+                                        {t('connectedServices.quota.recoveryCreditTitle', { count: recoveryCreditSummary.availableCount })}
+                                    </Text>
+                                    <Text style={styles.recoveryCreditSubtitle}>
+                                        {typeof recoveryCreditSummary.nextExpiresAtMs === 'number'
+                                            ? t('connectedServices.quota.recoveryCreditExpires', { time: new Date(recoveryCreditSummary.nextExpiresAtMs).toLocaleString() })
+                                            : t('connectedServices.quota.recoveryCreditSubtitle')}
+                                    </Text>
+                                </View>
                                 {props.onRecoveryCreditPress ? (
                                     <Pressable
                                         testID="agent-input-provider-usage-recovery-credit-action"
@@ -262,31 +314,97 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     badgePressed: {
         opacity: 0.9,
+        transform: [{ scale: 0.96 }],
     },
     popoverContent: {
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        gap: 10,
+        paddingHorizontal: 18,
+        paddingVertical: 16,
+        gap: 0,
     },
     popoverTitle: {
-        fontSize: 11,
-        letterSpacing: 1,
+        fontSize: 12,
+        letterSpacing: 1.6,
         textTransform: 'uppercase',
         color: theme.colors.text.secondary,
+        marginBottom: 3,
         ...Typography.header(),
     },
-    popoverDetail: {
+    popoverAccount: {
         fontSize: 13,
-        color: theme.colors.text.primary,
+        color: theme.colors.text.secondary,
+        marginBottom: 12,
         ...Typography.default(),
     },
-    popoverAccount: {
+    subscription: {
+        gap: 0,
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderTopColor: theme.colors.border.subtle,
+    },
+    subscriptionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    subscriptionLabel: {
+        fontSize: 10,
+        letterSpacing: 1.2,
+        textTransform: 'uppercase',
+        color: theme.colors.text.tertiary,
+        ...Typography.header(),
+    },
+    subscriptionStatus: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+    },
+    subscriptionStatusDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+    },
+    subscriptionStatusDotOn: {
+        backgroundColor: theme.colors.state.success.foreground,
+    },
+    subscriptionStatusDotOff: {
+        backgroundColor: theme.colors.text.tertiary,
+    },
+    subscriptionStatusDotUnknown: {
+        backgroundColor: theme.colors.state.warning.foreground,
+    },
+    subscriptionRenewal: {
         fontSize: 12,
         color: theme.colors.text.secondary,
+        ...Typography.default('semiBold'),
+    },
+    subscriptionSummary: {
+        fontSize: 13,
+        lineHeight: 18,
+        marginTop: 8,
+        color: theme.colors.text.primary,
+        ...Typography.default('semiBold'),
+    },
+    subscriptionMeta: {
+        fontSize: 12,
+        lineHeight: 17,
+        color: theme.colors.text.secondary,
+        ...Typography.default(),
+    },
+    subscriptionNotice: {
+        fontSize: 11,
+        lineHeight: 15,
+        color: theme.colors.state.warning.foreground,
         ...Typography.default(),
     },
     meterRow: {
         gap: 6,
+    },
+    meterRowAfterSubscription: {
+        marginTop: 12,
+    },
+    meterRowGap: {
+        marginTop: 12,
     },
     meterHeader: {
         flexDirection: 'row',
@@ -312,8 +430,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
     },
     recoveryCredit: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
         gap: 6,
-        paddingTop: 2,
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderTopColor: theme.colors.border.subtle,
+    },
+    recoveryCreditInfo: {
+        flex: 1,
+        gap: 4,
+        minWidth: 0,
     },
     recoveryCreditTitle: {
         fontSize: 12,
@@ -327,14 +454,18 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     recoveryCreditAction: {
         alignSelf: 'flex-start',
-        minHeight: 28,
+        marginTop: 2,
+        minHeight: 32,
         justifyContent: 'center',
-        borderRadius: 6,
-        paddingHorizontal: 10,
-        backgroundColor: theme.colors.surface.pressedOverlay,
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        backgroundColor: theme.colors.surface.selected,
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
     },
     recoveryCreditActionPressed: {
         opacity: 0.82,
+        transform: [{ scale: 0.96 }],
     },
     recoveryCreditActionDisabled: {
         opacity: 0.58,

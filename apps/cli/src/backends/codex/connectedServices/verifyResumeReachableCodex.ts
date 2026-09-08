@@ -11,6 +11,7 @@ import {
   isMatchingCodexRolloutFileName,
   normalizeCodexVendorResumeId,
 } from '@/backends/codex/utils/codexSessionFiles';
+import { reconcileCodexResumeRolloutPath } from './reconcileCodexResumeRolloutPath';
 
 async function statFile(path: string): Promise<boolean> {
   try {
@@ -62,13 +63,25 @@ export async function verifyResumeReachableCodex(
     return { ok: false, reason: 'codex_session_file_not_found' };
   }
 
+  const acceptReachablePath = async (resolvedPath: string): Promise<VerifyResumeReachableResult> => {
+    const reconciled = await reconcileCodexResumeRolloutPath({
+      targetMaterializedEnv: input.targetMaterializedEnv,
+      vendorResumeId,
+      resolvedRolloutPath: resolvedPath,
+      cwd: input.cwd,
+    });
+    return reconciled
+      ? { ok: true, resolvedPath }
+      : { ok: false, reason: 'codex_session_index_reconciliation_failed' };
+  };
+
   if (typeof input.candidatePersistedSessionFile === 'string' && input.candidatePersistedSessionFile.trim().length > 0) {
     const candidatePath = input.candidatePersistedSessionFile.trim();
     if (
       isMatchingCodexRolloutFileName(basename(candidatePath), vendorResumeId) &&
       await statFile(candidatePath)
     ) {
-      return { ok: true, resolvedPath: candidatePath };
+      return await acceptReachablePath(candidatePath);
     }
   }
 
@@ -81,7 +94,7 @@ export async function verifyResumeReachableCodex(
     });
     for (const candidatePath of candidatePaths) {
       if (await statFile(candidatePath)) {
-        return { ok: true, resolvedPath: candidatePath };
+        return await acceptReachablePath(candidatePath);
       }
     }
   }
@@ -89,7 +102,7 @@ export async function verifyResumeReachableCodex(
   const sessionsRoot = join(input.targetMaterializedRoot, 'codex-home', 'sessions');
   const discoveredPath = await findCodexRolloutFileById({ sessionsRoot, vendorResumeId });
   if (discoveredPath) {
-    return { ok: true, resolvedPath: discoveredPath };
+    return await acceptReachablePath(discoveredPath);
   }
 
   return { ok: false, reason: 'codex_session_file_not_found' };

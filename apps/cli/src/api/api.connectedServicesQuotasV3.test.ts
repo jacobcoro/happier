@@ -340,6 +340,26 @@ describe('ApiClient connected services quotas v3', () => {
     expect(String(vi.mocked(axios.post).mock.calls[0]?.[0])).not.toContain('/profiles/');
   });
 
+  it('keeps subscription observations outside the released strict plaintext snapshot on writes and restores them on reads', async () => {
+    const base = createProviderAccountUsageSnapshot();
+    const subscription = { status: 'none' as const, renewal: 'unknown' as const, observedAtMs: 1_000, staleAfterMs: 300_000 };
+    const snapshot = { ...base, subscription };
+    const metadata = { fetchedAt: 1_000, staleAfterMs: 300_000, status: 'ok' as const };
+    mockPost.mockResolvedValue({ status: 200, data: { success: true } });
+    mockGet.mockResolvedValue({ status: 200, data: { content: { t: 'plain', v: base }, subscription, metadata } });
+    const api = await ApiClient.create(createTestCredentials());
+
+    const restored = await api.getProviderAccountUsageSnapshotPlain({ recordId: base.recordId });
+    expect(restored?.content.v).toEqual(snapshot);
+    await api.registerProviderAccountUsageSnapshotPlain({ recordId: base.recordId, content: { t: 'plain', v: snapshot }, metadata });
+
+    expect(mockPost.mock.calls.at(-1)?.[1]).toMatchObject({
+      content: { t: 'plain', v: base },
+      metadata: { ...metadata, subscription },
+    });
+    expect(mockPost.mock.calls.at(-1)?.[1].content.v).not.toHaveProperty('subscription');
+  });
+
   it('posts plaintext provider account usage snapshots with source context to the v3 canonical endpoint', async () => {
     mockPost.mockResolvedValue({ status: 200, data: { success: true } });
     const snapshot = createProviderAccountUsageSnapshot();

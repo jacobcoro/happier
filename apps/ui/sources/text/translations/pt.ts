@@ -1962,6 +1962,7 @@ export const pt: TranslationStructure = {
         title: "Instruções de execuções do Happier",
         subtitle: "Desativar remove o roteamento nativo primeiro e a mecânica de execuções do Happier dos prompts de sistema dos agentes de código.",
       },
+      notifyParentOnCompletion: { title: 'Notificar o agente pai ao terminar', subtitle: 'Envia ao agente pai um evento de conclusão estruturado.' },
       characterBudget: {
         title: "Limite de regras personalizadas",
         subtitle: ({ value }: { value: string }) => `${value} caracteres`,
@@ -2591,6 +2592,28 @@ export const pt: TranslationStructure = {
   },
 
   connectedServices: {
+      subscription: {
+          title: "Assinatura",
+          currentPeriod: "Período atual",
+          renewal: "Renovação",
+          renewalOn: "Ativada",
+          renewalOff: "Desativada",
+          renewalUnknown: "Desconhecida",
+          renews: ({ date }: { date: string }) => `Renova em ${date}`,
+          ends: ({ date }: { date: string }) => `Termina em ${date}`,
+          renewsInDays: ({ days }: { days: number }) => `Renova em ${days} dia${days === 1 ? '' : 's'}`,
+          endsInDays: ({ days }: { days: number }) => `Termina em ${days} dia${days === 1 ? '' : 's'}`,
+          periodEnds: ({ date }: { date: string }) => `O período atual termina em ${date}`,
+          period: ({ start, end }: { start: string; end: string }) => `${start} – ${end}`,
+          periodStarted: ({ date }: { date: string }) => `Iniciada em ${date}`,
+          accessUntil: ({ date }: { date: string }) => `O acesso continua até ${date}`,
+          checked: ({ time }: { time: string }) => `Verificado às ${time}`,
+          lastKnown: ({ summary }: { summary: string }) => `Última informação: ${summary}`,
+          unavailable: "Detalhes da assinatura indisponíveis",
+          refreshFailed: "Não foi possível atualizar os detalhes da assinatura. As últimas informações conhecidas são exibidas.",
+          outdated: "Os detalhes da assinatura podem estar desatualizados.",
+          none: "Sem assinatura",
+      },
     fallbackName: "Serviço conectado",
     serviceNames: {
       claudeSubscription: "Assinatura Claude",
@@ -3112,6 +3135,8 @@ export const pt: TranslationStructure = {
         membersSubtitle: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} habilitados`,
         optionsTitle: "Opções",
         autoSwitchTitle: "Fallback automático",
+        autoQuotaResetTitle: "Usar redefinições de quota automaticamente",
+        autoQuotaResetSubtitle: "Consome uma redefinição disponível apenas quando nenhuma conta do grupo está pronta e a quota esgotada pode ser redefinida. Desativado por padrão.",
         autoSwitchEnabledSubtitle: "Troque para outro membro quando a conta ativa precisar de recuperação.",
         autoSwitchDisabledSubtitle: "Continue usando o membro ativo até trocar manualmente.",
         strategyTitle: "Estratégia de seleção",
@@ -3659,6 +3684,8 @@ export const pt: TranslationStructure = {
       readySubtitle: 'Mostrar uma notificação local quando um turno terminar',
       readyPreviewTitle: 'Pré-visualizações de mensagens prontas',
       readyPreviewSubtitle: 'Incluir a mensagem mais recente do assistente nas notificações de pronto deste dispositivo',
+      requestPreviewTitle: "Pré-visualizações de pedidos",
+      requestPreviewSubtitle: "Incluir comandos que requerem permissão, perguntas e opções de resposta. Podem aparecer no ecrã de bloqueio.",
       permissionRequestsTitle: 'Solicitações de permissão',
       permissionRequestsSubtitle: 'Mostrar uma notificação local quando uma sessão precisar de aprovação',
       userActionsTitle: 'Solicitações de ação',
@@ -3804,6 +3831,8 @@ export const pt: TranslationStructure = {
       readySubtitle: 'Enviar quando um turno terminar e o agente estiver aguardando seu comando',
       readyPreviewTitle: 'Pré-visualizações de mensagens prontas',
       readyPreviewSubtitle: 'Incluir o texto da mensagem mais recente do assistente nas notificações de pronto deste webhook',
+      requestPreviewTitle: "Pré-visualizações de pedidos",
+      requestPreviewSubtitle: "Incluir comandos que requerem permissão, perguntas e opções de resposta nos dados deste webhook.",
       permissionRequestsTitle: 'Solicitações de permissão',
       permissionRequestsSubtitle: 'Enviar quando uma sessão estiver bloqueada aguardando aprovação',
       userActionsTitle: 'Solicitações de ação',
@@ -3832,6 +3861,10 @@ export const pt: TranslationStructure = {
         title: 'Pré-visualizações de mensagens prontas',
         subtitle: 'Incluir o texto da mensagem mais recente do assistente nas notificações push de turnos prontos',
       },
+      requestPreview: {
+          title: "Pré-visualizações de pedidos",
+          subtitle: "Incluir comandos que requerem permissão, perguntas e opções de resposta. Podem aparecer no ecrã de bloqueio.",
+      },
       permissionRequests: {
         title: "Solicitações de permissão",
         subtitle:
@@ -3856,6 +3889,15 @@ export const pt: TranslationStructure = {
         readyFallbackBody: 'O turno terminou. Abra a sessão para continuar.',
         permissionFallbackBody: 'Aprovação necessária.',
         userActionFallbackBody: 'Esta sessão precisa da sua resposta.',
+        requestLabels: {
+            command: "Comando",
+            file: "Ficheiro",
+            selectOne: "Selecione uma opção",
+            selectMultiple: "Selecione várias opções",
+            customAnswer: "Resposta personalizada permitida",
+            localMessages: "Mensagens locais",
+            remoteMessages: "Mensagens remotas",
+        },
       },
       channels: {
         default: 'Padrão',
@@ -5173,6 +5215,16 @@ export const pt: TranslationStructure = {
       railScrollDownA11y: "Deslocar a navegação para baixo",
     },
     usageLimitRecovery: {
+        overloadTitle: "Modelo sobrecarregado",
+        overloadWaiting: "Aguardando para tentar novamente.",
+        overloadDispatching: "Tentando novamente agora.",
+        overloadAwaiting: "Aguardando uma resposta do modelo.",
+        overloadStopped: "Tentativas automáticas interrompidas. Você pode tentar novamente.",
+        overloadExhausted: "Tentativas automáticas esgotadas. Você pode tentar novamente.",
+        overloadOffline: "Reconecte-se à máquina da sessão para verificar as tentativas.",
+        stopRetrying: "Parar tentativas",
+        overloadCountdown: ({ seconds, attempt }: { seconds: number; attempt: number }) => `Modelo sobrecarregado — nova tentativa em ${seconds} segundos · tentativa ${attempt}`,
+        overloadAttempt: ({ attempt }: { attempt: number }) => `Tentativa ${attempt}`,
       title: "Limite de uso atingido",
       readyTitle: "Limite de uso redefinido",
       resetBody: ({ time }: { time: string }) =>
@@ -7091,6 +7143,8 @@ export const pt: TranslationStructure = {
   },
 
   files: {
+            revealInFiles: "Mostrar em Arquivos",
+            openChanges: "Abrir alterações",
     searchPlaceholder: "Buscar arquivos...",
     clearSearchA11y: "Limpar pesquisa",
     createFileA11y: "Criar arquivo",
@@ -7345,6 +7399,10 @@ export const pt: TranslationStructure = {
       noFilesInProject: "Nenhum arquivo no projeto",
       repositoryFolderLoadFailed: "Não foi possível carregar a pasta",
       repositoryCollapseAll: "Recolher tudo",
+    commitCreated: "Commit criado",
+    commitRefreshFailed: ({ sha }: { sha: string }) => `O commit ${sha} foi criado, mas a atualização do repositório falhou. Tente atualizar o estado do controle de versão novamente.`,
+    refreshingRepository: "Atualizando o repositório…",
+    retryRefresh: "Tentar atualizar novamente",
     sourceControlOperationsLog: {
       title: "Operações recentes de controle de versão",
       allSessions: "Todas as sessões",
@@ -7360,8 +7418,11 @@ export const pt: TranslationStructure = {
       reviewNoMatches: "Sem correspondências",
       reviewLargeDiffOneAtATime: "Diff grande detectado; os diffs serão carregados conforme você rola.",
       reviewDiffRequestFailed: "Não foi possível carregar o diff",
+      reviewPreviousHunk: "Trecho anterior",
+      reviewNextHunk: "Próximo trecho",
       reviewUnableToLoadDiff: "Não foi possível carregar o diff",
       tryDifferentTerm: "Tente um termo de busca diferente",
+      previousSearchResults: "Resultados da pesquisa anterior",
       searchResults: ({ count }: { count: number }) =>
         `Resultados da busca (${count})`,
     projectRoot: "Raiz do projeto",
@@ -7384,7 +7445,9 @@ export const pt: TranslationStructure = {
         "Este arquivo mudou no disco enquanto você o editava. Seu rascunho foi mantido sem alterações; revise o arquivo mais recente antes de salvar.",
       selectionFailed: "Falha ao atualizar a seleção",
       openReviewCommentsFailed: "Falha ao abrir comentários de revisão",
-        reviewComments: {
+        reviewPreviousFile: "Arquivo anterior",
+                  reviewNextFile: "Próximo arquivo",
+                  reviewComments: {
           title: ({ count }: { count: number }) =>
             `Comentários de revisão (${count})`,
           placeholder: "Adicionar um comentário de revisão…",
@@ -7396,6 +7459,7 @@ export const pt: TranslationStructure = {
           modalSubtitle: "Revise quais comentários serão enviados com a próxima mensagem.",
           modalSummary: ({ included, count }: { included: number; count: number }) =>
             `${included} de ${count} selecionados para o próximo prompt`,
+          goToComposer: 'Ir para a mensagem',
           detachOrDiscardTitle: "Remover comentários de revisão?",
           detachOrDiscardBody:
             "Desanexar mantém os comentários salvos, mas os exclui do próximo prompt. Descartar os remove.",
@@ -7464,6 +7528,8 @@ export const pt: TranslationStructure = {
       combined: "Combinado",
     },
     fileActions: {
+      selectEntireFileForCommit: 'Selecionar o arquivo inteiro para o commit',
+      selectLines: 'Selecionar linhas',
       selectForCommit: "Selecionar para commit",
       selectFilesToCommit: "Selecionar arquivos para commit",
       stageFile: "Preparar arquivo",
@@ -7481,6 +7547,9 @@ export const pt: TranslationStructure = {
     },
 	    toolbar: {
 	      changedFiles: "Arquivos alterados",
+	      projectFiles: "Projeto",
+	      allFiles: "Todos os arquivos",
+	      projectFilesUnavailable: "O filtro do projeto não está disponível aqui. Todos os arquivos são exibidos.",
 	      hiddenFiles: "Mostrar arquivos ocultos",
 	      details: "Detalhes",
 	      upload: "Enviar",

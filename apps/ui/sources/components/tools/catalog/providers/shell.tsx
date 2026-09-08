@@ -5,7 +5,7 @@ import * as z from 'zod';
 import { t } from '@/text';
 import { ICON_TERMINAL } from '../icons';
 import type { KnownToolDefinition } from '../_types';
-import { extractShellCommand, stripShellCommandPreludeForDisplay } from '../../normalization/parse/shellCommand';
+import { extractShellCommand, stripShellCommandPreludeForDisplay } from '@happier-dev/protocol';
 import { extractHappierToolsShellBridgeCommand } from '../../normalization/parse/happierToolsShellBridge';
 import { getHappierToolsShellBridgeDisplay } from '../../normalization/parse/happierToolsShellBridgeDisplay';
 

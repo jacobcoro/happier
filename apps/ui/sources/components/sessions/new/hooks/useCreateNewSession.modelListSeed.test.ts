@@ -1,9 +1,9 @@
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
-import type { Settings } from '@/sync/domains/settings/settings';
+import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 import type { UseMachineEnvPresenceResult } from '@/hooks/machine/useMachineEnvPresence';
-import { renderScreen } from '@/dev/testkit';
+import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 
 import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
@@ -26,6 +26,9 @@ const PI_PREFLIGHT_MODELS: PreflightModelList = {
 async function setupUseCreateNewSessionHarness(params: Readonly<{
     publishModelsSeedError?: Error;
 }> = {}) {
+    const sessions: Record<string, ReturnType<typeof createSessionFixture>> = {};
+    const updateSessionPermissionModeSpy = vi.fn();
+    const updateSessionModelModeSpy = vi.fn();
     const publishModelsSeedSpy = vi.fn(async (..._args: unknown[]) => {
         if (params.publishModelsSeedError) throw params.publishModelsSeedError;
     });
@@ -56,8 +59,15 @@ async function setupUseCreateNewSessionHarness(params: Readonly<{
                 translate: (key: string) => key,
             }),
         storage: async (importOriginal) => {
-            const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-            return createPartialStorageModuleMock(importOriginal, {});
+            const { createPartialStorageModuleMock, createStorageStoreStub } = await import('@/dev/testkit/mocks/storage');
+            return createPartialStorageModuleMock(importOriginal, {
+                storage: createStorageStoreStub(() => ({
+                    sessions,
+                    settings: settingsDefaults,
+                    updateSessionPermissionMode: updateSessionPermissionModeSpy,
+                    updateSessionModelMode: updateSessionModelModeSpy,
+                })),
+            });
         },
     });
     vi.doMock('@/modal', () => ({
@@ -79,7 +89,9 @@ async function setupUseCreateNewSessionHarness(params: Readonly<{
             decryptSecretValue: vi.fn(),
             refreshAutomations: refreshAutomationsSpy,
             refreshSessions: refreshSessionsSpy,
-            ensureSessionVisibleForMessageRoute: vi.fn(async () => {}),
+            ensureSessionVisibleForMessageRoute: vi.fn(async (sessionId: string) => {
+                sessions[sessionId] = createSessionFixture({ id: sessionId });
+            }),
             refreshMachines: vi.fn(async () => {}),
             sendMessage: syncSendMessageSpy,
             acquireUserRequestLease: () => () => {},
@@ -159,7 +171,8 @@ async function setupUseCreateNewSessionHarness(params: Readonly<{
     vi.doMock('@/sync/ops/workspaces', () => ({
         deleteWorkspaceCheckout: vi.fn(async () => ({ success: true, workspace: { id: 'ws_generated', locationIds: ['loc_generated'], checkoutIds: [], defaultLocationId: 'loc_generated', defaultCheckoutId: null, displayName: 'workspace' } })),
     }));
-    vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession', () => ({
+    vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession', async (importOriginal) => ({
+        ...(await importOriginal<typeof import('@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession')>()),
         followUpSpawnedSessionWithServerScope: followUpSpawnedSessionWithServerScopeSpy,
     }));
     vi.doMock('@/sync/ops/sessionGoals', () => ({

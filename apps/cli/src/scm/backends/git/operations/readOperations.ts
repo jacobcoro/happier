@@ -67,7 +67,19 @@ export async function gitDiffFile(input: {
             : area === 'both'
                 ? ['diff', '--no-ext-diff', 'HEAD', '--', normalized.pathspec]
                 : ['diff', '--no-ext-diff', '--', normalized.pathspec];
-    const result = await runScmCommand({ bin: 'git', cwd: context.cwd, args, timeoutMs: 10_000 });
+    let result = await runScmCommand({ bin: 'git', cwd: context.cwd, args, timeoutMs: 10_000 });
+    if (area === 'both' && !result.success && result.exitCode !== 1 && !result.timedOut && !result.outputLimitExceeded) {
+        const head = await runScmCommand({ bin: 'git', cwd: context.cwd, args: ['rev-parse', '--verify', '--quiet', 'HEAD'], timeoutMs: 10_000 });
+        if (!head.success && head.exitCode === 1 && !head.timedOut && !head.outputLimitExceeded) {
+            // An unborn checkout has no HEAD. Git accepts its format-specific empty tree
+            // as a diff base without writing an object or changing the index.
+            const emptyTree = await runScmCommand({ bin: 'git', cwd: context.cwd, args: ['hash-object', '-t', 'tree', '--stdin'], stdin: '', timeoutMs: 10_000 });
+            if (!emptyTree.success) {
+                return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: emptyTree.stderr || 'Failed to resolve empty tree' };
+            }
+            result = await runScmCommand({ bin: 'git', cwd: context.cwd, args: ['diff', '--no-ext-diff', emptyTree.stdout.trim(), '--', normalized.pathspec], timeoutMs: 10_000 });
+        }
+    }
     // git diff uses exit code 1 to indicate "differences found". Treat that as success so
     // callers can still render patches.
     const diffCommandOk =
@@ -81,7 +93,7 @@ export async function gitDiffFile(input: {
     }
 
     const diff = result.stdout ?? '';
-    if (diff.trim().length > 0) {
+    if (diff.trim().length > 0 || area === 'included') {
         return { success: true, diff };
     }
 
@@ -96,13 +108,15 @@ export async function gitDiffFile(input: {
     const untrackedCheck = await runScmCommand({
         bin: 'git',
         cwd: repoRoot,
-        args: ['ls-files', '--others', '--exclude-standard', '--', relativePath],
+        args: ['ls-files', '--others', '--exclude-standard', '-z', '--', normalized.pathspec],
         timeoutMs: 10_000,
     });
+    if (!untrackedCheck.success) {
+        return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: untrackedCheck.stderr || 'Failed to inspect untracked file' };
+    }
     const isUntracked =
-        untrackedCheck.success
-        && typeof untrackedCheck.stdout === 'string'
-        && untrackedCheck.stdout.split(/\r?\n/).some((line) => line.trim() === relativePath);
+        typeof untrackedCheck.stdout === 'string'
+        && untrackedCheck.stdout.split('\0').includes(relativePath);
 
     if (!isUntracked) {
         return { success: true, diff };
@@ -118,7 +132,7 @@ export async function gitDiffFile(input: {
         untrackedDiff.success || (untrackedDiff.exitCode === 1 && !untrackedDiff.timedOut && !untrackedDiff.outputLimitExceeded);
     return untrackedDiffOk
         ? { success: true, diff: untrackedDiff.stdout }
-        : { success: true, diff };
+        : { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: untrackedDiff.stderr || 'Failed to load untracked file diff' };
 }
 
 export async function gitDiffCommit(input: {

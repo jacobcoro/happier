@@ -19,6 +19,7 @@ import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerS
 import { useNotificationResponseRouting } from '@/activity/notifications/runtime/useNotificationResponseRouting';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 
@@ -83,6 +84,8 @@ export function RootLayoutNavigationEffects(): React.ReactElement | null {
     }>();
     const debugRouterEnabled = process.env.EXPO_PUBLIC_DEBUG === '1';
     const happierVoiceSupported = useHappierVoiceSupport();
+    const activeServerAccountScope = useActiveServerAccountScope();
+    const isTerminalConnectRoute = segments.includes('terminal') && segments.includes('connect');
 
     useWebInitialRouteReconcile({ routerPathname: pathname });
 
@@ -188,7 +191,7 @@ export function RootLayoutNavigationEffects(): React.ReactElement | null {
 
             // If we are already on the terminal-connect page (which persists a pending connect while
             // clearing the URL hash for safety), do not navigate away.
-            if (segments.includes('terminal') && segments.includes('connect')) return;
+            if (isTerminalConnectRoute) return;
 
             const target = normalizeServerUrl(pendingTerminalConnect.serverUrl);
             const active = normalizeServerUrl(getActiveServerUrl());
@@ -216,7 +219,7 @@ export function RootLayoutNavigationEffects(): React.ReactElement | null {
         }
 
         pendingTerminalHandledRef.current = false;
-    }, [auth.isAuthenticated]);
+    }, [activeServerAccountScope, auth.isAuthenticated, isTerminalConnectRoute]);
 
     // Server capability gating: if the server doesn't support Happier Voice (misconfigured/disabled),
     // default the user's voice mode to off (they can still choose BYO ElevenLabs in settings).

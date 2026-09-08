@@ -485,6 +485,7 @@ export type AgentCatalogEntry = Readonly<{
     backendTarget?: BackendTargetRefV1;
     accountSettings?: Readonly<Record<string, unknown>> | null;
     connectedServices?: ConnectedServiceBindingsV1 | null;
+    processEnv?: NodeJS.ProcessEnv;
   }>) => string | null;
   /**
    * Optional provider-owned backend options for catalog ACP model probes.
@@ -495,6 +496,7 @@ export type AgentCatalogEntry = Readonly<{
   resolveModelsProbeBackendOptions?: (params: Readonly<{
     backendTarget?: BackendTargetRefV1;
     accountSettings?: Readonly<Record<string, unknown>> | null;
+    processEnv?: NodeJS.ProcessEnv;
   }>) => Readonly<Record<string, unknown>> | null;
   /**
    * Optional provider-owned adapter for probing dynamic session controls (models/modes/config options)

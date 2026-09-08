@@ -366,7 +366,7 @@ describe('RepositoryTreeList', () => {
         ).toHaveLength(1);
     });
 
-    it('pins a file when double-pressed', async () => {
+    it('pins a file with the keyboard shortcut and double-press', async () => {
         sessionListDirectorySpy.mockResolvedValue({
             success: true,
             entries: [{ name: 'README.md', type: 'file' }],
@@ -383,6 +383,11 @@ describe('RepositoryTreeList', () => {
             readme?.props.onDoublePress();
         });
 
+        await act(async () => {
+            readme?.props.onKeyDown({ key: 'p', preventDefault: vi.fn() });
+        });
+
+        expect(onOpenFilePinned).toHaveBeenCalledTimes(2);
         expect(onOpenFilePinned).toHaveBeenCalledWith('README.md');
         expect(onOpenFile).not.toHaveBeenCalled();
     });

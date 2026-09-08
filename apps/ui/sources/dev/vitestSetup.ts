@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { IDBFactory } from 'fake-indexeddb';
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
 
 import { installVitestRnShim } from './vitestRnShim';
@@ -271,6 +272,7 @@ vi.mock('react-native', async () => await import('./reactNativeStub'));
 // Provide a minimal in-memory implementation for tests.
 const localStorageBacking = new Map<string, string>();
 const sessionStorageBacking = new Map<string, string>();
+const indexedDbForTests = new IDBFactory();
 
 vi.mock('expo-notifications', async () => await import('./expoNotificationsStub'));
 
@@ -293,6 +295,11 @@ beforeEach(() => {
     // stable in-memory implementation for tests.
     vi.stubGlobal('localStorage', createMemoryStorage(localStorageBacking) as unknown as Storage);
     vi.stubGlobal('sessionStorage', createMemoryStorage(sessionStorageBacking) as unknown as Storage);
+    // The web runtime persists large records in IndexedDB. Install the genuine browser storage
+    // boundary once for every test rather than forcing each consumer suite to duplicate it.
+    // The factory remains stable for the worker because repository storage owns an in-memory
+    // compare-and-swap baseline; owner tests clear the records they materialize.
+    vi.stubGlobal('indexedDB', indexedDbForTests);
 
     if (process.env.HAPPIER_VITEST_FORBID_FETCH === '1') {
         vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -5,6 +5,8 @@ import { backoff } from '@/utils/timing/time';
 import { createConnectedServiceApiError } from './connectedServiceApiError';
 
 import {
+    CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER,
+    CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
     ConnectedServiceAuthGroupListResponseV1Schema,
     type ConnectedServiceAuthGroupMemberCreateRequestV1,
     type ConnectedServiceAuthGroupMemberPatchRequestV1,
@@ -41,6 +43,7 @@ async function fetchAuthGroupEnvelope(
             {
                 method: init.method,
                 headers: {
+                    [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
                     Authorization: `Bearer ${credentials.token}`,
                     // Only declare a JSON body when one is actually sent: Fastify rejects
                     // body-less requests that carry a JSON content-type (FST_ERR_CTP_EMPTY_JSON_BODY).
@@ -104,6 +107,7 @@ export async function listConnectedServiceAuthGroupsV3(
             {
                 method: 'GET',
                 headers: {
+                    [CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER]: CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
                     Authorization: `Bearer ${credentials.token}`,
                     'Content-Type': 'application/json',
                 },

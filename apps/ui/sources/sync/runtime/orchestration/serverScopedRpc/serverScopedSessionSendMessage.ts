@@ -10,6 +10,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { selectSessionPendingRequestedAction } from '@/sync/domains/session/control/submitMode';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import {
+  isCurrentPendingInputServerWireMode,
   resolvePendingInputServerWireMode,
   type PendingInputServerWireMode,
 } from '@/sync/engine/pending/pendingInputServerWireContract';
@@ -63,7 +64,7 @@ function resolveWireRequestedAction(params: Readonly<{
   wireMode: PendingInputServerWireMode;
 }>): import('@happier-dev/protocol').PendingRequestedActionV1 {
   return params.providerDeliveryIntent === 'first_turn'
-    && params.wireMode !== 'pending_input_v1'
+    && !isCurrentPendingInputServerWireMode(params.wireMode)
     ? { v: 1, kind: 'enqueue' }
     : params.requestedAction;
 }
@@ -147,7 +148,6 @@ export function createServerScopedSessionSendMessage(deps?: Partial<ServerScoped
         session,
         firstTurn: args.providerDeliveryIntent === 'first_turn',
         timingOverride: args.providerDeliveryIntent === 'immediate' ? 'send_now' : undefined,
-        sessionInactiveResumePolicy: storage.getState().settings.sessionInactiveResumePolicy,
       });
 
     const completeProviderRequiredDelivery = async (result: Readonly<{

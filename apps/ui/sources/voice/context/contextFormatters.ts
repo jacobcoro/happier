@@ -6,7 +6,7 @@ import { resolveAgentRequestKind, type AgentRequestKind } from "@/utils/sessions
 import { redactVoicePathLikeData, redactVoicePathLikeString } from '@/voice/shared/redactVoicePathLikeData';
 import { resolveVoiceSessionLabel } from "@/voice/context/resolveVoiceSessionLabel";
 import { resolveVoiceToolResultHumanSummary } from "@/voice/context/resolveVoiceToolResultHumanSummary";
-import { formatPermissionRequestSummary } from "@/components/tools/normalization/policy/permissionSummary";
+import { formatPermissionRequestSummary } from '@happier-dev/protocol';
 import { isAskUserQuestionToolName } from '@happier-dev/protocol';
 
 interface SessionMetadata {

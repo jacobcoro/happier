@@ -33,7 +33,10 @@ function buildCursorProbeEnv(accountSettings: Readonly<Record<string, unknown>> 
 function createCursorProbeBackend(params: PreflightSessionControlsProbeParams): CursorSessionControlsBackend {
   return createCursorBackend({
     cwd: params.cwd,
-    env: buildCursorProbeEnv(params.accountSettings),
+    env: {
+      ...(params.processEnv ?? process.env),
+      ...buildCursorProbeEnv(params.accountSettings),
+    },
     mcpServers: {},
     permissionMode: 'default',
     parameterizedModelPicker: true,
@@ -68,7 +71,10 @@ async function probeCursorModelsRaw(params: PreflightSessionControlsProbeParams)
     const cliModels = await probeCursorCliModels({
       cwd: params.cwd,
       timeoutMs: params.timeoutMs,
-      processEnv: { ...process.env, ...buildCursorProbeEnv(params.accountSettings) },
+      processEnv: {
+        ...(params.processEnv ?? process.env),
+        ...buildCursorProbeEnv(params.accountSettings),
+      },
     }).catch(() => null);
     const standardProjection = buildCursorSessionModelsFromConfigOptions(
       backend.getSessionConfigOptionsState?.() ?? null,

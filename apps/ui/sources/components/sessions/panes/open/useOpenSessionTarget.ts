@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useSessionCockpitSurfaceNavigation } from '@/components/workspaceCockpit/session/SessionCockpitSurfaceNavigation';
 import { useRouter } from 'expo-router';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
@@ -39,6 +40,7 @@ export function useOpenSessionTarget(params: Readonly<{
 }>): SessionTargetOpener {
     const { serverId, sessionId } = params;
     const router = useRouter();
+    const cockpit = useSessionCockpitSurfaceNavigation();
     // The pane HOST's own normalization, not the raw device type — see `useSessionOpenLayout`.
     const layout = useSessionOpenLayout();
     const scopeId = params.scopeId ?? resolveSessionPaneScopeId(sessionId);
@@ -53,6 +55,24 @@ export function useOpenSessionTarget(params: Readonly<{
         });
         if (!placement) return false;
 
+        if (target.kind === 'fileBrowser' && target.revealPath) {
+            const current = pane.scopeState?.right.tabState.files;
+            pane.setRightTabState('files', {
+                ...(current && typeof current === 'object' ? current : {}),
+                revealRequest: { path: target.revealPath },
+            });
+        }
+        if (target.kind === 'sourceControl') {
+            const current = pane.scopeState?.right.tabState.git;
+            pane.setRightTabState('git', {
+                ...(current && typeof current === 'object' ? current : {}),
+                activeSubTabId: 'commit',
+            });
+        }
+        if (cockpit && (target.kind === 'fileBrowser' || target.kind === 'sourceControl')) {
+            cockpit.switchSurface(target.kind === 'fileBrowser' ? 'browse' : 'git');
+            return true;
+        }
         if (placement.kind === 'route') {
             router.push(placement.href as never);
             return true;
@@ -64,5 +84,5 @@ export function useOpenSessionTarget(params: Readonly<{
         pane.openRight({ tabId: placement.tabId });
         pane.setRightTab(placement.tabId);
         return true;
-    }, [layout, pane, router, serverId, sessionId]);
+    }, [cockpit, layout, pane, router, serverId, sessionId]);
 }

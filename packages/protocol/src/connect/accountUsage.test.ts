@@ -116,6 +116,37 @@ function createSnapshot(overrides: Partial<ProviderAccountUsageSnapshotV1> = {})
 }
 
 describe('provider account usage protocol', () => {
+  it('carries an independently fresh subscription without converting unknown renewal to cancellation', () => {
+    const subscription = {
+      status: 'subscribed', renewal: 'unknown', observedAtMs: 900, staleAfterMs: 60_000,
+      currentPeriodEndAtMs: 1_800_000_000_000,
+    };
+    const parsed = accountUsageModule.ProviderAccountUsageSnapshotV1Schema.safeParse({ ...createSnapshot(), subscription });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toHaveProperty('subscription', subscription);
+  });
+
+  it('splits subscription from the strict released snapshot without losing account identity', () => {
+    const split = requireExport<(...args: readonly unknown[]) => unknown>('splitProviderAccountUsageSubscription', isFunction);
+    const base = createSnapshot();
+    const subscription = { status: 'none', renewal: 'unknown', observedAtMs: 900, staleAfterMs: 60_000 };
+    expect(split({ ...base, subscription })).toEqual({ snapshot: base, subscription });
+  });
+
+  it('keeps the sealed base compatible and rejects a subscription copied from another account record', () => {
+    const seal = requireExport<(input: unknown) => { ciphertext: string; subscription?: unknown }>('sealProviderAccountUsageSnapshot', isFunction);
+    const open = requireExport<(input: unknown) => unknown>('openSealedProviderAccountUsageSnapshot', isFunction);
+    const material = { type: 'legacy', secret: new Uint8Array(32).fill(7) } as const;
+    const base = createSnapshot();
+    const subscription = { status: 'subscribed', renewal: 'off', observedAtMs: 900, staleAfterMs: 60_000, currentPeriodEndAtMs: 1_800_000_000_000 };
+    const sealed = seal({ material, snapshot: { ...base, subscription }, randomBytes: (length: number) => new Uint8Array(length).fill(3) });
+    expect(accountUsageModule.openProviderAccountUsageSnapshotCiphertext({ material, ciphertext: sealed.ciphertext })?.value).toEqual(base);
+    expect(open({ material, sealed })).toEqual({ ...base, subscription });
+    const other = createSnapshot({ recordKey: { ...base.recordKey, accountSubjectId: 'other' } });
+    const otherSealed = seal({ material, snapshot: other, randomBytes: (length: number) => new Uint8Array(length).fill(4) });
+    expect(open({ material, sealed: { ...otherSealed, subscription: sealed.subscription } })).toBeNull();
+  });
+
   it('builds opaque stable record ids from canonical record keys', () => {
     const buildRecordId = requireExport<(...args: readonly unknown[]) => unknown>(
       'buildProviderAccountUsageRecordId',

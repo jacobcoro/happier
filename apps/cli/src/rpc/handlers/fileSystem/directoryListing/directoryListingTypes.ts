@@ -6,9 +6,11 @@ export type DirectoryListingEntry = Readonly<{
   type: DirectoryListingEntryType
   size?: number
   modified?: number
+  gitIgnored?: boolean
 }>
 
 export type DirectoryListingResult = Readonly<{
   entries: DirectoryListingEntry[]
   truncated: boolean
+  gitIgnoreAvailable?: boolean
 }>

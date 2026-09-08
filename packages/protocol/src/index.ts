@@ -1,4 +1,13 @@
 export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
+export { buildRecoveryCreditConsumeIdempotencyKey } from './connect/recoveryCreditConsumeIdempotencyKey.js';
+
+export { PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT, ProviderAccountSubscriptionV1Schema, mergeProviderAccountSubscription, type ProviderAccountSubscriptionV1 } from './connect/accountSubscription.js';
+
+export {
+  buildExecutionRunCompletionInputV1,
+  ExecutionRunCompletionV1Schema,
+  type ExecutionRunCompletionV1,
+} from './structuredMessages/executionRunCompletionV1.js';
 
 export {
   MachineUpdateMetadataRequestSchema,
@@ -549,6 +558,9 @@ export {
   projectProviderAccountUsageSnapshotToConnectedServiceQuotaSnapshotV1,
   projectProviderAccountUsageToConnectedServiceQuotaSnapshot,
   sealProviderAccountUsageSnapshotCiphertext,
+  splitProviderAccountUsageSubscription,
+  sealProviderAccountUsageSnapshot,
+  openSealedProviderAccountUsageSnapshot,
   type ProviderAccountSubjectRefV1,
   type ProviderAccountUsageConfidenceV1,
   type ProviderAccountUsageDiagnosticV1,
@@ -563,6 +575,8 @@ export {
 } from './connect/accountUsage.js';
 
 export {
+  CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER,
+  CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
   ConnectedServiceAuthGroupActiveProfileRequestV1Schema,
   ConnectedServiceAuthGroupCreateRequestV1Schema,
   ConnectedServiceAuthGroupIdSchema,
@@ -3479,3 +3493,8 @@ export {
   type MachineLocalityResult,
   type NormalizeMachineHomeDirOptions,
 } from './machineIdentity/index.js';
+
+export { formatPermissionRequestSummary } from './activity/agentRequestSummary.js';
+export { summarizeToolInputForNotification, type RequestNotificationLabels } from './activity/agentRequestNotificationContent.js';
+export { extractShellCommand, stripShellCommandPreludeForDisplay } from './activity/shellCommand.js';
+export { maybeParseJson } from './activity/parseJson.js';

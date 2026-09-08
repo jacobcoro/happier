@@ -97,6 +97,27 @@ function withCleanEnv<T>(fn: () => T): T {
 }
 
 describe('app.config.js', () => {
+    it('allows tailnet HTTP only for explicitly configured development clients', () => {
+        const regular = withCleanEnv(() => {
+            process.env.APP_ENV = 'publicdev';
+            return getPublicConfig();
+        });
+        expect(regular.ios?.infoPlist?.NSAppTransportSecurity?.NSExceptionDomains).toBeUndefined();
+
+        const client = withCleanEnv(() => {
+            process.env.APP_ENV = 'publicdev';
+            process.env.HAPPIER_EXPO_DEVCLIENT_LAUNCH_MODE = 'most-recent';
+            return getPublicConfig();
+        });
+        expect(client.ios?.infoPlist?.NSAppTransportSecurity).toEqual({
+            NSAllowsLocalNetworking: true,
+            NSAllowsArbitraryLoads: false,
+            NSExceptionDomains: {
+                '100.64.0.0/10': { NSExceptionAllowsInsecureHTTPLoads: true },
+            },
+        });
+    });
+
     it('includes a default EAS project id so EAS can link dynamic configs', () => {
         const exp = withCleanEnv(() => getPublicConfig());
 

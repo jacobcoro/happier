@@ -218,8 +218,5 @@ export function createOnChildExited(params: Readonly<{
       sessionAttachCleanupByPid,
     });
     pidToTrackedSession.delete(pid);
-    if (!tracked) {
-      void removeSessionMarkerFn(pid);
-    }
   };
 }

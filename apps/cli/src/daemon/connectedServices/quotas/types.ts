@@ -3,7 +3,18 @@ import type {
   ConnectedServiceId,
   ConnectedServiceQuotaRecoveryCreditConsumeReceiptStatusV1,
   ConnectedServiceQuotaSnapshotV1,
+  ProviderAccountSubscriptionV1,
 } from '@happier-dev/protocol';
+
+export type ConnectedServiceSubscriptionFetcher = Readonly<{
+  serviceId: ConnectedServiceId;
+  pollPolicy?: Readonly<{ minPollIntervalMs?: number; retryAfterBackoffMinMs?: number }>;
+  fetch: (params: Readonly<{
+    record: ConnectedServiceCredentialRecordV1;
+    now: number;
+    signal: AbortSignal;
+  }>) => Promise<ProviderAccountSubscriptionV1 | null>;
+}>;
 
 export type ConnectedServiceQuotaRecoveryCreditConsumeOutcome = Exclude<
   ConnectedServiceQuotaRecoveryCreditConsumeReceiptStatusV1,
@@ -36,7 +47,8 @@ export type ConnectedServiceQuotaFetcherHostParams = Readonly<{
 }>;
 
 export type ConnectedServiceQuotaFetcherDescriptor = Readonly<{
-  loadQuota: (params: ConnectedServiceQuotaFetcherHostParams) => ConnectedServiceQuotaFetcher;
+  loadQuota?: (params: ConnectedServiceQuotaFetcherHostParams) => ConnectedServiceQuotaFetcher;
+  loadSubscription?: (params: ConnectedServiceQuotaFetcherHostParams) => ConnectedServiceSubscriptionFetcher;
 }>;
 
 /**
@@ -64,6 +76,8 @@ export class ConnectedServiceQuotaFetchError extends Error {
   readonly providerCode: string | null;
   /** Provider-owned classification that this auth failure cannot be fixed by retry/refresh. */
   readonly reconnectRequired: boolean;
+  /** The provider may have applied the debit even though no consume outcome was received. */
+  readonly recoveryCreditConsumeOutcomeUnknown: boolean;
 
   constructor(message: string, options: Readonly<{
     status?: number | null;
@@ -71,6 +85,7 @@ export class ConnectedServiceQuotaFetchError extends Error {
     quotaFetchErrorCode: ConnectedServiceQuotaFetchErrorCode;
     providerCode?: string | null;
     reconnectRequired?: boolean;
+    recoveryCreditConsumeOutcomeUnknown?: boolean;
   }>) {
     super(message);
     this.name = 'ConnectedServiceQuotaFetchError';
@@ -85,5 +100,6 @@ export class ConnectedServiceQuotaFetchError extends Error {
       ? options.providerCode.trim()
       : null;
     this.reconnectRequired = options.reconnectRequired === true;
+    this.recoveryCreditConsumeOutcomeUnknown = options.recoveryCreditConsumeOutcomeUnknown === true;
   }
 }

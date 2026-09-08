@@ -69,6 +69,55 @@ function viewModel(): ConnectedServiceQuotaGaugeViewModel {
 }
 
 describe('AgentInputProviderUsageBadge', () => {
+    it('keeps subscription details live while the usage popover remains open', async () => {
+        const firstViewModel = {
+            ...viewModel(),
+            subscription: {
+                summary: 'Renews 15 September',
+                period: '15 August – 15 September',
+                renewal: 'on' as const,
+                renewalLabel: 'On',
+                checkedLabel: 'Checked 1 minute ago',
+                notice: null,
+                accessUntilLabel: null,
+                isLastKnown: false,
+            },
+        };
+        const screen = await renderScreen(<AgentInputProviderUsageBadge viewModel={firstViewModel} />);
+        act(() => screen.findByTestId('agent-input-provider-usage-badge')?.props.onPress?.());
+        expect(screen.findByTestId('agent-input-provider-usage-subscription:renewal')?.props.children).toContain('On');
+        await screen.update(<AgentInputProviderUsageBadge viewModel={{
+            ...firstViewModel,
+            subscription: { ...firstViewModel.subscription, renewal: 'off', renewalLabel: 'Off', summary: 'Ends 15 September' },
+        }} />);
+        expect(screen.findByTestId('agent-input-provider-usage-subscription:renewal')?.props.children).toContain('Off');
+        await screen.update(<AgentInputProviderUsageBadge viewModel={viewModel()} />);
+        expect(screen.findByTestId('agent-input-provider-usage-subscription')).toBeNull();
+    });
+
+    it('removes the duplicated top quota summary and keeps consistent group spacing', async () => {
+        const firstViewModel = {
+            ...viewModel(),
+            subscription: {
+                summary: 'Ends 15 September',
+                period: null,
+                renewal: 'off' as const,
+                renewalLabel: 'Off',
+                checkedLabel: 'Checked 1 minute ago',
+                notice: null,
+                accessUntilLabel: null,
+                isLastKnown: false,
+            },
+        };
+        const screen = await renderScreen(<AgentInputProviderUsageBadge viewModel={firstViewModel} />);
+        act(() => screen.findByTestId('agent-input-provider-usage-badge')?.props.onPress?.());
+
+        const quotaSummaryOccurrences = screen.getTextContent().split(firstViewModel.detailRightLabel).length - 1;
+        expect(quotaSummaryOccurrences).toBe(1);
+        expect(flattenStyle(screen.findByTestId('agent-input-provider-usage-subscription')?.props.style).gap).toBe(0);
+        expect(flattenStyle(screen.findByTestId('agent-input-provider-usage-meter:weekly')?.props.style).marginTop).toBe(12);
+    });
+
     it('does not rerender the ring when parent rerenders with the same gauge display data', async () => {
         tokenUsageRingRenderSpy.mockClear();
         const firstViewModel = viewModel();

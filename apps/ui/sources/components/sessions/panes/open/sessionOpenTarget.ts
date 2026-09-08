@@ -52,7 +52,8 @@ export type SessionOpenTarget =
     /** The full agent roster — the right pane's Agents tab, or its own screen where there is none. */
     | Readonly<{ kind: 'agentRoster' }>
     /** The workspace file browser — the right pane's Files tab, or its own screen. */
-    | Readonly<{ kind: 'fileBrowser' }>
+    | Readonly<{ kind: 'fileBrowser'; revealPath?: string }>
+    | Readonly<{ kind: 'sourceControl' }>
     /**
      * The workspace shell terminal, in the sidebar. The `bottom` and `details` dock locations are a
      * user preference the caller resolves; only the sidebar location asks this question, because
@@ -63,7 +64,7 @@ export type SessionOpenTarget =
 export type SessionOpenPlacement =
     | Readonly<{ kind: 'route'; href: string }>
     | Readonly<{ kind: 'detailsTab'; tab: DetailsTab }>
-    | Readonly<{ kind: 'rightTab'; tabId: 'agents' | 'files' | 'terminal' }>;
+    | Readonly<{ kind: 'rightTab'; tabId: 'agents' | 'files' | 'git' | 'terminal' }>;
 
 export type SessionOpenLayout = Readonly<{
     containerWidthPx: number;
@@ -188,6 +189,10 @@ export function resolveSessionOpenPlacement(params: Readonly<{
         case 'fileBrowser': {
             if (!canLayoutHostSessionPane(layout, 'right')) return route('/files');
             return { kind: 'rightTab', tabId: 'files' };
+        }
+        case 'sourceControl': {
+            if (!canLayoutHostSessionPane(layout, 'right')) return route('/git');
+            return { kind: 'rightTab', tabId: 'git' };
         }
         case 'terminal': {
             if (!canLayoutHostSessionPane(layout, 'right')) return route('/terminal');

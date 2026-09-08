@@ -189,6 +189,7 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
                     >
                         <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.text.secondary} />}>
                             <SessionBrowseFilesSurface
+                                scopeId={props.scopeId}
                                 sessionId={props.sessionId}
                                 onOpenFile={openFileInDetails}
                                 onOpenFilePinned={openFileInDetailsPinned}

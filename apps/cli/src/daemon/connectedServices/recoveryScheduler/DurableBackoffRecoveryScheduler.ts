@@ -377,15 +377,18 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     this.dispose();
   }
 
-  async cancel(input: Readonly<{ sessionId: string }>): Promise<TIntent | null> {
-    return await this.cancelByKey(input.sessionId);
+  async cancel(input: Readonly<{ sessionId: string; expectedCurrent?: (intent: TIntent) => boolean }>): Promise<TIntent | null> {
+    return await this.cancelByKey(input.sessionId, input.expectedCurrent);
   }
 
-  async cancelByKey(recoveryKey: string): Promise<TIntent | null> {
-    this.bumpCancellationVersion(recoveryKey);
+  async cancelByKey(recoveryKey: string, expectedCurrent?: (intent: TIntent) => boolean): Promise<TIntent | null> {
+    if (!expectedCurrent) this.bumpCancellationVersion(recoveryKey);
     if (this.deps.store?.transact) {
       const cancelled = await this.deps.store.transact(recoveryKey, (current) => {
         const intent = current.intent === null ? null : this.deps.normalizeIntent(current.intent);
+        if (expectedCurrent && (!intent || !expectedCurrent(intent))) {
+          return { ...current, result: null };
+        }
         const next = intent ? this.deps.markCancelled(intent) : null;
         return {
           intent: next,
@@ -394,12 +397,14 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
         };
       });
       if (!cancelled) return null;
+      if (expectedCurrent) this.bumpCancellationVersion(recoveryKey);
       this.memoryStore.set(recoveryKey, cancelled);
       this.clearTimer(recoveryKey);
       return cancelled;
     }
     const intent = this.readByKey(recoveryKey);
-    if (!intent) return null;
+    if (!intent || (expectedCurrent && !expectedCurrent(intent))) return null;
+    if (expectedCurrent) this.bumpCancellationVersion(recoveryKey);
     const cancelled = this.deps.markCancelled(intent);
     await this.write(recoveryKey, cancelled);
     this.clearTimer(recoveryKey);
@@ -842,6 +847,12 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
       reason: 'waiting',
     });
     if (settlement.status === 'stale') return { status: 'inactive' };
+    this.deps.onDelayed?.({
+      sessionId,
+      intent: settlement.intent,
+      retryAtMs: this.deps.getNextRetryAtMs(settlement.intent) ?? nowMs,
+      reason: outcome.lastError ?? 'recovery_waiting',
+    });
     return { status: 'waiting' };
   }
 

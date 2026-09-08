@@ -2,10 +2,9 @@ import {
     PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS,
     PUSH_NOTIFICATION_CATEGORY_IDS,
     buildReadyNotificationContent,
-    isAskUserQuestionToolName,
+    summarizeToolInputForNotification,
 } from '@happier-dev/protocol';
 
-import { formatPermissionRequestSummary } from '@/components/tools/normalization/policy/permissionSummary';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
@@ -44,36 +43,19 @@ function summarizeReadyPreviewText(messages?: Message[]): string | null {
     return normalized || null;
 }
 
-function summarizePermissionBody(toolName: string, toolArgs: unknown): string {
-    const summary = formatPermissionRequestSummary({
-        toolName,
-        toolInput: toolArgs,
-    }).replace(/^Permission required:\s*/i, '').trim();
-
-    return summary || t('notifications.activity.permissionFallbackBody');
-}
-
-function extractFirstUserActionQuestion(toolName: string, toolArgs: unknown): string | null {
-    if (!isAskUserQuestionToolName(toolName)) return null;
-
-    const questions = Array.isArray((toolArgs as { questions?: unknown })?.questions)
-        ? (toolArgs as { questions: ReadonlyArray<{ question?: unknown }> }).questions
-        : [];
-
-    for (const question of questions) {
-        const text = typeof question?.question === 'string' ? question.question.trim() : '';
-        if (text) return text;
-    }
-
-    return null;
-}
-
-function summarizeAgentRequestBody(requestKind: AgentRequestKind, toolName: string, toolArgs: unknown): string {
-    if (requestKind === 'permission') {
-        return summarizePermissionBody(toolName, toolArgs);
-    }
-
-    return extractFirstUserActionQuestion(toolName, toolArgs) || t('notifications.activity.userActionFallbackBody');
+function summarizeAgentRequestBody(requestKind: AgentRequestKind, toolName: string, toolArgs: unknown, includeMessageText: boolean): string {
+    const details = includeMessageText ? summarizeToolInputForNotification(toolName, toolArgs, {
+        command: t('notifications.activity.requestLabels.command'),
+        file: t('notifications.activity.requestLabels.file'),
+        selectOne: t('notifications.activity.requestLabels.selectOne'),
+        selectMultiple: t('notifications.activity.requestLabels.selectMultiple'),
+        customAnswer: t('notifications.activity.requestLabels.customAnswer'),
+        localMessages: t('notifications.activity.requestLabels.localMessages'),
+        remoteMessages: t('notifications.activity.requestLabels.remoteMessages'),
+    }) : null;
+    return details || t(requestKind === 'permission'
+        ? 'notifications.activity.permissionFallbackBody'
+        : 'notifications.activity.userActionFallbackBody');
 }
 
 export function buildActivityLocalNotificationContent(params: Readonly<{
@@ -81,6 +63,7 @@ export function buildActivityLocalNotificationContent(params: Readonly<{
     session: Session | null | undefined;
     serverUrl: string;
     includeReadyMessageText?: boolean;
+    includeRequestMessageText?: boolean;
 }>): ActivityLocalNotificationContent {
     const title = resolveSessionNotificationTitle(params.session);
     const baseData = {
@@ -110,7 +93,7 @@ export function buildActivityLocalNotificationContent(params: Readonly<{
 
     return {
         title,
-        body: summarizeAgentRequestBody(params.event.requestKind, params.event.toolName, params.event.toolArgs),
+        body: summarizeAgentRequestBody(params.event.requestKind, params.event.toolName, params.event.toolArgs, params.includeRequestMessageText !== false),
         data: {
             ...baseData,
             requestId: params.event.requestId,

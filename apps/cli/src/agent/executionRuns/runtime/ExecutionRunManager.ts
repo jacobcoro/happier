@@ -2,7 +2,7 @@ import type { AgentBackend } from '@/agent/core/AgentBackend';
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import type { AcpSendFn } from '@/agent/acp/bridge/acpSessionForwarding';
 import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
-import type { ExecutionRunUserTranscriptDirective } from '@happier-dev/protocol';
+import { buildExecutionRunCompletionInputV1, type ExecutionRunUserTranscriptDirective } from '@happier-dev/protocol';
 import type { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import {
   type AcpConfigOptionOverridesV1,
@@ -52,6 +52,7 @@ import {
   writeExecutionRunActivityMarker,
 } from '@/agent/executionRuns/runtime/executionRunManager/activityMarkers';
 import { deriveExecutionRunRuntimeActivityContribution } from '@/agent/executionRuns/runtime/executionRunRuntimeActivity';
+import { logger } from '@/ui/logger';
 
 function readBoundedExternalSendAckTimeoutMs(): number {
   const raw = process.env.HAPPIER_EXECUTION_RUN_BOUNDED_SEND_ACK_TIMEOUT_MS;
@@ -96,6 +97,7 @@ export class ExecutionRunManager {
   private readonly maxTurns: number | null;
   private readonly budgetRegistry: ExecutionBudgetRegistry | null;
   private readonly runtimeActivityContributionHandle: SessionRuntimeActivityContributionHandle | null;
+  private readonly enqueueParentSessionInput: ((input: Readonly<{ text: string; meta: Record<string, unknown> }>) => Promise<void>) | null;
   private readonly runs = new Map<string, ExecutionRunState>();
   private readonly controllers = new Map<string, ExecutionRunController>();
   private readonly markerWriteChains = new Map<string, Promise<void>>();
@@ -263,6 +265,7 @@ export class ExecutionRunManager {
     maxTurns?: number;
     budgetRegistry?: ExecutionBudgetRegistry;
     runtimeActivityContributionHandle?: SessionRuntimeActivityContributionHandle | null;
+    enqueueParentSessionInput?: (input: Readonly<{ text: string; meta: Record<string, unknown> }>) => Promise<void>;
     resolveAccountSettings?: () => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
     /**
      * Canonical connected-services owner used to RE-materialize a run's account on resume, driven by
@@ -294,6 +297,7 @@ export class ExecutionRunManager {
         : null;
     this.budgetRegistry = opts.budgetRegistry ?? null;
     this.runtimeActivityContributionHandle = opts.runtimeActivityContributionHandle ?? null;
+    this.enqueueParentSessionInput = opts.enqueueParentSessionInput ?? null;
     this.onPublicStateUpdated = typeof opts.onPublicStateUpdated === 'function' ? opts.onPublicStateUpdated : null;
     const resolveAccountSettings = opts.resolveAccountSettings ?? (async () => null);
     this.resolveAccountSettings = resolveAccountSettings;
@@ -443,7 +447,7 @@ export class ExecutionRunManager {
     return null;
   }
 
-  private finishRun(
+  private async finishRun(
     runId: string,
     next: Omit<
       ExecutionRunState,
@@ -468,7 +472,7 @@ export class ExecutionRunManager {
     },
     toolResult: { output: any; isError?: boolean; meta?: Record<string, unknown> },
     structuredMeta?: ExecutionRunStructuredMeta,
-  ): void {
+  ): Promise<void> {
     const wasRunning = this.runs.get(runId)?.status === 'running';
     finishExecutionRun({
       runId,
@@ -484,8 +488,26 @@ export class ExecutionRunManager {
       terminalMarkerWritePromises: this.terminalMarkerWritePromises,
     });
     const current = this.runs.get(runId);
-    if (wasRunning && current?.status !== 'running') {
-      this.trackRunRuntimeActivityTerminal(runId, `execution_run_${current?.status ?? 'terminal'}`);
+    if (wasRunning && current && current.status !== 'running') {
+      this.trackRunRuntimeActivityTerminal(runId, `execution_run_${current.status}`);
+      if (current.notifyParentOnCompletion === true && this.enqueueParentSessionInput) {
+        const input = buildExecutionRunCompletionInputV1({
+          v: 1,
+          runId: current.runId,
+          status: current.status,
+          finishedAtMs: current.finishedAtMs ?? next.finishedAtMs,
+          canInspect: current.retentionPolicy === 'resumable',
+          ...(current.summary ? { summary: current.summary.slice(0, 8_000) } : {}),
+        });
+        try {
+          await this.enqueueParentSessionInput(input);
+        } catch (error) {
+          logger.warn('[EXECUTION RUN] Failed to enqueue parent completion input', {
+            runId: current.runId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
     this.emitPublicStateUpdated(runId);
   }

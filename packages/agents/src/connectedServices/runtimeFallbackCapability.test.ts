@@ -39,6 +39,9 @@ describe('runtime fallback capability', () => {
 
         expect(codex.groupConfigurationSupported).toBe(true);
         expect(codex.runtimeFallbackSupported).toBe(true);
+        expect(codex.quotaResetSupported).toBe(true);
+        expect(resolveConnectedServiceRuntimeFallbackCapability('anthropic').quotaResetSupported).toBe(false);
+        expect(resolveConnectedServiceRuntimeFallbackCapability('openai').quotaResetSupported).toBe(false);
         expect(codex.runtimeFallbackSupportingAgentIds).toContain('codex');
         expect(codex.groupConfigurationSupportingAgentIds).toContain('codex');
     });

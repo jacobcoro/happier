@@ -4,6 +4,7 @@ import { AGENTS_CORE } from '../manifest.js';
 export type ConnectedServiceRuntimeFallbackCapability = Readonly<{
     groupConfigurationSupported: boolean;
     runtimeFallbackSupported: boolean;
+    quotaResetSupported: boolean;
     groupConfigurationSupportingAgentIds: ReadonlyArray<AgentId>;
     runtimeFallbackSupportingAgentIds: ReadonlyArray<AgentId>;
 }>;
@@ -35,6 +36,7 @@ export function resolveConnectedServiceRuntimeFallbackCapability(
 ): ConnectedServiceRuntimeFallbackCapability {
     const groupConfigurationSupportingAgentIds = new Set<AgentId>();
     const runtimeFallbackSupportingAgentIds = new Set<AgentId>();
+    let quotaResetSupported = false;
 
     for (const [agentId, agentCore] of Object.entries(AGENTS_CORE) as Array<[AgentId, AgentCore]>) {
         const supportedServiceIds = agentCore.connectedServices?.supportedServiceIds;
@@ -58,12 +60,14 @@ export function resolveConnectedServiceRuntimeFallbackCapability(
         }
         if (sameConnectedGroupSupported) {
             runtimeFallbackSupportingAgentIds.add(agentId);
+            quotaResetSupported ||= agentCore.connectedServices?.quotaResetServiceIds?.includes(serviceId) === true;
         }
     }
 
     return {
         groupConfigurationSupported: groupConfigurationSupportingAgentIds.size > 0,
         runtimeFallbackSupported: runtimeFallbackSupportingAgentIds.size > 0,
+        quotaResetSupported,
         groupConfigurationSupportingAgentIds: Array.from(groupConfigurationSupportingAgentIds),
         runtimeFallbackSupportingAgentIds: Array.from(runtimeFallbackSupportingAgentIds),
     };

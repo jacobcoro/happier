@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProviderAccountSubscriptionV1Schema, SealedProviderAccountSubscriptionV1Schema } from './accountSubscription.js';
 
 import {
     ConnectedServiceLimitCategoryV1Schema,
@@ -485,6 +486,7 @@ export const ConnectedServiceQuotaSnapshotV1Schema = z
         evidence: ConnectedServiceQuotaEvidenceV1Schema.optional(),
         meters: z.array(ConnectedServiceQuotaMeterV1Schema),
         recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
+        subscription: ProviderAccountSubscriptionV1Schema.optional(),
     });
 
 export type ConnectedServiceQuotaSnapshotV1 = z.infer<typeof ConnectedServiceQuotaSnapshotV1Schema>;
@@ -492,15 +494,22 @@ export type ConnectedServiceQuotaSnapshotV1 = z.infer<typeof ConnectedServiceQuo
 export const SealedConnectedServiceQuotaSnapshotV1Schema = z.object({
     format: ConnectedServiceCredentialFormatSchema,
     ciphertext: z.string().min(1),
+    subscription: SealedProviderAccountSubscriptionV1Schema.optional(),
 });
 
 export type SealedConnectedServiceQuotaSnapshotV1 = z.infer<typeof SealedConnectedServiceQuotaSnapshotV1Schema>;
+
+// Explicit reader negotiation: older strict V1 readers cannot accept the opt-in field.
+export const CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER = 'accept';
+export const CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE = 'application/json; happier-connected-service-auto-quota-reset=1';
 
 export const ConnectedServiceAuthGroupPolicyV1Schema = z
     .object({
         v: z.literal(1).default(1),
         strategy: z.enum(['priority', 'least_limited', 'manual']).default('least_limited'),
         autoSwitch: z.boolean().default(false),
+        // Absence means false. Do not materialize a default in older-reader responses.
+        autoUseQuotaResetsWhenExhausted: z.boolean().optional(),
         switchOn: z
             .object({
                 usageLimit: z.boolean(),
@@ -540,6 +549,7 @@ export const ConnectedServiceAuthGroupPolicyPatchV1Schema = z
         v: z.literal(1).optional(),
         strategy: z.enum(['priority', 'least_limited', 'manual']).optional(),
         autoSwitch: z.boolean().optional(),
+        autoUseQuotaResetsWhenExhausted: z.boolean().optional(),
         switchOn: z
             .object({
                 usageLimit: z.boolean().optional(),

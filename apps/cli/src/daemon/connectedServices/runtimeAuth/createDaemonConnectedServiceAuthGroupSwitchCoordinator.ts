@@ -30,7 +30,7 @@ import { createConnectedServiceAuthGenerationApplyFailureError } from './connect
 import type { ConnectedServiceSessionAuthSwitchReason } from './connectedServiceSessionAuthSwitchCore';
 import { ConnectedServiceAuthGroupRuntimeStateRevisionConflictError } from '@/api/connectedServices/connectedServiceCredentialApi';
 import type { ConnectedServiceAuthGroupCandidatePreparationResult } from '../refresh/prepareConnectedServiceAuthGroupCandidateForSwitch';
-import type { ConnectedServiceGroupQuotaProbeResult } from '../quotas/ConnectedServiceQuotasCoordinator';
+import type { ConnectedServiceGroupQuotaProbeResult, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../quotas/ConnectedServiceQuotasCoordinator';
 
 type AuthGroupApi = Readonly<{
   getConnectedServiceAuthGroup(input: Readonly<{
@@ -185,6 +185,11 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
   accountUsageStore?: AccountUsageStoreForAuthGroupSwitchState | null;
   leases?: InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry;
   quotaFreshnessMs: number;
+  consumeAvailableRecoveryCreditForProfile?: (input: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    automaticResetContext: Readonly<{ groupId: string; sessionId?: string }>;
+  }>) => Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult>;
   nowMs: () => number;
   sleepMs?: (ms: number) => Promise<void>;
   restartSession: (input: Readonly<{
@@ -259,6 +264,10 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
     leases: params.leases ?? new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
     nowMs: params.nowMs,
     quotaFreshnessMs: params.quotaFreshnessMs,
+    ...(params.consumeAvailableRecoveryCreditForProfile ? {
+      consumeAvailableRecoveryCreditForProfile: async (input: Readonly<{ serviceId: string; profileId: string; automaticResetContext: Readonly<{ groupId: string; sessionId?: string }> }>) =>
+        await params.consumeAvailableRecoveryCreditForProfile!({ ...input, serviceId: ConnectedServiceIdSchema.parse(input.serviceId) }),
+    } : {}),
     loadState: async (input) => {
       const serviceId = ConnectedServiceIdSchema.parse(input.serviceId);
       const group = await loadConnectedServiceAuthGroupWithRetry({
@@ -496,6 +505,7 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
                 existing: existingState,
                 policy,
                 reason: input.reason,
+                limitCategory: input.limitCategory,
                 retryAtMs: resolveRetryAtMs({
                   retryAtMs: input.retryAtMs,
                   retryAfterMs: input.retryAfterMs,

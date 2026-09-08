@@ -2,7 +2,7 @@ import {
   ConnectedServiceUsageSourceV1Schema,
   ProviderAccountUsageRecordIdSchema,
   ProviderAccountUsageSnapshotV1Schema,
-  openProviderAccountUsageSnapshotCiphertext,
+  openSealedProviderAccountUsageSnapshot as decryptProviderAccountUsageSnapshot,
   type ConnectedServiceUsageSourceV1,
   type ProviderAccountUsageRecordId,
   type ProviderAccountUsageSnapshotV1,
@@ -74,7 +74,7 @@ function isProviderCompatibleWithConnectedServiceSource(input: Readonly<{
   return provider?.connectedServices?.supportedServiceIds.includes(input.source.serviceId) === true;
 }
 
-function accountScopedMaterial(credentials: Credentials): Parameters<typeof openProviderAccountUsageSnapshotCiphertext>[0]['material'] {
+function accountScopedMaterial(credentials: Credentials): Parameters<typeof decryptProviderAccountUsageSnapshot>[0]['material'] {
   return credentials.encryption.type === 'legacy'
     ? { type: 'legacy', secret: credentials.encryption.secret }
     : { type: 'dataKey', machineKey: credentials.encryption.machineKey };
@@ -117,14 +117,13 @@ async function openSealedProviderAccountUsageSnapshot(input: Readonly<{
 }>): Promise<HydratedProviderAccountUsageSnapshot | null> {
   if (!input.api.getProviderAccountUsageSnapshotSealed) return null;
   const response = await input.api.getProviderAccountUsageSnapshotSealed({ recordId: input.recordId }).catch(() => null);
-  const ciphertext = response?.sealed?.ciphertext;
-  if (!ciphertext) return null;
-  const opened = openProviderAccountUsageSnapshotCiphertext({
+  if (!response?.sealed) return null;
+  const opened = decryptProviderAccountUsageSnapshot({
     material: accountScopedMaterial(input.credentials),
-    ciphertext,
+    sealed: response.sealed,
   });
   const snapshot = parseProviderAccountUsageSnapshotForRecordId({
-    value: opened?.value,
+    value: opened,
     recordId: input.recordId,
   });
   return snapshot ? {

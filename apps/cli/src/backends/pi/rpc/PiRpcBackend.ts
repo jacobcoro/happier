@@ -1196,8 +1196,12 @@ export class PiRpcBackend implements AgentBackend {
   async cancel(sessionId: SessionId): Promise<void> {
     this.assertSession(sessionId);
     await abortPendingAcpPermissionRequests(this.permissionHandler, 'Pi turn cancelled');
+    const pendingTurn = this.pendingTurn;
     await this.sendCommand({ type: 'abort' });
-    if (this.pendingTurn) await this.pendingTurn.promise;
+    // Pi's successful abort response is an idle barrier: its RPC handler awaits the provider's
+    // waitForIdle() before acknowledging. Settle the same local turn from that authoritative
+    // boundary even if its preceding uncorrelated agent_end event was lost or misattributed.
+    if (pendingTurn && this.pendingTurn === pendingTurn) this.resolvePendingTurn();
   }
 
   async waitForResponseComplete(timeoutMs?: number | null): Promise<void> {

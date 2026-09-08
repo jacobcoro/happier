@@ -8,10 +8,29 @@ import { describe, expect, it, vi } from 'vitest';
 import { ConnectedServiceAuthGroupRuntimeStateRevisionConflictError } from '@/api/connectedServices/connectedServiceCredentialApi';
 import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from './selection/selectConnectedServiceAuthGroupCandidate';
 import {
+  buildObservedFailureMemberRuntimeState,
   persistMemberRuntimeStateWithPositiveEvidence,
   reconcileMemberRuntimeStateWithFreshQuotaEvidence,
   reconcileMemberRuntimeStateWithPositiveEvidence,
 } from './memberRuntimeState';
+
+describe('buildObservedFailureMemberRuntimeState', () => {
+  it('cools down a plan-incompatible permission failure as plan unavailable without requiring reauthentication', () => {
+    expect(buildObservedFailureMemberRuntimeState({
+      existing: null,
+      policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, cooldownMs: 45_000 },
+      reason: 'permission_denied',
+      limitCategory: 'plan_invalid',
+      retryAtMs: null,
+      planType: null,
+      observedAtMs: 1_000,
+    })).toEqual({
+      lastFailureKind: 'permission_denied',
+      lastObservedAtMs: 1_000,
+      planUnavailableUntilMs: 46_000,
+    });
+  });
+});
 
 function group(state: ConnectedServiceAuthGroupMemberStateV1, runtimeStateRevision = 0): ConnectedServiceAuthGroupV1 {
   return {

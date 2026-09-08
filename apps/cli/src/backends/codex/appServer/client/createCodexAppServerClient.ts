@@ -604,6 +604,9 @@ export async function createCodexAppServerClient(params: Readonly<{
         },
     );
 
+    child.stdin.on('error', (error) => {
+        failWith(error);
+    });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
         if (state.fatalError) return;
@@ -689,20 +692,20 @@ export async function createCodexAppServerClient(params: Readonly<{
             signal?.addEventListener('abort', onAbort, { once: true });
             if (signal?.aborted) onAbort();
         });
-        try {
-            if (!signal?.aborted) {
-                await sendMessage({
-                    id,
-                    method,
-                    // Codex app-server rejects requests that omit the `params` field entirely.
-                    params: requestParams === undefined ? {} : requestParams,
-                });
-            }
-        } catch (error) {
-            const failure = error instanceof Error ? error : new Error(String(error));
-            const pending = pendingRequests.get(requestKey);
-            pendingRequests.delete(requestKey);
-            pending?.reject(failure);
+        if (!signal?.aborted) {
+            // Observe the response immediately: a blocked pipe must not hide timeout,
+            // cancellation, or child-exit settlement while its write callback is pending.
+            void sendMessage({
+                id,
+                method,
+                // Codex app-server rejects requests that omit the `params` field entirely.
+                params: requestParams === undefined ? {} : requestParams,
+            }).catch((error: unknown) => {
+                const failure = error instanceof Error ? error : new Error(String(error));
+                const pending = pendingRequests.get(requestKey);
+                pendingRequests.delete(requestKey);
+                pending?.reject(failure);
+            });
         }
         return await responsePromise;
     };

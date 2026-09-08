@@ -14,6 +14,7 @@ import {
 import type { ScmBackendContext } from '../../../types';
 import { normalizeCommitRef, runScmCommand } from '../../../runtime';
 import { mapGitErrorCode } from '../remote';
+import { toLiteralPathspec, toRepoRootLiteralPathspec } from '../literalPathspec';
 import {
     applyPatchToIndex,
     createGitTemporaryIndex,
@@ -172,6 +173,13 @@ export async function gitCommitCreate(input: {
         : new Set<string>();
 
     try {
+        if (preStagedPathsResult && !preStagedPathsResult.success) {
+            return {
+                success: false,
+                errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED,
+                error: preStagedPathsResult.stderr || 'Failed to inspect staged paths before commit',
+            };
+        }
         if (request.scope?.kind === 'all-pending') {
             const stageAll = await runGitCommand({
                 cwd: context.cwd,
@@ -227,7 +235,7 @@ export async function gitCommitCreate(input: {
             if (effectiveScope.size > 0) {
                 const includeResult = await runGitCommand({
                     cwd: context.cwd,
-                    args: ['add', '-A', '--', ...Array.from(effectiveScope)],
+                    args: ['add', '-A', '--', ...Array.from(effectiveScope, toLiteralPathspec)],
                     timeoutMs: 10_000,
                     env: gitEnv,
                 });
@@ -243,7 +251,7 @@ export async function gitCommitCreate(input: {
                 if (effectiveExclude.length > 0) {
                     const excludeResult = await runGitCommand({
                         cwd: context.cwd,
-                        args: ['reset', '--', ...effectiveExclude],
+                        args: ['reset', '--', ...effectiveExclude.map(toLiteralPathspec)],
                         timeoutMs: 10_000,
                         env: gitEnv,
                     });
@@ -325,7 +333,7 @@ export async function gitCommitCreate(input: {
                 // Important: do not reset paths that were already staged in the live index.
                 const touched = await runGitCommand({
                     cwd: context.cwd,
-                    args: ['diff-tree', '--no-commit-id', '--name-status', '-r', '-z', commitSha],
+                    args: ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', commitSha],
                     timeoutMs: 5000,
                 });
                 if (!touched.success) {
@@ -349,7 +357,7 @@ export async function gitCommitCreate(input: {
                     if (pathsToReset.length > 0) {
                         const resetResult = await runGitCommand({
                             cwd: context.cwd,
-                            args: ['reset', '--mixed', 'HEAD', '--', ...pathsToReset],
+                            args: ['reset', '--mixed', 'HEAD', '--', ...pathsToReset.map(toRepoRootLiteralPathspec)],
                             timeoutMs: 10_000,
                         });
                         if (!resetResult.success) {

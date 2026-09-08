@@ -304,6 +304,7 @@ describe('startHappyServer (MCP integration)', () => {
       rpcHandlerManager,
       sendClaudeSessionMessage: () => {},
       updateMetadata: () => {},
+      getPermissionMode: () => 'default',
     };
 
     const server = await startHappyServer(fakeClient);
@@ -473,6 +474,7 @@ describe('startHappyServer (MCP integration)', () => {
       } as any,
       sendClaudeSessionMessage: () => {},
       updateMetadata: () => {},
+      getPermissionMode: () => 'default',
     };
 
     const server = await startHappyServer(fakeClient);
@@ -501,6 +503,51 @@ describe('startHappyServer (MCP integration)', () => {
         errorCode: 'execution_run_budget_exceeded',
         error: 'Execution run budget exceeded',
       });
+    } finally {
+      await (client as any)?.close?.();
+      server.stop();
+    }
+  });
+
+  it('rejects execution.run.start targeting another session instead of retargeting the current MCP session', async () => {
+    const invokeLocal = vi.fn(async () => ({ runId: 'run_wrong_session' }));
+    const fakeClient: HappyMcpSessionClient = {
+      sessionId: 'sess_mcp_current_1',
+      rpcHandlerManager: { invokeLocal } as any,
+      getPermissionMode: () => 'default',
+      sendClaudeSessionMessage: () => {},
+      updateMetadata: () => {},
+    };
+
+    const server = await startHappyServer(fakeClient);
+    let client: Client | null = null;
+    try {
+      client = new Client({ name: 'mcp-test-run-cross-session', version: '1.0.0' }, { capabilities: {} });
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url)));
+
+      const resultRaw = await client.callTool({
+        name: 'action_execute',
+        arguments: {
+          actionId: 'execution.run.start',
+          input: {
+            sessionId: 'sess_mcp_target_2',
+            intent: 'review',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            instructions: 'Review.',
+            permissionMode: 'default',
+            retentionPolicy: 'ephemeral',
+            runClass: 'bounded',
+            ioMode: 'request_response',
+          },
+        },
+      });
+
+      expect(resultRaw.isError).toBe(true);
+      expect(parseMcpJsonText(resultRaw)).toEqual({
+        errorCode: 'execution_run_target_unavailable',
+        error: 'Cross-session execution run control is unavailable from a session-scoped MCP bridge',
+      });
+      expect(invokeLocal).not.toHaveBeenCalled();
     } finally {
       await (client as any)?.close?.();
       server.stop();

@@ -182,6 +182,10 @@ Effort tiers are resolved once when the session mode is built and travel on the 
 resolution and launch-option hashing see the same value and hashing stays pure.
 
 Provider-owned probing:
+- The CLI capability RPC resolves the selected backend profile once before any model, mode, or
+  config-option probe. It uses the same profile environment and Saved Secret resolver as session
+  startup, then layers any connected-service materialization on top. Provider adapters consume the
+  resulting `processEnv`; they must not rebuild a competing profile environment from ambient state.
 - Implement the probe in `apps/cli/src/backends/<provider>/preflight/**` and register it through
   `getPreflightSessionControlsProbeAdapter`. Type it as `PreflightSessionControlsProbeAdapter` —
   that is the shape the caller invokes, and its params carry `connectedServices` and

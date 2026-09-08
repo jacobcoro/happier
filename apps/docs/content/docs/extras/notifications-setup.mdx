@@ -33,20 +33,15 @@ For the exact routing behavior, see [Notification routing](/extras/notifications
 
 ## Richer notification details
 
-Permission and action-request notifications include more context than a generic “the app needs permission” alert.
+**Development builds:** **Request previews** in **Settings → Notifications** include the actual request by default. You can disable push previews, previews for individual webhooks, and device-local previews separately. Older releases may show only a command name, a short file hint, or a question count.
 
-In current builds, Happier tries to show:
+With previews enabled, permission notifications include the requested command or file path and any supplied explanation. Question notifications include the question text, answer options and their descriptions, and whether multiple selections or a custom answer are allowed. Happier formats the supported request fields rather than sending raw tool-input JSON. Supported requests can also include a plan for approval, a history-import explanation, or a web URL or search query.
 
-- the **tool or request type** being asked for
-- a short **detail hint** when it is useful and safe to show
+These details may appear on the lock screen or be received by your webhook endpoint. Turn request previews off to retain a generic notification without its command or question content. The notification still opens the session; the `Answer` action opens the question in the app.
 
-Examples of detail hints include:
+Long push previews are shortened with an ellipsis to fit the outbound payload budget while preserving session and request routing. Open the session for the complete content. Expo also enforces its own [notification payload limits](https://docs.expo.dev/push-notifications/sending-notifications/).
 
-- a short file hint such as `src/file.ts`
-- a command hint such as `Command: npm`
-- a compact question count such as `1 question` or `3 questions`
-
-Happier does **not** try to dump full raw tool input into the push notification. The goal is to give you enough context to decide quickly without exposing unnecessary command arguments or request payloads on the lock screen.
+An older app can reset this new preference when saving notification settings. Updated senders then use the default of showing previews; disable them again from an updated app. Older senders cannot honor the new preference and continue using their existing detail hints.
 
 Platform details:
 
@@ -61,6 +56,7 @@ Add a channel by URL. Each one carries its own switches:
 
 - **Topics** — `ready`, `permissionRequest` and `userActionRequest`, all on when a channel is created. Turn off what you do not want delivered.
 - **Message preview in ready events** — off by default. Leave it off if the endpoint should not receive message text.
+- **Request previews** — available in development builds, on by default, including for existing webhooks. Disable this to omit permission details and question options from this endpoint.
 - **Signing secret** — optional, and covered below.
 
 A channel is enabled as soon as you add it, and you can disable one without deleting it.
@@ -87,6 +83,8 @@ A `POST` with `content-type: application/json` and a body shaped like this:
 ```
 
 `request` is `null` for `ready` events and populated for permission and user-action events, where `kind` is `permission` or `user_action`. Any non-2xx response is treated as a delivery failure.
+
+In development builds, request previews control both `content.body` and `request.toolDetails`. With previews disabled, the body is generic and `toolDetails` is `null`; request identifiers remain available for routing.
 
 ### Verifying the signature
 

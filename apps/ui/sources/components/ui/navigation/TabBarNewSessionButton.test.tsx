@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { installNavigationCommonModuleMocks } from './navigationTestHelpers';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen, resetBrowserSessionDraftPersistenceForTest, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,7 +50,18 @@ vi.mock('expo-blur', () => ({
         React.createElement('BlurView', props, children),
 }));
 
+// Keep the production module load outside each test's timeout while retaining the installed mocks.
+await Promise.all([
+    import('@/sync/ops/sessionDrafts/sessionDraftRepository'),
+    import('./TabBarNewSessionButton'),
+    import('@/keyboard/runtime'),
+]);
+
 describe('TabBarNewSessionButton', () => {
+    beforeEach(async () => {
+        await resetBrowserSessionDraftPersistenceForTest();
+    });
+
     afterEach(() => {
         standardCleanup();
         expoRouterMock.spies.push.mockReset();

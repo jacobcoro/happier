@@ -123,6 +123,7 @@ export function registerExecutionRunHandlers(
     }>;
     budgetRegistry?: ExecutionBudgetRegistry;
     runtimeActivityContributionHandle?: SessionRuntimeActivityContributionHandle | null;
+    enqueueParentSessionInput?: (input: Readonly<{ text: string; meta: Record<string, unknown> }>) => Promise<void>;
     onExecutionRunPublicStateUpdated?: (run: ExecutionRunPublicState) => void;
     resolveAccountSettings?: () => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
   }>,
@@ -153,6 +154,9 @@ export function registerExecutionRunHandlers(
     maxTurns: policy.maxTurns ?? undefined,
     budgetRegistry: ctx.budgetRegistry,
     runtimeActivityContributionHandle: ctx.runtimeActivityContributionHandle,
+    ...(ctx.enqueueParentSessionInput
+      ? { enqueueParentSessionInput: ctx.enqueueParentSessionInput }
+      : {}),
     resolveAccountSettings: ctx.resolveAccountSettings,
     // Resume rehydration re-materializes connected services through the SAME canonical CS owner used
     // at start, driven by the run's persisted selection. Fail-closed: a run with a persisted CS

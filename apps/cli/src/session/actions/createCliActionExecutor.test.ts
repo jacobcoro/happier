@@ -2267,7 +2267,7 @@ describe('createCliActionExecutor', () => {
     expect(sendSessionMessage).not.toHaveBeenCalled();
   });
 
-  it('rejects delegate run defaults above the caller permission', async () => {
+  it('clamps an omitted delegate permission to the live caller permission', async () => {
     const sessionId = 'sess-current-aaaaaaaaaaaa';
     fetchSessionById.mockResolvedValue({
       id: sessionId,
@@ -2280,9 +2280,9 @@ describe('createCliActionExecutor', () => {
         permissionModeUpdatedAt: 10,
       },
     });
-
     const executor = createPlainExecutor({
       sessionId,
+      getCallerPermissionMode: () => 'default',
       rawSession: {
         metadata: {
           permissionMode: 'default',
@@ -2301,16 +2301,10 @@ describe('createCliActionExecutor', () => {
       { surface: 'session_agent', defaultSessionId: sessionId },
     );
 
-    expect(result).toMatchObject({
-      ok: false,
-      errorCode: 'permission_escalation_denied',
-      details: {
-        surface: 'session_agent',
-        requestedMode: 'workspace_write',
-        callerMode: 'default',
-      },
-    });
-    expect(startExecutionRun).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true });
+    expect(startExecutionRun).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({ permissionMode: 'default' }),
+    }));
   });
 
   it('uses a session-specific data key encryption context when starting execution runs in other sessions', async () => {

@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { computeExpandedPathsForReveal } from '@/components/sessions/files/repositoryTree/computeExpandedPathsForReveal';
 import { SessionRightPanelGitCommitTab } from '@/components/sessions/panes/git/SessionRightPanelGitCommitTab';
 import { ScmCommitSelectionToggleButton } from '@/components/sessions/sourceControl/commitSelection/ScmCommitSelectionToggleButton';
 import { ScmChangeOverflowMenu } from '@/components/sessions/sourceControl/changes/ScmChangeOverflowMenu';
@@ -14,7 +13,6 @@ import {
     type ChangedFilesViewMode,
 } from '@/scm/scmAttribution';
 import { filterDirectoryLikeScmFileStatuses, isDirectoryLikeScmFileStatus } from '@/scm/isDirectoryLikeScmFileStatus';
-import { storage } from '@/sync/domains/state/storage';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import type { ScmCommitSelectionPatch } from '@/sync/domains/state/storageTypes';
 import type { ScmProjectInFlightOperation, ScmProjectOperationLogEntry } from '@/sync/runtime/orchestration/projectManager';
@@ -57,7 +55,7 @@ export type SessionRightPanelGitCommitTabContentProps = Readonly<{
     >;
     commitAdjacentPushAction?: ScmCommitAdjacentPushAction;
     showBranchSummary?: boolean;
-    onOpenFilesSidebar: () => void;
+    onOpenFilesSidebar: (revealPath?: string) => void;
     onOpenReviewAllChanges: () => void;
     onOpenStashDetails: () => void;
     openFileInDetails: (fullPath: string) => void;
@@ -194,14 +192,8 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
     const renderNull = React.useCallback((_file: ScmFileStatus) => null, []);
 
     const revealInTree = React.useCallback((fullPath: string) => {
-        props.onOpenFilesSidebar();
-        const sessionExpandedPaths = storage.getState().getSessionRepositoryTreeExpandedPaths(props.sessionId);
-        const revealExpandedPaths = computeExpandedPathsForReveal({
-            expandedPaths: sessionExpandedPaths,
-            fullPath,
-        });
-        storage.getState().setSessionRepositoryTreeExpandedPaths(props.sessionId, revealExpandedPaths);
-    }, [props.onOpenFilesSidebar, props.sessionId]);
+        props.onOpenFilesSidebar(fullPath);
+    }, [props.onOpenFilesSidebar]);
 
     const renderTrailingActions = React.useCallback((file: ScmFileStatus) => {
         const discardEnabled = props.scmWriteEnabled && props.scmSnapshot?.capabilities?.writeDiscard === true;

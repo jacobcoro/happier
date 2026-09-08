@@ -112,7 +112,10 @@ test('full release resume binds the prior run to the same operation and authoriz
   const parsed = workflow('release.yml');
   assert.ok(parsed.on.workflow_dispatch.inputs.resume_run_id);
   assert.equal(parsed.jobs.resolve_resume.uses, './.github/workflows/resolve-release-resume.yml');
-  assert.equal(parsed.jobs.resolve_resume.with.expected_workflow, '.github/workflows/release.yml');
+  assert.equal(parsed.on.workflow_call.inputs.combined_preview_production.default, false);
+  assert.match(parsed.jobs.resolve_resume.with.expected_workflow, /combined_preview_production/);
+  assert.match(parsed.jobs.resolve_resume.with.expected_workflow, /release-preview-and-production\.yml/);
+  assert.match(parsed.jobs.resolve_resume.with.expected_workflow, /release\.yml/);
   assert.equal(parsed.jobs.resolve_resume.with.expected_source_sha, '${{ inputs.authorized_promotion_source_sha }}');
   assert.equal(parsed.jobs.resolve_resume.with.expected_operation_id, '${{ inputs.hmaint_operation_id }}');
   assert.ok(needs(parsed.jobs.plan).includes('resolve_resume'));
@@ -252,11 +255,19 @@ test('failed grouped verification independently certifies each successful immuta
   }
 });
 
-for (const name of ['nightly-dev.yml', 'release.yml']) {
-  test(`${name} replaces its singleton status artifact safely on a GitHub rerun`, () => {
-    const parsed = workflow(name);
-    const upload = parsed.jobs.release_status.steps.find((step) => step.with?.name === 'happier-release-status');
-    assert.ok(upload, `${name} must upload the canonical release status artifact`);
-    assert.equal(upload.with.overwrite, true);
-  });
-}
+test('nightly-dev replaces its singleton status artifact safely on a GitHub rerun', () => {
+  const parsed = workflow('nightly-dev.yml');
+  const upload = parsed.jobs.release_status.steps.find((step) => step.with?.name === 'happier-release-status');
+  assert.ok(upload, 'nightly-dev.yml must upload the canonical release status artifact');
+  assert.equal(upload.with.overwrite, true);
+});
+
+test('release.yml defaults its replaceable status artifact to the canonical name', () => {
+  const parsed = workflow('release.yml');
+  assert.equal(parsed.on.workflow_call.inputs.combined_preview_production.default, false);
+  const upload = parsed.jobs.release_status.steps.find(
+    (step) => String(step.with?.name).includes('happier-release-status-preview'),
+  );
+  assert.ok(upload, 'release.yml must upload the selected release status artifact');
+  assert.equal(upload.with.overwrite, true);
+});

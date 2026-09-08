@@ -24,7 +24,14 @@ test('install.ps1 refreshes the current session PATH and prints Windows PATH rel
     /\$env:Path\s*=\s*\(\$updatedPathEntries -join ';'\)/i,
     'expected the refreshed process PATH to keep machine PATH entries such as System32',
   );
-  assert.match(raw, /Show-PathReloadGuidance\s+-ShimName\s+\(Resolve-CliShimName\)\s+-BinDir\s+\$BinDir/i);
+  assert.match(raw, /Show-PathReloadGuidance\s+-ShimName\s+\$displayShimBasename\s+-BinDir\s+\$displayShimDir\s+-ShimPath\s+\$displayShimPath/i);
+  assert.ok(
+    raw.lastIndexOf('Invoke-PostInstallAction -CliPath $invoker') < raw.lastIndexOf('Show-PathReloadGuidance -ShimName'),
+    'expected the single PATH guidance block after any guided setup handoff',
+  );
+  assert.equal((raw.match(/Write-Host "Next steps"/g) ?? []).length, 0, 'PATH guidance must not add a competing next-steps heading');
+  assert.match(raw, /Write-Host "\s+version:\s+\$version"/i, 'expected a labeled installed version in the install summary');
+  assert.doesNotMatch(raw, /^\s*& \$invoker --version\s*$/mu, 'the raw --version result must not be rendered directly');
 });
 
 test('install.ps1 allows Windows installs without persistent PATH mutation', async () => {

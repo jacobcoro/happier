@@ -157,6 +157,7 @@ export async function probeAgentModesBestEffort(params: {
   backendTarget?: BackendTargetRefV1;
   cwd: string;
   timeoutMs?: number;
+  profileId?: string | null;
   accountSettings?: Readonly<Record<string, unknown>> | null;
   credentials?: Credentials | null;
   connectedServices?: ConnectedServiceBindingsV1 | null;
@@ -165,11 +166,15 @@ export async function probeAgentModesBestEffort(params: {
 }): Promise<ProbedAgentModesResult> {
   const nowMs = Date.now();
   const cwd = typeof params.cwd === 'string' && params.cwd.trim().length > 0 ? params.cwd.trim() : process.cwd();
+  const profileId = typeof params.profileId === 'string' && params.profileId.trim().length > 0
+    ? params.profileId.trim()
+    : null;
   const baseProbeVariant = resolveAgentProbeVariant({
     agentId: params.agentId,
     backendTarget: params.backendTarget,
     accountSettings: params.accountSettings,
     connectedServices: params.connectedServices ?? null,
+    processEnv: params.processEnv,
   });
   const probeVariant = params.connectedServiceSelectionCacheKey
     ? `${baseProbeVariant}|connected:${params.connectedServiceSelectionCacheKey}`
@@ -178,7 +183,7 @@ export async function probeAgentModesBestEffort(params: {
     agentId: params.agentId,
     cwd,
     backendTarget: params.backendTarget,
-    variant: probeVariant,
+    variant: profileId ? `${probeVariant}|profile:${profileId}` : probeVariant,
   });
 
   const cached = agentModesProbeCache.get(cacheKey);
@@ -203,7 +208,9 @@ export async function probeAgentModesBestEffort(params: {
           backendTarget: params.backendTarget,
           cwd,
           timeoutMs,
+          profileId,
           accountSettings: params.accountSettings ?? null,
+          credentials: params.credentials ?? null,
           connectedServices: params.connectedServices ?? null,
           processEnv: params.processEnv,
         }).catch(() => null);
@@ -244,6 +251,7 @@ export async function probeAgentModesBestEffort(params: {
         cwd,
         accountSettings: params.accountSettings,
         credentials: params.credentials,
+        processEnv: params.processEnv,
       });
       if (configuredBackend) {
         const modes = await probeModesFromAcpBackend({ backend: configuredBackend, timeoutMs }).catch(() => null);
@@ -278,7 +286,7 @@ export async function probeAgentModesBestEffort(params: {
     try {
       const created = await createCatalogAcpBackend<any>(params.agentId, {
         cwd,
-        env: {},
+        env: params.processEnv ?? process.env,
         mcpServers: {},
         permissionHandler,
         permissionMode: 'default',

@@ -444,6 +444,7 @@ export async function probeAgentModelsBestEffort(params: {
     backendTarget: params.backendTarget,
     accountSettings: params.accountSettings,
     connectedServices: params.connectedServices ?? null,
+    processEnv: params.processEnv,
   });
   const probeVariant = params.connectedServiceSelectionCacheKey
     ? `${baseProbeVariant}|connected:${params.connectedServiceSelectionCacheKey}`
@@ -487,6 +488,7 @@ export async function probeAgentModelsBestEffort(params: {
         cwd,
         accountSettings: params.accountSettings,
         credentials: params.credentials,
+        processEnv: params.processEnv,
       });
       if (configuredBackend) {
         const models = await probeModelsFromAcpBackend({ backend: configuredBackend, timeoutMs }).catch(() => null);
@@ -599,10 +601,11 @@ export async function probeAgentModelsBestEffort(params: {
       const probeBackendOptions = entry.resolveModelsProbeBackendOptions?.({
         backendTarget: params.backendTarget,
         accountSettings: params.accountSettings,
+        processEnv: params.processEnv,
       }) ?? {};
       const created = await createCatalogAcpBackend<any>(params.agentId, {
         cwd,
-        env: {},
+        env: params.processEnv ?? process.env,
         mcpServers: {},
         permissionHandler,
         permissionMode: 'default',

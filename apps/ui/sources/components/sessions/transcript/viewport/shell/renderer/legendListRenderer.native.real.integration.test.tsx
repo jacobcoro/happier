@@ -271,6 +271,77 @@ describe('Legend transcript renderer installed native-package cleanup', () => {
         vi.useRealTimers();
     });
 
+    it.each(['prepend', 'explicit-offset'] as const)('publishes the native end anchor in the prepend commit before a maintenance frame: %s', async (scenario) => {
+        type NativePrependRow = Readonly<{ id: string; height: number }>;
+        const listRef = React.createRef<LegendListRef>();
+        const nativeScroller = createNativeScroller();
+        let rows = Array.from({ length: 20 }, (_, index) => ({ id: `prepend-anchor-${index}`, height: 120 }));
+        let dataVersion = 0;
+        const render = () => (
+            <LegendList<NativePrependRow>
+                data={rows}
+                dataVersion={dataVersion}
+                estimatedItemSize={120}
+                estimatedListSize={{ height: 600, width: 800 }}
+                getFixedItemSize={(item) => item.height}
+                initialScrollAtEnd
+                keyExtractor={(item) => item.id}
+                maintainScrollAtEnd={{ animated: false, isMaintainingScrollAtEnd: () => true }}
+                maintainVisibleContentPosition={{ data: true, size: true }}
+                recycleItems={false}
+                ref={listRef}
+                renderItem={({ item }) => <React.Fragment>{item.id}</React.Fragment>}
+            />
+        );
+        await act(async () => {
+            screen = create(render(), { createNodeMock: createNativeNodeMock(nativeScroller) });
+        });
+        let ready = false;
+        const unsubscribe = listRef.current!.getState().listen('readyToRender', (value) => { ready = value; });
+        await flushNativeLayouts(requireMountedScreen(screen));
+        for (let pass = 0; pass < 48 && !ready; pass += 1) {
+            await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+            if (!ready) await flushNativeLayouts(requireMountedScreen(screen));
+        }
+        expect(ready).toBe(true);
+        const settled = listRef.current!.getState();
+        act(() => {
+            requireMountedScreen(screen).root.findByType('ScrollView').props.onScroll({ nativeEvent: {
+                contentInset: { bottom: 0, left: 0, right: 0, top: 0 },
+                contentOffset: { x: 0, y: settled.contentLength - settled.scrollLength },
+                contentSize: { height: settled.contentLength, width: 800 },
+                layoutMeasurement: { height: 600, width: 800 },
+                zoomScale: 1,
+            } });
+        });
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        // This is the first native content child selected by minIndexForVisible=0.
+        // RN compensates its frame delta during mounting, before displaying the commit.
+        const readNativeAnchorTop = () => {
+            const anchor = requireMountedScreen(screen).root.findByType('ScrollView').findAll((node) => (
+                node.props.style?.position === 'absolute'
+                && node.props.style?.height === 0
+                && node.props.style?.width === 0
+                && typeof node.props.style?.top === 'number'
+            ))[0];
+            if (!anchor) throw new Error('Expected the native MVCP anchor view');
+            return anchor.props.style.top as number;
+        };
+        if (scenario === 'explicit-offset') {
+            act(() => { void listRef.current!.scrollToOffset({ offset: 600, animated: false }); });
+        }
+        const beforeAnchorTop = readNativeAnchorTop();
+        const beforeContentLength = listRef.current!.getState().contentLength;
+        rows = [{ id: 'prepended-history', height: 1200 }, ...rows];
+        dataVersion += 1;
+        await act(async () => { requireMountedScreen(screen).update(render()); });
+        expect(listRef.current!.getState().contentLength - beforeContentLength).toBe(1200);
+        // A still-running explicit offset command retains its requested viewport; the
+        // standing end predicate must not override it merely because it has no item index.
+        expect(readNativeAnchorTop() - beforeAnchorTop).toBe(scenario === 'prepend' ? 1200 : 0);
+        unsubscribe();
+    });
+
     it('does not resurrect a cancelled initial-end handoff after normalized native MVCP data change', async () => {
         type NativeHandoffRow = Readonly<{ height: number; id: string }>;
         const listRef = React.createRef<LegendListRef>();
@@ -398,7 +469,7 @@ describe('Legend transcript renderer installed native-package cleanup', () => {
         ).toHaveLength(0);
 
         hasMaintainIntent = false;
-        listRef.current!.cancelInitialScrollPreservation();
+        listRef.current!.cancelScroll();
         const normalizedState = listRef.current!.getState();
         const normalizedEnd = Math.max(
             0,
@@ -1440,11 +1511,15 @@ describe('Legend transcript renderer installed native-package end follow (E-18)'
         nativeScroller: ReturnType<typeof createNativeScroller>;
         /** Append one row and let its late measurement land. */
         appendRow(measuredHeight: number): Promise<void>;
+        resizeViewport(height: number): Promise<void>;
+        reportDelayedScroll(): Promise<void>;
         readMaintainScrollAtEnd(): unknown;
     }>;
 
     async function mountFollowHarness(dataKey: string): Promise<FollowHarness> {
         const Renderer = legendListRenderer.Component;
+        const shellRef = React.createRef<TranscriptListShellRef<Row>>();
+        let viewportHeight = VIEWPORT_HEIGHT;
         const nativeScroller = createNativeScroller();
         const rowHeights = new Map<string, number>();
         let rows: readonly Row[] = Array.from({ length: 20 }, (_value, index): Row => {
@@ -1454,11 +1529,12 @@ describe('Legend transcript renderer installed native-package end follow (E-18)'
         });
         const render = () => (
             <Renderer
+                ref={shellRef}
                 webDomObservation={createWebDomScrollObservation()}
                 data={rows}
                 dataKey={dataKey}
                 frame={resolveMainTranscriptListShellFrame({
-                    legendInitialScrollAtEnd: true,
+                    legendInitialScrollAtEnd: false,
                     maintainScrollAtEndThreshold: 0.1,
                     nativeID: dataKey,
                     platformOS: 'ios',
@@ -1473,12 +1549,13 @@ describe('Legend transcript renderer installed native-package end follow (E-18)'
         });
         const resolveRowHeight = (rowId: string) => rowHeights.get(rowId) ?? VIEWPORT_HEIGHT;
         await flushRowLayouts(requireMountedScreen(screen), resolveRowHeight);
+        act(() => { void shellRef.current?.scrollToEnd?.({ animated: false }); });
         await act(async () => {
             await vi.advanceTimersByTimeAsync(200);
             await Promise.resolve();
         });
         await flushRowLayouts(requireMountedScreen(screen), resolveRowHeight);
-        // Settle the initial end placement the way the platform does: the scroller reports
+        // Settle the explicit end placement the way the platform does: the scroller reports
         // the landed offset back through onScroll.
         const emitScroll = (offsetY: number, contentHeight: number) => {
             act(() => {
@@ -1487,7 +1564,7 @@ describe('Legend transcript renderer installed native-package end follow (E-18)'
                         contentInset: { bottom: 0, left: 0, right: 0, top: 0 },
                         contentOffset: { x: 0, y: offsetY },
                         contentSize: { height: contentHeight, width: 800 },
-                        layoutMeasurement: { height: VIEWPORT_HEIGHT, width: 800 },
+                        layoutMeasurement: { height: viewportHeight, width: 800 },
                         zoomScale: 1,
                     },
                 });
@@ -1502,6 +1579,22 @@ describe('Legend transcript renderer installed native-package end follow (E-18)'
 
         return {
             nativeScroller,
+            async reportDelayedScroll() {
+                // A delayed old-offset callback updates Legend's cached physical threshold.
+                // The next geometry notification must still use its semantic end owner.
+                emitScroll(initialContentHeight - VIEWPORT_HEIGHT, rows.reduce((sum, row) => sum + resolveRowHeight(row.id), 0));
+                act(() => { shellRef.current?.notifyViewportGeometryChanged?.(); });
+                await act(async () => { await vi.advanceTimersByTimeAsync(64); });
+            },
+            async resizeViewport(height: number) {
+                viewportHeight = height;
+                await act(async () => {
+                    requireMountedScreen(screen).root.findByType('ScrollView').props.onLayout({
+                        nativeEvent: { layout: { height, width: 800, x: 0, y: 0 } },
+                    });
+                    await vi.advanceTimersByTimeAsync(64);
+                });
+            },
             async appendRow(measuredHeight: number) {
                 const id = `${ROW_TEST_ID_PREFIX}${dataKey}-${rows.length}`;
                 rowHeights.set(id, measuredHeight);
@@ -1527,10 +1620,8 @@ describe('Legend transcript renderer installed native-package end follow (E-18)'
 
     /**
      * Drive the REAL installed native list with the exact `maintainScrollAtEnd` value the
-     * renderer hands it, isolated from the app's own native residual corrector (still live
-     * until E-23). That corrector is today's beyond-threshold owner and restores the offset
-     * before a second maintenance evaluation can be observed, so it masks what the library
-     * does; this probe answers only "what does Legend do with the renderer's native config".
+     * renderer hands it. This characterizes the library predicate independently; the composed
+     * test below additionally requires that the adapter does not issue a competing correction.
      */
     async function probeLibraryTailFollow(
         maintainScrollAtEnd: unknown,
@@ -1642,12 +1733,28 @@ describe('Legend transcript renderer installed native-package end follow (E-18)'
         // app's residual writer uses scrollToOffset/scrollTo instead.
         expect(await probeLibraryTailFollow(nativeMaintainConfig)).toEqual({
             // Legend evaluates `withinThreshold || isMaintainingScrollAtEnd()`. With the
-            // predicate withheld on native, the beyond-threshold commit silently drops
-            // follow and the app corrector has to reposition a frame later - the send jiggle.
+            // predicate is required even outside the physical proximity band.
             maintained: true,
             // The commit really did leave the proximity band: Legend's own fact says so.
             withinThresholdAfterCommit: false,
         });
+    });
+
+    it.each(['row growth', 'viewport shrink'] as const)('does not issue an app absolute correction for %s while native maintenance awaits its scroll acknowledgement', async (change) => {
+        const harness = await mountFollowHarness('native-follow-composed');
+        const absoluteWriteStacks: string[] = [];
+        harness.nativeScroller.scrollTo.mockImplementation(() => {
+            absoluteWriteStacks.push(new Error('physical scroll writer').stack ?? '');
+        });
+        harness.nativeScroller.scrollTo.mockClear();
+        harness.nativeScroller.scrollToEnd.mockClear();
+        if (change === 'row growth') await harness.appendRow(1_200);
+        else await harness.resizeViewport(40);
+        await harness.reportDelayedScroll();
+        // The platform mock deliberately does not echo the maintained-end write: both owners
+        // see the same delayed physical acknowledgement, rather than testing each in isolation.
+        expect(absoluteWriteStacks).toEqual([]);
+        expect(harness.nativeScroller.scrollToEnd).toHaveBeenCalled();
     });
 
     it('does not let Legend re-pin a native hold the user took over inside the physical threshold', async () => {

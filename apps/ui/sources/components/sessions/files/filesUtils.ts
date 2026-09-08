@@ -18,7 +18,8 @@ export function buildAllRepositoryChangedFiles(
     return Array.from(mergedByPath.values()).sort((a, b) => a.fullPath.localeCompare(b.fullPath));
 }
 
-export function formatLineChanges(file: Pick<ScmFileStatus, 'linesAdded' | 'linesRemoved'>): string {
+export function formatLineChanges(file: Pick<ScmFileStatus, 'linesAdded' | 'linesRemoved' | 'isComplete'>): string {
+    if (file.isComplete === false) return '';
     const parts = [];
     if (file.linesAdded > 0) {
         parts.push(`+${file.linesAdded}`);
@@ -29,7 +30,7 @@ export function formatLineChanges(file: Pick<ScmFileStatus, 'linesAdded' | 'line
     return parts.length > 0 ? parts.join(' ') : '';
 }
 
-export function formatFileSubtitle(file: Pick<ScmFileStatus, 'filePath' | 'linesAdded' | 'linesRemoved'>, projectRootLabel: string): string {
+export function formatFileSubtitle(file: Pick<ScmFileStatus, 'filePath' | 'linesAdded' | 'linesRemoved' | 'isComplete'>, projectRootLabel: string): string {
     const lineChanges = formatLineChanges(file);
     const pathPart = file.filePath || projectRootLabel;
     return lineChanges ? `${pathPart} • ${lineChanges}` : pathPart;

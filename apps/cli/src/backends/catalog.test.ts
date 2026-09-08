@@ -587,10 +587,7 @@ describe('AGENTS', () => {
       fromBindings: { v: 1, bindingsByServiceId: { 'openai-codex': { source: 'connected', selection: 'group', groupId: 'team', profileId: 'old' } } },
       toBindings: { v: 1, bindingsByServiceId: { 'openai-codex': { source: 'connected', selection: 'group', groupId: 'team', profileId: 'new' } } },
       ...exactContinuityContext,
-    })).resolves.toEqual({
-      mode: 'unsupported',
-      reason: 'provider_session_state_unavailable_for_resume',
-    });
+    })).resolves.toEqual({ mode: 'hot_apply' });
     await expect(resolveConnectedServiceSwitchContinuity('codex', {
       sessionId: 'session-1',
       agentId: 'codex',
@@ -611,7 +608,7 @@ describe('AGENTS', () => {
       },
       fromBindings: { v: 1, bindingsByServiceId: { 'openai-codex': { source: 'connected', selection: 'profile', profileId: 'old' } } },
       toBindings: { v: 1, bindingsByServiceId: { 'openai-codex': { source: 'connected', selection: 'profile', profileId: 'new' } } },
-    })).resolves.toEqual({ mode: 'restart_shared_state_required', reason: 'codex_shared_state_required' });
+    })).resolves.toEqual({ mode: 'hot_apply' });
     await expect(resolveConnectedServiceSwitchContinuity('codex', {
       sessionId: 'session-1',
       agentId: 'codex',
@@ -693,10 +690,7 @@ describe('AGENTS', () => {
         }),
         invalidateTransports: async () => {},
       },
-    })).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'codex_shared_state_required',
-    });
+    })).resolves.toEqual({ mode: 'hot_apply' });
 
     const piRoot = await mkdtemp(join(tmpdir(), 'happier-pi-catalog-continuity-'));
     const piSessionFile = join(

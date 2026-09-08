@@ -6,6 +6,7 @@ import {
   type MentionRefV1,
 } from './mentionRefV1.js';
 import { PendingLocalIdSchema } from './sessionMessages/pendingLocalId.js';
+import { ExecutionRunCompletionV1Schema } from './structuredMessages/executionRunCompletionV1.js';
 
 export const SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND = 'sessionAttachmentUpload';
 
@@ -144,6 +145,7 @@ export const HappierStructuredInputV1EnvelopeSchema = z.object({
   skillMentions: z.array(z.record(z.string(), z.unknown())).optional(),
   imageInputs: z.array(z.record(z.string(), z.unknown())).optional(),
   attachments: z.array(z.record(z.string(), z.unknown())).optional(),
+  executionRunCompletion: ExecutionRunCompletionV1Schema.optional(),
 }).passthrough();
 export type HappierStructuredInputV1Envelope = z.infer<typeof HappierStructuredInputV1EnvelopeSchema>;
 

@@ -53,7 +53,7 @@ export function CompactSourceControlStatus({ sessionId }: CompactSourceControlSt
         return null;
     }
 
-    const hasLineChanges = scmStatusSummary.hasLineChanges;
+    const hasLineChanges = scmStatusSummary.isComplete !== false && scmStatusSummary.hasLineChanges;
     const changedFilesLabel = `${scmStatusSummary.changedFiles}`;
 
     return (

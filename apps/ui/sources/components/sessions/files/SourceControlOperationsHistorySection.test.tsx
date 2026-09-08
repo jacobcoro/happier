@@ -52,6 +52,7 @@ describe('SourceControlOperationsHistorySection', () => {
 
         const screen = await renderScreen(<SourceControlOperationsHistorySection
                     theme={theme}
+                    historyIdentity="repo-a"
                     historyLoading={false}
                     historyEntries={makeEntries(20)}
                     historyHasMore={true}
@@ -82,6 +83,7 @@ describe('SourceControlOperationsHistorySection', () => {
 
         const screen = await renderScreen(<SourceControlOperationsHistorySection
                     theme={theme}
+                    historyIdentity="repo-a"
                     historyLoading={false}
                     historyEntries={makeEntries(10)}
                     historyHasMore={false}
@@ -101,4 +103,49 @@ describe('SourceControlOperationsHistorySection', () => {
         expect(onLoadMoreHistory).not.toHaveBeenCalled();
         expect(getCommitRows(screen, 10)).toHaveLength(10);
     });
+    it('retains expanded commits across a prepended head and resets for another history identity', async () => {
+        const { SourceControlOperationsHistorySection } = await import('./SourceControlOperationsHistorySection');
+        const entries = makeEntries(30);
+        const props = { theme, historyIdentity: 'repo-a', historyLoading: false, historyEntries: entries,
+            historyHasMore: false, onLoadMoreHistory: vi.fn(), onOpenCommit: vi.fn() };
+        const screen = await renderScreen(<SourceControlOperationsHistorySection {...props} />);
+        await screen.pressByTestIdAsync('scm-commit-load-more');
+        expect(screen.findByTestId('scm-commit-entry-sha-25')).not.toBeNull();
+        await screen.update(<SourceControlOperationsHistorySection {...props}
+            historyEntries={[{ ...entries[0], sha: 'new-head' }, ...entries]} />);
+        expect(screen.findByTestId('scm-commit-entry-sha-25')).not.toBeNull();
+        expect(screen.findByTestId('scm-commit-entry-sha-26')).toBeNull();
+        await screen.update(<SourceControlOperationsHistorySection {...props} historyIdentity="repo-b" />);
+        expect(screen.findByTestId('scm-commit-entry-sha-5')).not.toBeNull();
+        expect(screen.findByTestId('scm-commit-entry-sha-6')).toBeNull();
+    });
+
+    it('keeps the viewed commit at the same viewport offset after a head is prepended', async () => {
+        const { SessionRightPanelGitHistoryTab } = await import('../panes/git/SessionRightPanelGitHistoryTab');
+        const entries = makeEntries(30);
+        const scrollTo = vi.fn();
+        const props = { theme, historyIdentity: 'repo-a', historyLoading: false, historyEntries: entries,
+            historyHasMore: false, onLoadMoreHistory: vi.fn(), onOpenCommit: vi.fn() };
+        const screen = await renderScreen(<SessionRightPanelGitHistoryTab {...props} />, {
+            createNodeMock: (element) => element.type === 'ScrollView' ? { scrollTo } : null,
+        });
+        await screen.pressByTestIdAsync('scm-commit-load-more');
+        const layout = (sha: string, y: number) => screen.findByTestId(`scm-commit-entry-${sha}`)?.props.onLayout?.({
+            nativeEvent: { layout: { x: 0, y, width: 300, height: 60 } },
+        });
+        await act(async () => {
+            entries.slice(0, 25).forEach((entry, index) => layout(entry.sha, 30 + index * 60));
+            screen.findByType('ScrollView').props.onScroll({ nativeEvent: {
+                contentOffset: { x: 0, y: 615 }, layoutMeasurement: { width: 300, height: 400 },
+                contentSize: { width: 300, height: 1600 },
+            } });
+        });
+        await screen.update(<SessionRightPanelGitHistoryTab {...props}
+            historyEntries={[{ ...entries[0], sha: 'new-head' }, ...entries]} />);
+        await act(async () => { layout('sha-10', 630); });
+        expect(scrollTo).toHaveBeenLastCalledWith({ y: 675, animated: false });
+        await screen.update(<SessionRightPanelGitHistoryTab {...props} historyIdentity="repo-b" />);
+        expect(scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: false });
+    });
+
 });

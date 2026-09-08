@@ -11,6 +11,9 @@ import {
     ConnectedServiceUsageSourceV1Schema,
     ProviderAccountUsageRecordIdSchema,
     ProviderAccountUsageSnapshotV1Schema,
+    ProviderAccountSubscriptionV1Schema,
+    splitProviderAccountUsageSubscription,
+    PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
     StoredJsonContentEnvelopeSchema,
 } from "@happier-dev/protocol";
 import { NotFoundSchema } from "../../schemas/notFoundSchema";
@@ -126,6 +129,7 @@ export function registerProviderAccountUsageRoutesV3(app: Fastify): void {
                     staleAfterMs: z.number().int().min(1),
                     status: z.enum(["ok", "unavailable", "estimated", "error"]),
                     materialFingerprint: z.string().min(1).max(256).optional(),
+                    subscription: ProviderAccountSubscriptionV1Schema.optional(),
                 }).strict(),
                 source: ConnectedServiceUsageSourceV1Schema.optional(),
             }).strict(),
@@ -161,7 +165,7 @@ export function registerProviderAccountUsageRoutesV3(app: Fastify): void {
                 fetchedAt: request.body.metadata.fetchedAt,
                 staleAfterMs: request.body.metadata.staleAfterMs,
                 materialFingerprint: request.body.metadata.materialFingerprint,
-                snapshot: parsed.data,
+                snapshot: request.body.metadata.subscription ? { ...parsed.data, subscription: request.body.metadata.subscription } : parsed.data,
             };
             let sourceOutcome: ProviderAccountUsageSourceLinkOutcome | undefined;
             if (request.body.source) {
@@ -199,6 +203,7 @@ export function registerProviderAccountUsageRoutesV3(app: Fastify): void {
             response: {
                 200: z.object({
                     content: StoredJsonContentEnvelopeSchema,
+                    subscription: ProviderAccountSubscriptionV1Schema.optional(),
                     metadata: z.object({
                         fetchedAt: z.number().int().nonnegative(),
                         staleAfterMs: z.number().int().nonnegative(),
@@ -226,8 +231,11 @@ export function registerProviderAccountUsageRoutesV3(app: Fastify): void {
             providerAccountUsageRecordId: record.recordId,
         });
 
+        const projected = splitProviderAccountUsageSubscription(record.snapshot);
         return reply.send({
-            content: { t: "plain", v: record.snapshot },
+            content: { t: "plain", v: projected.snapshot },
+            ...(request.headers.accept === PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT && projected.subscription
+                ? { subscription: projected.subscription } : {}),
             metadata: {
                 fetchedAt: record.fetchedAt ?? record.snapshot.fetchedAtMs,
                 staleAfterMs: record.staleAfterMs ?? record.snapshot.staleAfterMs,

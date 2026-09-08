@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NotificationChannelsV1Schema } from './notificationChannels.js';
 
 import {
   accountSettingsParse,
@@ -14,6 +15,7 @@ describe('notificationChannelsV1', () => {
         pushEnabled: true,
         ready: false,
         readyIncludeMessageText: false,
+        requestIncludeMessageText: true,
         permissionRequest: true,
         userActionRequest: false,
         foregroundBehavior: 'full',
@@ -35,6 +37,7 @@ describe('notificationChannelsV1', () => {
           connectedServiceQuotaRecovered: true,
         },
         readyIncludeMessageText: false,
+        requestIncludeMessageText: true,
       },
     ]);
   });
@@ -46,6 +49,7 @@ describe('notificationChannelsV1', () => {
         pushEnabled: true,
         ready: true,
         readyIncludeMessageText: true,
+        requestIncludeMessageText: true,
         permissionRequest: true,
         userActionRequest: true,
         foregroundBehavior: 'full',
@@ -70,6 +74,7 @@ describe('notificationChannelsV1', () => {
             connectedServiceQuotaRecovered: true,
           },
           readyIncludeMessageText: false,
+          requestIncludeMessageText: true,
         },
       ],
     });
@@ -94,6 +99,7 @@ describe('notificationChannelsV1', () => {
           connectedServiceQuotaRecovered: true,
         },
         readyIncludeMessageText: false,
+        requestIncludeMessageText: true,
       },
     ]);
   });
@@ -105,6 +111,7 @@ describe('notificationChannelsV1', () => {
         pushEnabled: true,
         ready: true,
         readyIncludeMessageText: true,
+        requestIncludeMessageText: true,
         permissionRequest: true,
         userActionRequest: true,
         foregroundBehavior: 'full',
@@ -122,6 +129,7 @@ describe('notificationChannelsV1', () => {
         pushEnabled: true,
         ready: false,
         readyIncludeMessageText: false,
+        requestIncludeMessageText: true,
         permissionRequest: true,
         userActionRequest: true,
         foregroundBehavior: 'full',
@@ -151,6 +159,7 @@ describe('notificationChannelsV1', () => {
           connectedServiceQuotaRecovered: true,
         },
         readyIncludeMessageText: false,
+        requestIncludeMessageText: true,
       },
     ]);
   });
@@ -162,6 +171,7 @@ describe('notificationChannelsV1', () => {
         pushEnabled: true,
         ready: true,
         readyIncludeMessageText: true,
+        requestIncludeMessageText: true,
         permissionRequest: true,
         userActionRequest: true,
         foregroundBehavior: 'full',
@@ -191,6 +201,7 @@ describe('notificationChannelsV1', () => {
           connectedServiceQuotaRecovered: true,
         },
         readyIncludeMessageText: true,
+        requestIncludeMessageText: true,
       },
     ]);
   });
@@ -250,5 +261,14 @@ describe('notificationChannelsV1', () => {
       connectedServiceQuotaBlocked: false,
       connectedServiceQuotaRecovered: false,
     });
+  });
+});
+
+
+describe('request preview privacy', () => {
+  it('shows existing webhook previews unless explicitly disabled', () => {
+    const channel = { v: 1, id: 'private-hook', kind: 'webhook', url: 'https://hooks.example.test' };
+    expect(NotificationChannelsV1Schema.parse([channel])[0].requestIncludeMessageText).toBe(true);
+    expect(NotificationChannelsV1Schema.parse([{ ...channel, requestIncludeMessageText: false }])[0].requestIncludeMessageText).toBe(false);
   });
 });

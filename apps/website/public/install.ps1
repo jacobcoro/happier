@@ -330,11 +330,17 @@ function Resolve-TarExecutablePath {
 function Show-PathReloadGuidance {
   param (
     [Parameter(Mandatory = $true)] [string] $ShimName,
-    [Parameter(Mandatory = $true)] [string] $BinDir
+    [Parameter(Mandatory = $true)] [string] $BinDir,
+    [Parameter(Mandatory = $true)] [string] $ShimPath
   )
 
   Write-Host ""
-  Write-Host "Next steps"
+  Write-Host "PATH"
+  if ($NoPathUpdate -eq "1") {
+    Write-Host "PATH updates were skipped. Run the installed command directly:"
+    Write-Host "  $ShimPath"
+    return
+  }
   Write-Host "The current PowerShell session can use $ShimName immediately."
   Write-Host "Other already-open terminals keep their old PATH until you restart them."
   Write-Host "Managed bin directory: $BinDir"
@@ -392,6 +398,98 @@ function Get-InstallerDisplayChannelLabel {
   }
 
   return $Value
+}
+
+$script:InstallerHeaderShown = $false
+
+function Test-InstallerRichHeaderAvailable {
+  if ($env:TERM -eq "dumb") {
+    return $false
+  }
+  try {
+    return (
+      -not [Console]::IsOutputRedirected -and
+      [Console]::WindowWidth -ge 58 -and
+      [Console]::WindowHeight -ge 12
+    )
+  }
+  catch {
+    return $false
+  }
+}
+
+function Write-InstallerHeader {
+  if (-not (Test-InstallerRichHeaderAvailable)) {
+    Write-Host "Happier"
+    Write-Host "Secure installer"
+    Write-Host "Download -> Verify -> Install"
+    Write-Host ""
+    $script:InstallerHeaderShown = $true
+    return
+  }
+
+  $rows = @(
+    "          3443",
+    "       343333334",
+    "     433221112334",
+    "    43211000112334",
+    "    32100000011233",
+    "    32100000112334",
+    "     321111223344",
+    "       33223344",
+    "          3344"
+  )
+  $labels = @("Happier", "Secure installer", "Download -> Verify -> Install", "", "", "", "", "", "")
+  $colors = @("Yellow", "Yellow", "Red", "Red", "Magenta", "Magenta", "Cyan", "Cyan", "Blue")
+  $useColor = -not $env:NO_COLOR
+  $supportsVirtualTerminal = $false
+  try {
+    $supportsVirtualTerminal = [bool]$Host.UI.SupportsVirtualTerminal
+  }
+  catch {}
+
+  for ($index = 0; $index -lt $rows.Count; $index++) {
+    $paddedRow = $rows[$index].PadRight(24)
+    if ($useColor) {
+      Write-Host $paddedRow -NoNewline -ForegroundColor $colors[$index]
+    }
+    else {
+      Write-Host $paddedRow -NoNewline
+    }
+
+    if ($labels[$index]) {
+      Write-Host "    " -NoNewline
+      if ($index -eq 0 -and $useColor) {
+        if ($supportsVirtualTerminal) {
+          $escape = [char]27
+          Write-Host "$($escape)[1m$($labels[$index])$($escape)[0m"
+        }
+        else {
+          Write-Host $labels[$index] -ForegroundColor White
+        }
+      }
+      else {
+        Write-Host $labels[$index]
+      }
+    }
+    else {
+      Write-Host ""
+    }
+  }
+  Write-Host ""
+  $script:InstallerHeaderShown = $true
+}
+
+function Write-InstallerStage {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Name
+  )
+
+  if ((Test-InstallerRichHeaderAvailable) -and -not $env:NO_COLOR) {
+    Write-Host ("[{0}]" -f $Name) -ForegroundColor Cyan
+    return
+  }
+  Write-Host ("[{0}]" -f $Name)
 }
 
 function Write-InstallerBullet {
@@ -761,6 +859,32 @@ function Test-DoctorRepairPreflightJsonIsSupported {
     return $false
   }
   return $trimmed -match '"(entries|services|existingServices)"\s*:'
+}
+
+function Test-DoctorRepairReportIsExpectedGuidedSetupState {
+  param (
+    [Parameter(Mandatory = $true)] $Inventory
+  )
+
+  if (@($Inventory.Entries).Count -gt 0 -or $null -eq $Inventory.Payload -or $null -eq $Inventory.Payload.report) {
+    return $false
+  }
+  if (@($Inventory.Payload.manualWarnings).Count -gt 0 -or @($Inventory.Payload.report.manualWarnings).Count -gt 0) {
+    return $false
+  }
+
+  $guidedSetupKinds = @(
+    "no_active_stack_yet",
+    "no_servers_configured",
+    "auth_missing_for_profile",
+    "machine_not_registered_for_profile"
+  )
+  $expectedKinds = @($guidedSetupKinds + "automatic_startup_missing")
+  $findingKinds = @($Inventory.Payload.report.findings | ForEach-Object { [string]$_.kind })
+  if (-not ($findingKinds | Where-Object { $guidedSetupKinds -contains $_ })) {
+    return $false
+  }
+  return -not ($findingKinds | Where-Object { $expectedKinds -notcontains $_ })
 }
 
 function Get-InstalledBackgroundServiceInventory {
@@ -1245,7 +1369,40 @@ function Invoke-PostInstallAction {
       throw "Installed Happier CLI does not support the '$requiredSubcommand' command surface required for -Run $runValue. Update your Happier CLI (or switch installer channel) and try again."
     }
   }
-  Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs $argsToPass -HomeDir $DaemonServiceStateHomeDir
+  if ($runValue -eq "setup") {
+    Invoke-InstallerSetupCommand -CliPath $CliPath -CommandArgs $argsToPass -HomeDir $DaemonServiceStateHomeDir
+  }
+  else {
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs $argsToPass -HomeDir $DaemonServiceStateHomeDir
+  }
+}
+
+function Invoke-InstallerSetupCommand {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath,
+    [Parameter(Mandatory = $true)] [string[]] $CommandArgs,
+    [Parameter(Mandatory = $true)] [string] $HomeDir
+  )
+
+  if (-not $script:InstallerHeaderShown) {
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs $CommandArgs -HomeDir $HomeDir
+    return
+  }
+
+  $hadPreviousValue = Test-Path Env:HAPPIER_INSTALLER_WELCOME_SHOWN
+  $previousValue = $env:HAPPIER_INSTALLER_WELCOME_SHOWN
+  try {
+    $env:HAPPIER_INSTALLER_WELCOME_SHOWN = "1"
+    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs $CommandArgs -HomeDir $HomeDir
+  }
+  finally {
+    if ($hadPreviousValue) {
+      $env:HAPPIER_INSTALLER_WELCOME_SHOWN = $previousValue
+    }
+    else {
+      Remove-Item Env:HAPPIER_INSTALLER_WELCOME_SHOWN -ErrorAction SilentlyContinue
+    }
+  }
 }
 
 if ($InstallerAction -eq "rollback") {
@@ -1435,24 +1592,34 @@ function Invoke-InstallerWebRequestWithRetry {
     [string] $OutFile
   )
 
-  $retryDelaysMs = @(250, 1000)
-  for ($attempt = 0; $attempt -le $retryDelaysMs.Length; $attempt += 1) {
-    try {
-      $params = @{ Uri = $Uri; UseBasicParsing = $true }
-      if ($Headers) {
-        $params.Headers = $Headers
-      }
-      if ($OutFile) {
-        $params.OutFile = $OutFile
-      }
-      return Invoke-WebRequest @params
+  $previousProgressPreference = $ProgressPreference
+  try {
+    if ($env:HAPPIER_NO_ANIMATION -or -not (Test-InstallerRichHeaderAvailable)) {
+      $ProgressPreference = "SilentlyContinue"
     }
-    catch {
-      if ($attempt -ge $retryDelaysMs.Length -or -not (Test-InstallerTransientWebException -ErrorRecord $_)) {
-        throw
+
+    $retryDelaysMs = @(250, 1000)
+    for ($attempt = 0; $attempt -le $retryDelaysMs.Length; $attempt += 1) {
+      try {
+        $params = @{ Uri = $Uri; UseBasicParsing = $true }
+        if ($Headers) {
+          $params.Headers = $Headers
+        }
+        if ($OutFile) {
+          $params.OutFile = $OutFile
+        }
+        return Invoke-WebRequest @params
       }
-      Start-Sleep -Milliseconds $retryDelaysMs[$attempt]
+      catch {
+        if ($attempt -ge $retryDelaysMs.Length -or -not (Test-InstallerTransientWebException -ErrorRecord $_)) {
+          throw
+        }
+        Start-Sleep -Milliseconds $retryDelaysMs[$attempt]
+      }
     }
+  }
+  finally {
+    $ProgressPreference = $previousProgressPreference
   }
 }
 
@@ -2218,6 +2385,8 @@ function Resolve-MinisignPublicKey {
 }
 
 $tag = if ($Channel -eq "preview") { "cli-preview" } elseif ($Channel -eq "publicdev") { "cli-dev" } else { "cli-stable" }
+Write-InstallerHeader
+Write-InstallerStage -Name "Download"
 if (-not $ReleaseAssetsDir) {
   Write-Host "Fetching $tag release metadata..."
   try {
@@ -2265,6 +2434,7 @@ try {
   Copy-OrDownloadInstallerAsset -Source $checksumsAsset.Source -DestinationPath $checksumsPath
   Copy-OrDownloadInstallerAsset -Source $signatureAsset.Source -DestinationPath $signaturePath
 
+  Write-InstallerStage -Name "Verify"
   $assetName = [string]$asset.Name
   $expectedSha = $null
   foreach ($line in (Get-Content -Path $checksumsPath)) {
@@ -2295,6 +2465,7 @@ try {
   }
   Write-Host "Signature verified."
 
+  Write-InstallerStage -Name "Install"
   $extractDir = Join-Path $tmpDir.FullName "extract"
   New-Item -ItemType Directory -Path $extractDir | Out-Null
   $tarPath = Resolve-TarExecutablePath
@@ -2376,13 +2547,6 @@ try {
     }
     $processPathEntries = @($updatedPathEntries) + @($machinePathEntries)
     $env:Path = ($processPathEntries -join ';')
-    if ($pathEntries.Length -eq 0 -or $userPath -notmatch [Regex]::Escape($BinDir)) {
-      Write-Host "Added $BinDir to user PATH."
-      Show-PathReloadGuidance -ShimName (Resolve-CliShimName) -BinDir $BinDir
-    }
-  }
-  else {
-    Write-Host "Skipped PATH update because HAPPIER_NO_PATH_UPDATE=1."
   }
 
   $invoker = Resolve-InstalledCliInvoker
@@ -2403,32 +2567,9 @@ try {
   Write-Host "Happier CLI installed:"
   Write-Host "  binary: $displayBinaryPath"
   Write-Host "  shim:   $displayShimPath"
+  Write-Host "  version: $version"
   Write-Host ""
-
-  $shimDirOnCurrentPath = $false
-  if ($env:Path) {
-    foreach ($pathEntry in ($env:Path -split ';')) {
-      if ($pathEntry.Trim() -eq $displayShimDir) {
-        $shimDirOnCurrentPath = $true
-        break
-      }
-    }
-  }
-  if ($shimDirOnCurrentPath) {
-    Write-Host "You can run ``$displayShimBasename`` right away."
-  }
-  elseif ($NoPathUpdate -eq "1") {
-    Write-Host "PATH update was skipped. Run directly using the absolute path:"
-    Write-Host "  $displayShimPath"
-  }
-  else {
-    Write-Host "To use ``$displayShimBasename`` from any new shell, $displayShimDir has been added to your PATH."
-    Write-Host "In THIS shell, restart PowerShell or run directly using the absolute path:"
-    Write-Host "  $displayShimPath"
-  }
-  Write-Host ""
-
-  & $invoker --version
+  $null = Invoke-NativeCommandCapturingOutput { & $invoker --version }
 
   $backgroundServiceInventory = @{
     Supported = $false
@@ -2441,7 +2582,7 @@ try {
   if ($shouldInspectBackgroundServices) {
     $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $invoker
   }
-  if ($shouldInspectBackgroundServices -and $Noninteractive -ne "1" -and $backgroundServiceInventory.RepairSupported) {
+  if ($shouldInspectBackgroundServices -and $Noninteractive -ne "1" -and $backgroundServiceInventory.RepairSupported -and -not (Test-DoctorRepairReportIsExpectedGuidedSetupState -Inventory $backgroundServiceInventory)) {
     # Mirror install.sh:864-882: when the installer has a real TTY (UserInteractive
     # AND stdin not redirected), hand off to the CLI's interactive `doctor repair`
     # so the user can accept/reject each finding inline. Otherwise fall back to
@@ -2557,6 +2698,7 @@ try {
     }
   }
 
+  Show-PathReloadGuidance -ShimName $displayShimBasename -BinDir $displayShimDir -ShimPath $displayShimPath
   Write-PostInstallGetStarted -CliName $displayShimBasename
 }
 finally {

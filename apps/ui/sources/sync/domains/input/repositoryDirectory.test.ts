@@ -120,3 +120,24 @@ describe('clearCachedRepositoryDirectoryEntries', () => {
         ]);
     });
 });
+
+
+describe('Git ignore metadata', () => {
+    it('keeps classified raw entries and availability in the warm cache', async () => {
+        const { sessionListDirectory } = await import('@/sync/ops');
+        vi.mocked(sessionListDirectory).mockReset().mockResolvedValueOnce({
+            success: true, gitIgnoreAvailable: true,
+            entries: [{ name: 'node_modules', type: 'directory', gitIgnored: true }, { name: '.env.example', type: 'file', gitIgnored: false }],
+        });
+        const input = { sessionId: 'classified', directoryPath: '' };
+        const result = await listRepositoryDirectoryEntries(input);
+        expect(result).toMatchObject({ ok: true, gitIgnoreAvailable: true, entries: [{ gitIgnored: true }, { gitIgnored: false }] });
+        expect(await warmRepositoryDirectoryCache(input)).toEqual(result);
+    });
+    it('leaves old-host entries unclassified', async () => {
+        const { sessionListDirectory } = await import('@/sync/ops');
+        vi.mocked(sessionListDirectory).mockReset().mockResolvedValueOnce({ success: true, entries: [{ name: 'node_modules', type: 'directory' }] });
+        const result = await listRepositoryDirectoryEntries({ sessionId: 'legacy', directoryPath: '' });
+        expect(result).toMatchObject({ ok: true, gitIgnoreAvailable: false, entries: [{ name: 'node_modules' }] });
+    });
+});

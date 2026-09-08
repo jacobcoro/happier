@@ -1,4 +1,4 @@
-import { maybeParseJson } from './parseJson';
+import { maybeParseJson } from '@happier-dev/protocol';
 
 /**
  * The join key between a detached `Bash` command and the background task that outlives it.

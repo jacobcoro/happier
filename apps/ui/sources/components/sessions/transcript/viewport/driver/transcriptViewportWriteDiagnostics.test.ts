@@ -249,7 +249,8 @@ describe('transcriptViewportWriteDiagnostics', () => {
             scrollHeight: 1200,
             scrollTop: 100,
             scrollBy(optionsOrX: ScrollToOptions | number, y?: number) {
-                this.scrollTop += typeof optionsOrX === 'number' ? (y ?? 0) : (optionsOrX.top ?? 0);
+                const delta = typeof optionsOrX === 'number' ? (y ?? 0) : (optionsOrX.top ?? 0);
+                this.scrollTo({ top: this.scrollTop + delta });
             },
             scrollTo(optionsOrX: ScrollToOptions | number, y?: number) {
                 this.scrollTop = typeof optionsOrX === 'number'

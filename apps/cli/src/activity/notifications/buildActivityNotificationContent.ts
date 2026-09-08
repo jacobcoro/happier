@@ -1,3 +1,4 @@
+import { summarizeToolInputForNotification } from '@happier-dev/protocol';
 import { buildReadyNotificationContent, redactBugReportSensitiveText } from '@happier-dev/protocol';
 
 import { readSafeOauthProviderErrorCode } from '../../cloud/safeOauthProviderError';
@@ -5,7 +6,6 @@ import { resolveConnectedServiceProviderDisplayName } from '../../daemon/connect
 import type { ActivityNotificationEvent } from './activityNotificationEvent';
 import {
   buildAgentRequestNotificationContent,
-  summarizeToolInputForNotification,
 } from './buildAgentRequestNotificationContent';
 
 const RAW_JSON_SECRET_KEY_PATTERN = /(["']?)(access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|api[_-]?key|authorization|openai_api_key|anthropic_api_key)(\1)\s*:\s*(["'])[^"']*\4/gi;
@@ -94,6 +94,7 @@ export function buildActivityNotificationContent(
   event: ActivityNotificationEvent,
   options: Readonly<{
     readyIncludeMessageText: boolean;
+    requestIncludeMessageText?: boolean;
   }>,
 ): Readonly<{
   title: string;
@@ -166,14 +167,18 @@ export function buildActivityNotificationContent(
 
   if (event.topic === 'connected_service_quota_blocked' || event.topic === 'connected_service_quota_recovered') {
     const serviceDisplayName = resolveConnectedServiceDisplayName(event.serviceId, event.serviceDisplayName);
+    const automaticReset = event.topic === 'connected_service_quota_recovered' && event.recoveryReason === 'automatic_quota_reset';
+    const resetAccount = redactNotificationText(event.profileId) ?? 'selected account';
+    const resetPool = redactNotificationText(event.groupId) ?? 'account pool';
     const action = sanitizeNotificationAction(event.action);
     return {
-      title: event.sessionTitle ?? (event.topic === 'connected_service_quota_recovered' ? `${serviceDisplayName} quota recovered` : `${serviceDisplayName} quota blocked`),
-      body: event.topic === 'connected_service_quota_recovered'
+      title: automaticReset ? `${serviceDisplayName} reset credit used` : event.sessionTitle ?? (event.topic === 'connected_service_quota_recovered' ? `${serviceDisplayName} quota recovered` : `${serviceDisplayName} quota blocked`),
+      body: automaticReset ? `Happier automatically used a reset credit for ${resetAccount} in pool ${resetPool}.` : event.topic === 'connected_service_quota_recovered'
         ? `Quota is available again for ${serviceDisplayName}.`
         : `Waiting for quota availability for ${serviceDisplayName}.`,
       data: {
         topic: event.topic,
+        ...(automaticReset ? { recoveryReason: 'automatic_quota_reset' } : {}),
         sessionId: event.sessionId,
         serviceId: event.serviceId,
         serviceDisplayName,
@@ -222,7 +227,7 @@ export function buildActivityNotificationContent(
 
   if (event.topic === 'permission_request' || event.topic === 'user_action_request') {
     const kind = event.topic === 'user_action_request' ? 'user_action' : 'permission';
-    const toolDetails = typeof event.toolDetails === 'string' && event.toolDetails.trim()
+    const toolDetails = options.requestIncludeMessageText === false ? null : typeof event.toolDetails === 'string' && event.toolDetails.trim()
       ? event.toolDetails.trim()
       : summarizeToolInputForNotification(event.toolName, event.toolInput);
     const built = buildAgentRequestNotificationContent({

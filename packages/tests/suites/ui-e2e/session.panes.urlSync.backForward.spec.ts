@@ -10,6 +10,7 @@ import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticate
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
+import { selectRepositoryAllFiles } from '../../src/testkit/uiE2e/repositoryTreeVisibility';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -141,6 +142,7 @@ test.describe('ui e2e: session multi-pane URL sync', () => {
     await page.goto(`${sessionUrl}?right=files`, { waitUntil: 'domcontentloaded' });
     await expect(rightPaneLocator(page)).toHaveCount(1, { timeout: 60_000 });
     await expect(detailsPaneLocator(page)).toHaveCount(0, { timeout: 60_000 });
+    await selectRepositoryAllFiles({ rightPane: rightPaneLocator(page), timeoutMs: 120_000 });
 
     // State -> URL: opening the existing file row updates search params (details + path).
     // This URL contract must not depend on an unrelated agent reply rendering a file mention.

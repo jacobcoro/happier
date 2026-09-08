@@ -12,6 +12,7 @@ export function totalsChangedLines(snapshot: ScmWorkingSnapshot | null, area: Sc
 }
 
 export type ScmEntryDelta = Readonly<{
+    isComplete?: boolean;
     hasIncludedDelta: boolean;
     hasPendingDelta: boolean;
     includedAdded: number;
@@ -22,6 +23,7 @@ export type ScmEntryDelta = Readonly<{
 
 export function entryToDelta(entry: any): ScmEntryDelta {
     return {
+        ...(entry?.stats?.isComplete === undefined ? {} : { isComplete: entry.stats.isComplete }),
         hasIncludedDelta: Boolean(entry?.hasIncludedDelta),
         hasPendingDelta: Boolean(entry?.hasPendingDelta),
         includedAdded: Number(entry?.stats?.includedAdded ?? 0),
@@ -53,13 +55,15 @@ export function toAreaFileStatus(file: ScmFileStatus, delta: ScmEntryDelta | nul
                 : file;
     }
     if (area === 'included') {
-        return { ...file, isIncluded: true, linesAdded: delta.includedAdded, linesRemoved: delta.includedRemoved };
+        return { ...file, hasIncludedDelta: delta.hasIncludedDelta, isComplete: delta.isComplete, isIncluded: true, linesAdded: delta.includedAdded, linesRemoved: delta.includedRemoved };
     }
     if (area === 'pending') {
-        return { ...file, isIncluded: false, linesAdded: delta.pendingAdded, linesRemoved: delta.pendingRemoved };
+        return { ...file, hasIncludedDelta: delta.hasIncludedDelta, isComplete: delta.isComplete, isIncluded: false, linesAdded: delta.pendingAdded, linesRemoved: delta.pendingRemoved };
     }
     return {
         ...file,
+        hasIncludedDelta: delta.hasIncludedDelta,
+        isComplete: delta.isComplete,
         linesAdded: delta.includedAdded + delta.pendingAdded,
         linesRemoved: delta.includedRemoved + delta.pendingRemoved,
     };

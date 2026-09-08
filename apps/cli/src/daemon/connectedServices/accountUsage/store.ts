@@ -1,5 +1,6 @@
 import {
   ConnectedServiceUsageSourceV1Schema,
+  mergeProviderAccountSubscription,
   ProviderAccountUsageSnapshotV1Schema,
   type ConnectedServiceUsageSourceV1,
   type ProviderAccountUsageRecordId,
@@ -134,27 +135,17 @@ export function createProviderAccountUsageStore(): ProviderAccountUsageStore {
       ? mergeSources(existingSources, normalized.sources)
       : existingSources;
 
-    if (existing && parsed.fetchedAtMs < existing.fetchedAtMs) {
-      if (sourceLinked) setRecordSources(targetRecordId, sources);
-      if (targetRecordId !== parsed.recordId) {
-        snapshotsByRecordId.delete(parsed.recordId);
-        sourcesByRecordId.delete(parsed.recordId);
-      }
-      return {
-        status: sourceLinked ? 'source_linked' : 'older',
-        recordId: targetRecordId as ProviderAccountUsageRecordId,
-        snapshotAdvanced: false,
-        sourceLinked,
-      };
-    }
-
+    const olderUsage = existing !== undefined && parsed.fetchedAtMs < existing.fetchedAtMs;
+    const usage = olderUsage ? existing : parsed;
+    const subscription = mergeProviderAccountSubscription(existing?.subscription, parsed.subscription);
     const next = ProviderAccountUsageSnapshotV1Schema.parse({
-      ...parsed,
+      ...usage,
+      ...(subscription ? { subscription } : {}),
       recordId: targetRecordId,
       recordKey: targetRecordKey,
       providerId: targetRecordKey.providerId,
       accountSubject: targetRecordId === parsed.recordId
-        ? parsed.accountSubject
+        ? usage.accountSubject
         : existing?.accountSubject ?? {
           kind: 'providerSubject',
           id: targetRecordKey.accountSubjectId,
@@ -171,7 +162,7 @@ export function createProviderAccountUsageStore(): ProviderAccountUsageStore {
       sourcesByRecordId.delete(parsed.recordId);
     }
     return {
-      status: snapshotAdvanced ? 'snapshot_advanced' : sourceLinked ? 'source_linked' : 'duplicate',
+      status: snapshotAdvanced ? 'snapshot_advanced' : sourceLinked ? 'source_linked' : olderUsage ? 'older' : 'duplicate',
       recordId: targetRecordId as ProviderAccountUsageRecordId,
       snapshotAdvanced,
       sourceLinked,

@@ -100,6 +100,8 @@ import type {
   NotifyConnectedServiceRuntimeAuthFailure,
   ResumeInactiveSessionWhenUsageLimitReady,
   RetryTemporaryThrottleNow,
+  ReadTemporaryThrottleRecovery,
+  CancelTemporaryThrottleRecovery,
   ScheduleInactiveSessionUsageLimitRecoveryCheck,
 } from '@/session/actions/createCliActionDeps';
 import { registerPetRpcHandlers } from '@/pets/rpc/registerPetRpcHandlers';
@@ -263,6 +265,8 @@ export type MachineRpcHandlerDeps = Readonly<{
   cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
   notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
+  readTemporaryThrottleRecovery?: ReadTemporaryThrottleRecovery;
+  cancelTemporaryThrottleRecovery?: CancelTemporaryThrottleRecovery;
   getActionOperationScope?: () => Promise<Readonly<{ accountId: string; machineId: string }>>;
 }>;
 
@@ -1185,6 +1189,8 @@ export function registerMachineRpcHandlers(params: Readonly<{
       ...(params.deps?.retryTemporaryThrottleNow
         ? { retryTemporaryThrottleNow: params.deps.retryTemporaryThrottleNow }
         : {}),
+      readTemporaryThrottleRecovery: params.deps?.readTemporaryThrottleRecovery,
+      cancelTemporaryThrottleRecovery: params.deps?.cancelTemporaryThrottleRecovery,
     },
   });
   registerPetRpcHandlers({

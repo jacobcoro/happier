@@ -166,8 +166,10 @@ import {
     type CodexUsageLimitSwitchAttemptStatus,
 } from './recovery/resolveCodexUsageLimitSwitchProgress';
 import { resolveCodexUsageLimitProbeFailureWait } from './recovery/resolveCodexUsageLimitProbeFailureWait';
+import { isCodexAppServerTerminalOwnedGroupRecoveryClassification } from './recovery/terminalGroupRecovery';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveConfiguredCodexHome } from '../utils/resolveConfiguredCodexHome';
+import { readCodexProviderErrorRecord } from '../utils/readCodexProviderErrorRecord';
 import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
 import { computeConnectedServiceAccessTokenFingerprint } from '@/daemon/connectedServices/refresh/credentialFreshness/tokenFingerprint';
 import type { ConnectedServiceRuntimeAuthFailureDaemonReport } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
@@ -954,13 +956,7 @@ function isCodexTurnInterruptedStatus(status: string | null): boolean {
 }
 
 function readCodexAppServerErrorPayload(value: unknown): CodexAppServerErrorPayload | null {
-    const record = readRecord(value);
-    if (!record) return null;
-
-    const directError = readRecord(record.error);
-    const turn = readRecord(record.turn);
-    const turnError = readRecord(turn?.error);
-    const error = directError ?? turnError;
+    const error = readCodexProviderErrorRecord(value, { allowRoot: false });
     if (!error) return null;
 
     return {
@@ -3220,13 +3216,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
         await updateUsageLimitRecoveryFromSurfacedIssue(issue);
     };
 
-    const requestUsageLimitGroupRecoveryForTerminalFailure = async (
+    const requestConnectedServiceGroupRecoveryForTerminalFailure = async (
         classification: CodexConnectedServiceRuntimeFailureClassification | null,
     ): Promise<void> => {
         if (
-            classification?.kind !== 'usage_limit'
-            || !classification.groupId
-            || !classification.profileId
+            !classification
+            || !isCodexAppServerTerminalOwnedGroupRecoveryClassification(classification)
             || typeof params.onUsageLimitGroupRecovery !== 'function'
         ) {
             return;
@@ -3237,7 +3232,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 classification,
             });
         } catch (error) {
-            logger.debug('[codex-app-server] Failed to request connected-service group recovery after terminal usage limit', error);
+            logger.debug('[codex-app-server] Failed to request connected-service group recovery after terminal provider failure', error);
         }
     };
 
@@ -3279,16 +3274,15 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 return;
             }
             await abortPendingTurnWithFailure(failure);
-            const usageLimitGroupRecoveryClassification = failure instanceof CodexAppServerTurnFailure
-                && failure.runtimeAuthClassification?.kind === 'usage_limit'
+            const groupRecoveryClassification = failure instanceof CodexAppServerTurnFailure
                 ? failure.runtimeAuthClassification
                 : null;
             // The daemon may hot-apply a replacement credential back through this same
-            // runtime. Start recovery only after the terminal boundary and quota evidence
+            // runtime. Start recovery only after the terminal boundary and classified issue
             // are published, but do not await it while a notification bridge owns the
             // runtime queue or the hot-apply callback can deadlock behind that bridge.
-            void requestUsageLimitGroupRecoveryForTerminalFailure(
-                usageLimitGroupRecoveryClassification,
+            void requestConnectedServiceGroupRecoveryForTerminalFailure(
+                groupRecoveryClassification,
             );
             return;
         }
@@ -4409,9 +4403,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         request: CodexAppServerReviewStartRequest,
     ): Promise<string | UnsupportedSessionRuntimeMethodResult | void> => {
         let recoveredContextWindowExhaustion = false;
-        let recoveredTemporaryRecoverableTurnFailure = false;
         let originalContextWindowExhaustionFailure: Error | null = null;
-        let originalTemporaryRecoverableTurnFailure: Error | null = null;
         while (true) {
             const activeThreadId = threadId;
             if (!activeThreadId) {
@@ -4454,29 +4446,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 activeTurn.promise.catch(() => undefined);
                 await finishPendingTurn({ error: failure, flushReason: 'abort' });
                 if (isCodexAppServerTemporaryRecoverableTurnFailureError(failure)) {
-                    const originalFailure: Error = originalTemporaryRecoverableTurnFailure ?? failure;
-                    originalTemporaryRecoverableTurnFailure = originalFailure;
-                    const retryDecision = resolveRecoverableTurnFailureRetryDecision({
-                        attemptCount: recoveredTemporaryRecoverableTurnFailure ? 1 : 0,
-                        maxRetries: 1,
-                        providerWillRetry: false,
-                        failureRetryAfterMs: null,
-                        failedTurnHadMeaningfulActivity: false,
-                        promptMode: 'retry_original',
-                        originalPrompt: '',
-                        continuationPrompt: '',
-                    });
-                    if (retryDecision.action === 'retry') {
-                        recoveredTemporaryRecoverableTurnFailure = true;
-                        continue;
-                    }
-                    if (retryDecision.action === 'budget_exhausted') {
-                        throw resolveRecoverableTurnFailureSecondFailure({
-                            originalFailure,
-                            latestFailure: failure,
-                        }).failure;
-                    }
-                    throw originalFailure;
+                    // Terminal capacity recovery belongs to the daemon's delayed continuation owner.
+                    throw failure;
                 }
                 if (isCodexAppServerContextWindowExhaustedError(failure)) {
                     const originalFailure: Error = originalContextWindowExhaustionFailure ?? failure;
@@ -4799,9 +4770,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         sendPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
             assertCodexAppServerPendingIdentity(options);
             let recoveredContextWindowExhaustion = false;
-            let recoveredTemporaryRecoverableTurnFailure = false;
             let originalContextWindowExhaustionFailure: Error | null = null;
-            let originalTemporaryRecoverableTurnFailure: Error | null = null;
             let promptForAttempt = prompt;
             let optionsForAttempt: CodexAppServerPromptOptions | undefined = options;
             while (true) {
@@ -4910,37 +4879,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         flushReason: 'abort',
                     });
                     if (isCodexAppServerTemporaryRecoverableTurnFailureError(failure)) {
-                        const originalFailure: Error = originalTemporaryRecoverableTurnFailure ?? failure;
-                        originalTemporaryRecoverableTurnFailure = originalFailure;
-                        const retryDecision = resolveRecoverableTurnFailureRetryDecision({
-                            attemptCount: recoveredTemporaryRecoverableTurnFailure ? 1 : 0,
-                            maxRetries: 1,
-                            providerWillRetry: false,
-                            failureRetryAfterMs: null,
-                            failedTurnHadMeaningfulActivity,
-                            promptMode: contextWindowRecoveryConfig.mode,
-                            originalPrompt: prompt,
-                            continuationPrompt: contextWindowRecoveryConfig.continuationPrompt,
-                        });
-                        if (retryDecision.action === 'retry') {
-                            recoveredTemporaryRecoverableTurnFailure = true;
-                            promptForAttempt = retryDecision.prompt;
-                            if (retryDecision.promptKind === 'continuation') {
-                                optionsForAttempt = buildCodexAppServerRetryDeliveryIdentityOptions(pendingProviderPrompt);
-                            } else {
-                                optionsForAttempt = options;
-                            }
-                            continue;
-                        }
-                        if (retryDecision.action === 'budget_exhausted') {
-                            clearPendingProviderPrompt(pendingProviderPrompt);
-                            throw resolveRecoverableTurnFailureSecondFailure({
-                                originalFailure,
-                                latestFailure: failure,
-                            }).failure;
-                        }
                         clearPendingProviderPrompt(pendingProviderPrompt);
-                        throw originalFailure;
+                        throw failure;
                     }
                     if (isCodexAppServerContextWindowExhaustedError(failure)) {
                         const originalFailure: Error = originalContextWindowExhaustionFailure ?? failure;

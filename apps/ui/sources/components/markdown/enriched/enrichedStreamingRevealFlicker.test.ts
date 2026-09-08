@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 // patches/react-native-enriched-markdown+0.5.0.patch). Tested from the app repo because
 // the defect and its fix live in our patch, and this suite is the RED/GREEN gate for
 // regenerating it.
-import { updateStreamingRevealRanges } from 'react-native-enriched-markdown/lib/module/web/streamingReveal.js';
+import { splitStreamingRevealTextParts, updateStreamingRevealRanges } from 'react-native-enriched-markdown/lib/module/web/streamingReveal.js';
 
 describe('enriched streaming reveal — source-append bounding (live flicker 2026-07-13)', () => {
     it('does not re-reveal the downstream region when completing inline syntax collapses the rendered prefix', () => {
@@ -71,6 +71,21 @@ describe('enriched streaming reveal — source-append bounding (live flicker 202
 });
 
 describe('enriched streaming reveal — retained ranges are rebased onto the text they were created for', () => {
+    it('does not restart a completed word reveal when a later suffix extends that word', () => {
+        const initial = 'Stable electro';
+        const extended = `${initial}magnetic waves`;
+        const ranges = updateStreamingRevealRanges({
+            activeRanges: [{ start: 7, end: initial.length, expiresAtMs: 10_260 }],
+            previousComparisonText: initial,
+            currentComparisonText: extended,
+            nowMs: 10_300,
+            ttlMs: 260,
+            previousSourceLength: initial.length,
+            currentSourceLength: extended.length,
+        });
+        const parts = splitStreamingRevealTextParts({ text: extended, startOffset: 0, activeRanges: ranges });
+        expect(parts.filter((part) => part.animated).map((part) => part.text)).toEqual(['waves']);
+    });
     // A reveal range is a pair of offsets into the RENDERED comparison text of the
     // render that created it. Ranges outlive that render (they are carried forward
     // for `ttlMs` so the CSS keyframe can finish), but rendered text is not

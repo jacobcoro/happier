@@ -57,6 +57,35 @@ describe('pending activation authorization owner', () => {
         expect(session).toMatchObject({ pendingActivationStatus: 'waiting', pendingActivationFailureCode: null });
     });
 
+    it('arms an ordinary enqueue row only when resume-on-availability was explicitly requested', async () => {
+        const session = {
+            accountId: 'owner', active: false, lastActiveAt: new Date(100),
+            pendingActivationRequestId: null, pendingActivationRequestedAt: null,
+            pendingActivationStatus: null, pendingActivationFailureCode: null,
+        };
+        const row = {
+            localId: 'p1', messageRole: 'user', status: 'queued', deliveryState: null,
+            providerAction: null, requestedAction: { v: 1, kind: 'enqueue' },
+        };
+        const tx = createTx(session, [row]);
+
+        await expect(armPendingActivationAuthorizationInTx({
+            tx,
+            sessionId: 's1',
+            requestId: 'p1',
+        })).resolves.toBeUndefined();
+        await expect(armPendingActivationAuthorizationInTx({
+            tx,
+            sessionId: 's1',
+            requestId: 'p1',
+            resumeWhenAvailable: true,
+        })).resolves.toEqual({ accountId: 'owner', requestId: 'p1' });
+        expect(session).toMatchObject({
+            pendingActivationRequestId: 'p1',
+            pendingActivationStatus: 'waiting',
+        });
+    });
+
     it('clears a removed current request even when another send_now row exists', async () => {
         const session = {
             accountId: 'owner', active: false, lastActiveAt: new Date(100),

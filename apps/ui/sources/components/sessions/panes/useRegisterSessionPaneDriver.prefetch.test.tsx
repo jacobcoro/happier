@@ -60,6 +60,23 @@ describe('useRegisterSessionPaneDriver (module prefetch)', () => {
         expect(bottomPanelModuleLoaded).not.toHaveBeenCalled();
     });
 
+    it('settles and reports a failed speculative module fetch', async () => {
+        const mod = await import('./useRegisterSessionPaneDriver');
+        const originalLoaders = [...mod.sessionPaneModulePrefetchLoaders];
+        const failure = new TypeError('Failed to fetch');
+        // The browser chunk fetch is an external boundary; preserve the real prefetch owner.
+        const fetchModule = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        mod.sessionPaneModulePrefetchLoaders.splice(0, originalLoaders.length, fetchModule);
+        try {
+            await expect(mod.prefetchSessionPaneModules()).resolves.toBeUndefined();
+            expect(warning).toHaveBeenCalledWith(expect.any(String), failure);
+        } finally {
+            mod.sessionPaneModulePrefetchLoaders.splice(0, mod.sessionPaneModulePrefetchLoaders.length, ...originalLoaders);
+            warning.mockRestore();
+        }
+    });
+
     it('prefetches lazily opened session pane views', async () => {
         const mod = await import('./useRegisterSessionPaneDriver');
         const loadSubagentDetails = vi.fn(async () => undefined);

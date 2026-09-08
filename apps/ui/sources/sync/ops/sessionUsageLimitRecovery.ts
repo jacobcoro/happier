@@ -52,6 +52,7 @@ type UsageLimitRecoveryPayload = Readonly<{
 }>;
 
 type UsageLimitRecoveryOperationOptions = Readonly<{
+    machineOnly?: boolean;
     serverId?: string | null;
     refreshMachineTargets?: () => Promise<void>;
 }>;
@@ -282,6 +283,7 @@ async function runUsageLimitRecoveryRpcWithMachineFallback(
     payload: UsageLimitRecoveryPayload,
     opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
+    if (opts?.machineOnly) return await runUsageLimitRecoveryMachineRpc(sessionId, machineMethod, payload, opts);
     const result = await runUsageLimitRecoveryRpc(sessionId, sessionMethod, payload, opts);
     if (result.ok === false && shouldFallbackFromStaleActiveSessionRpcFailure(result)) {
         const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
@@ -369,6 +371,7 @@ export async function sessionUsageLimitCheckNow(
             ? { resumePromptMode: opts.resumePromptMode }
             : {}),
     };
+    if (opts?.machineOnly) return await runUsageLimitRecoveryMachineRpc(sessionId, RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW, payload, opts);
     if (isInactiveSession(sessionId)) {
         const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
         if (!target) {

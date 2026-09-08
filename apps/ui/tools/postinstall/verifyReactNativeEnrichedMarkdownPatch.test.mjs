@@ -81,40 +81,69 @@ test('DISCRIMINATES: restoring the obsolete global cache reset fails verificatio
     assert.equal(verifyReactNativeEnrichedMarkdownPatch({ packageDir }), false);
 });
 
-test('repairs a missing generated streaming module when the remaining patch is already applied', (t) => {
-    if (!fs.existsSync(INSTALLED_PACKAGE_DIR)) {
-        t.skip('react-native-enriched-markdown is not installed');
-        return;
-    }
-    assert.equal(
-        verifyReactNativeEnrichedMarkdownPatch({ packageDir: INSTALLED_PACKAGE_DIR }),
-        true,
-        'the installed package must provide a fully patched recovery fixture',
-    );
+for (const scenario of ['missing streaming module', 'stale streaming renderer']) {
+    const repairable = scenario === 'missing streaming module';
+    test(`${repairable ? 'repairs' : 'rejects incompatible'} ${scenario} when the remaining patch is already applied`, (t) => {
+        if (!fs.existsSync(INSTALLED_PACKAGE_DIR)) {
+            t.skip('react-native-enriched-markdown is not installed');
+            return;
+        }
+        assert.equal(
+            verifyReactNativeEnrichedMarkdownPatch({ packageDir: INSTALLED_PACKAGE_DIR }),
+            true,
+            'the installed package must provide a fully patched recovery fixture',
+        );
 
-    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enriched-markdown-partial-repair-'));
-    t.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
-    const packageDir = path.join(fixtureDir, 'node_modules', 'react-native-enriched-markdown');
-    const fixturePatchDir = path.join(fixtureDir, 'patches');
-    fs.mkdirSync(path.dirname(packageDir), { recursive: true });
-    fs.mkdirSync(fixturePatchDir, { recursive: true });
-    fs.cpSync(INSTALLED_PACKAGE_DIR, packageDir, { recursive: true });
-    fs.copyFileSync(
-        path.join(UI_DIR, 'patches', 'react-native-enriched-markdown+0.5.0.patch'),
-        path.join(fixturePatchDir, 'react-native-enriched-markdown+0.5.0.patch'),
-    );
-    fs.writeFileSync(path.join(fixtureDir, 'package.json'), '{"name":"partial-repair-fixture","private":true}\n');
-    fs.rmSync(path.join(packageDir, 'lib', 'module', 'web', 'streamingReveal.js'));
+        const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enriched-markdown-partial-repair-'));
+        t.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
+        const packageDir = path.join(fixtureDir, 'node_modules', 'react-native-enriched-markdown');
+        const fixturePatchDir = path.join(fixtureDir, 'patches');
+        fs.mkdirSync(path.dirname(packageDir), { recursive: true });
+        fs.mkdirSync(fixturePatchDir, { recursive: true });
+        fs.cpSync(INSTALLED_PACKAGE_DIR, packageDir, { recursive: true });
+        fs.copyFileSync(
+            path.join(UI_DIR, 'patches', 'react-native-enriched-markdown+0.5.0.patch'),
+            path.join(fixturePatchDir, 'react-native-enriched-markdown+0.5.0.patch'),
+        );
+        fs.writeFileSync(path.join(fixtureDir, 'package.json'), '{"name":"partial-repair-fixture","private":true}\n');
+        if (scenario === 'missing streaming module') {
+            fs.rmSync(path.join(packageDir, 'lib', 'module', 'web', 'streamingReveal.js'));
+        } else {
+            // The live mirror syncs tracked patches but excludes node_modules. Its old
+            // installed renderer still animated an overlapping old word and published
+            // a redundant async AST. Mutate each consumed build, preserving all other
+            // package hunks, to discriminate this previously accepted stale state.
+            const staleFiles = [];
+            for (const [relativePath, from, to] of [
+                ['src/web/EnrichedMarkdownText.tsx', '    if (syncAst) return;', ''],
+                ['lib/module/web/EnrichedMarkdownText.js', '    if (syncAst) return;', ''],
+                ['src/web/streamingReveal.ts', '.start <= start', '.start < end'],
+                ['lib/module/web/streamingReveal.js', '.start <= start', '.start < end'],
+            ]) {
+                const filePath = path.join(packageDir, relativePath);
+                const current = fs.readFileSync(filePath, 'utf8');
+                const stale = current.replace(from, to);
+                assert.notEqual(stale, current);
+                fs.writeFileSync(filePath, stale);
+                assert.equal(verifyReactNativeEnrichedMarkdownPatch({ packageDir }), false, relativePath);
+                fs.writeFileSync(filePath, current);
+                staleFiles.push([filePath, stale]);
+            }
+            for (const [filePath, stale] of staleFiles) fs.writeFileSync(filePath, stale);
+        }
 
-    assert.equal(verifyReactNativeEnrichedMarkdownPatch({ packageDir }), false);
-    assert.equal(
-        repairReactNativeEnrichedMarkdownPatch({
-            packageDir,
-            patchDir: fixturePatchDir,
-            patchPackageCliPath: path.join(UI_DIR, '..', '..', 'node_modules', 'patch-package', 'dist', 'index.js'),
-            label: 'test',
-        }),
-        true,
-    );
-    assert.equal(verifyReactNativeEnrichedMarkdownPatch({ packageDir }), true);
-});
+        assert.equal(verifyReactNativeEnrichedMarkdownPatch({ packageDir }), false);
+        assert.equal(
+            repairReactNativeEnrichedMarkdownPatch({
+                packageDir,
+                patchDir: fixturePatchDir,
+                patchPackageCliPath: path.join(UI_DIR, '..', '..', 'node_modules', 'patch-package', 'dist', 'index.js'),
+                label: 'test',
+            }),
+            repairable,
+        );
+        // Partial application can restore missing files, but cannot rebase an older
+        // overlapping patch. Never certify that stale installation as repaired.
+        assert.equal(verifyReactNativeEnrichedMarkdownPatch({ packageDir }), repairable);
+    });
+}

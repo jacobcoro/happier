@@ -25,6 +25,46 @@ type RendererOwnedInitialPositionArmInput = SessionOpenLatchArmInput & Readonly<
 }>;
 
 describe('session open latch', () => {
+    it('does not expire data readiness before a delayed initial page can start its fill', () => {
+        const latch = createSessionOpenLatch();
+        latch.arm(armInput({ initialBottomPositionOwner: 'renderer', webOpenPhaseDeadlineDelayMs: 10_000 }));
+        const facts = {
+            contentHeight: 0,
+            hasEntrySliceWindow: false,
+            isLoaded: false,
+            isScrollable: false,
+            itemCount: 0,
+            layoutHeight: 600,
+            nowMs: 11_001,
+            sessionId: 'session-a',
+            userWantsPinned: true,
+        };
+        expect(latch.onHostFacts(facts).phase).toBe('awaiting-data');
+        expect(latch.initialFillStatus()).toBe('idle');
+        expect(latch.onHostFacts({ ...facts, isLoaded: true }).effects).toContainEqual({ type: 'request-initial-fill' });
+        expect(latch.markInitialFillInProgress('session-a')).toBe(true);
+        // A fill that actually started still has bounded authority.
+        expect(latch.onHostFacts({ ...facts, isLoaded: true, nowMs: 11_002 }).phase).toBe('done');
+    });
+
+    it('still expires anchored confirmation after its real fill settles', () => {
+        const latch = createSessionOpenLatch();
+        latch.arm(armInput({ entryKind: 'anchored', webOpenPhaseDeadlineDelayMs: 10_000 }));
+        latch.markInitialFillInProgress('session-a');
+        expect(latch.onInitialFillSettled({ sessionId: 'session-a', nowMs: 1_100 }).phase).toBe('confirming');
+        expect(latch.onHostFacts({
+            contentHeight: 1200,
+            hasEntrySliceWindow: false,
+            isLoaded: true,
+            isScrollable: true,
+            itemCount: 3,
+            layoutHeight: 600,
+            nowMs: 11_001,
+            sessionId: 'session-a',
+            userWantsPinned: false,
+        }).phase).toBe('done');
+    });
+
     it('arms once for a session and emits a single arm reset plan', () => {
         const latch = createSessionOpenLatch();
 

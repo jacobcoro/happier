@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as LegendNative from '@legendapp/list/react-native';
 import { LegendList } from '@legendapp/list/react-native';
 import { Platform } from 'react-native';
@@ -39,7 +39,9 @@ const VIEWPORT_HEIGHT = 300;
 const ROW_COUNT = 20;
 
 type LegendTailHandle = Readonly<{
+    cancelScroll?: () => void;
     getState: () => Readonly<{ scroll: number }>;
+    scrollToIndex: (options: Readonly<{ index: number; animated?: boolean }>) => Promise<unknown>;
     scrollToEnd: (options?: Readonly<{ animated?: boolean }>) => Promise<unknown>;
 }>;
 
@@ -57,21 +59,33 @@ afterEach(() => {
         act(() => current.screen.unmount());
         mounted = null;
     }
+    vi.restoreAllMocks();
+    vi.useRealTimers();
 });
 
 function buildRows(count: number): Row[] {
     return Array.from({ length: count }, (_value, index) => ({ id: `row-${index}` }));
 }
 
-async function mountList(): Promise<MountedList> {
+async function mountList(options?: Readonly<{ initialAtEnd?: boolean; cancelSilentRetry?: boolean }>): Promise<MountedList> {
     const nodes = createShippedNativeNodeMock({ rowHeight: ROW_HEIGHT, viewportHeight: VIEWPORT_HEIGHT });
     const ref = React.createRef<LegendTailHandle>();
+    if (options?.cancelSilentRetry) {
+        const scrollTo = nodes.scroller.scrollTo;
+        vi.spyOn(nodes.scroller, 'scrollTo').mockImplementation((write) => {
+            scrollTo(write);
+            // The actual platform boundary reports the initial retry's one-pixel nudge.
+            // User takeover can run before its separately queued return-to-target frame.
+            if (write.y === ROW_COUNT * ROW_HEIGHT - VIEWPORT_HEIGHT - 1) ref.current?.cancelScroll?.();
+        });
+    }
     let screen: ReactTestRenderer | null = null;
     await act(async () => {
         screen = create(
             <LegendList
                 data={buildRows(ROW_COUNT)}
                 estimatedItemSize={ROW_HEIGHT}
+                initialScrollAtEnd={options?.initialAtEnd}
                 keyExtractor={(item: Row) => item.id}
                 recycleItems={false}
                 ref={ref as never}
@@ -110,6 +124,61 @@ async function commandTail(list: MountedList, animated: boolean): Promise<void> 
 }
 
 describe('shipped native Legend tail command', () => {
+    it.skipIf(Platform.OS !== 'android').each([false, true])('respects cancellation=%s between the silent initial nudge and its delayed retry', async (cancelSilentRetry) => {
+        vi.useFakeTimers();
+        const list = await mountList({ initialAtEnd: true, cancelSilentRetry });
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(3_000);
+        });
+        const target = ROW_COUNT * ROW_HEIGHT - VIEWPORT_HEIGHT;
+        const nudgeIndex = list.nodes.scroller.scrollWrites.findIndex((write) => write.y === target - 1);
+        expect(nudgeIndex, JSON.stringify(list.nodes.scroller.scrollWrites)).toBeGreaterThanOrEqual(0);
+        const laterWrites = list.nodes.scroller.scrollWrites.slice(nudgeIndex + 1);
+        if (cancelSilentRetry) expect(laterWrites).toEqual([]);
+        else expect(laterWrites.some((write) => write.y === target)).toBe(true);
+    });
+
+    it('retires an in-flight animated command without dispatching a replacement movement', async () => {
+        const list = await mountList();
+        let settled = false;
+        await act(async () => {
+            void list.handle.scrollToEnd({ animated: true }).then(() => { settled = true; });
+        });
+        await flushFrames(4);
+        expect(settled).toBe(false);
+        expect(list.nodes.scroller.scrollWrites.length).toBeGreaterThan(0);
+        const writeCount = list.nodes.scroller.scrollWrites.length;
+        await act(async () => {
+            list.handle.cancelScroll?.();
+            await Promise.resolve();
+        });
+        expect(settled).toBe(true);
+        await flushFrames(4);
+        expect(list.nodes.scroller.scrollWrites.slice(writeCount)).toEqual([]);
+    });
+
+    it.each(['end', 'index'] as const)('revokes a queued %s command without moving and resolves its promise', async (kind) => {
+        const list = await mountList();
+        await flushFrames(4);
+        const writeCount = list.nodes.scroller.scrollWrites.length;
+        let settled = false;
+        await act(async () => {
+            // End waits for the commit; a not-yet-materialized index waits for readiness.
+            const command = kind === 'end'
+                ? list.handle.scrollToEnd({ animated: false })
+                : list.handle.scrollToIndex({ index: ROW_COUNT + 5, animated: false });
+            void command.then(() => { settled = true; });
+            list.handle.cancelScroll?.();
+            await Promise.resolve();
+        });
+        await flushFrames(4);
+        expect(settled).toBe(true);
+        expect(list.nodes.scroller.scrollWrites.slice(writeCount)).toEqual([]);
+        // Cancellation is not disposal: later commands must still work.
+        await commandTail(list, false);
+        expect(list.nodes.scroller.scrollWrites.at(-1)?.y).toBe(ROW_COUNT * ROW_HEIGHT - VIEWPORT_HEIGHT);
+    });
+
     it('settles its own scroll position when the tail command is unanimated', async () => {
         const list = await mountList();
         assertShippedNativeLegendRuntime(list.screen, readShippedNativeModuleFacts(LegendNative, Platform));

@@ -22,6 +22,7 @@ import { subscribeToNativeHardwareKeyboardEvents } from '@/components/sessions/a
 
 type KeyboardShortcutRegistrationContextValue = Readonly<{
     registerHandlers: (handlers: KeyboardShortcutHandlers) => () => void;
+    executeCommand: (commandId: KeyboardCommandId) => boolean;
 }>;
 
 const KeyboardShortcutRegistrationContext = React.createContext<KeyboardShortcutRegistrationContextValue | null>(null);
@@ -71,6 +72,12 @@ export function useKeyboardShortcutHandlers(handlers: KeyboardShortcutHandlers):
     return registration != null;
 }
 
+/** Explicit UI actions share command handlers without depending on keyboard binding preferences. */
+export function useKeyboardCommand(): (commandId: KeyboardCommandId) => boolean {
+    const registration = React.useContext(KeyboardShortcutRegistrationContext);
+    return React.useCallback((commandId: KeyboardCommandId) => registration?.executeCommand(commandId) ?? false, [registration]);
+}
+
 function buildHelpBody(shortcutLabels: Partial<Record<string, string>>): string {
     const lines = [
         shortcutLabels['commandPalette.open']
@@ -112,10 +119,6 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
             });
         };
     }, []);
-    const registrationContextValue = React.useMemo<KeyboardShortcutRegistrationContextValue>(
-        () => ({ registerHandlers }),
-        [registerHandlers],
-    );
     const scopedHandlers = React.useMemo<KeyboardShortcutHandlers>(() => {
         const next: KeyboardShortcutHandlers = {};
         for (const handlers of scopedHandlerEntries.values()) {
@@ -188,6 +191,16 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         keyboardShortcutOverridesV1,
         handlers,
     };
+    const executeCommand = React.useCallback((commandId: KeyboardCommandId): boolean => {
+        const handler = latestShortcutRuntimeRef.current?.handlers[commandId];
+        if (!handler) return false;
+        handler();
+        return true;
+    }, []);
+    const registrationContextValue = React.useMemo<KeyboardShortcutRegistrationContextValue>(
+        () => ({ registerHandlers, executeCommand }),
+        [registerHandlers, executeCommand],
+    );
     const nativeHardwareAllowlist = React.useMemo(
         () => buildNativeHardwareKeyboardAllowlist({
             enabled: keyboardShortcutsV2Enabled === true,

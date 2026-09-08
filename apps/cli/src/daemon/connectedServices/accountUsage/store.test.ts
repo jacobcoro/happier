@@ -5,6 +5,7 @@ import {
   type ProviderAccountUsageSnapshotV1,
 } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
+import { computeProviderAccountUsageSnapshotFingerprint } from './fingerprint';
 
 type ProviderAccountUsageStore = Readonly<{
   recordSnapshot(
@@ -73,6 +74,52 @@ function createSnapshot(overrides: Partial<ProviderAccountUsageSnapshotV1> = {})
 }
 
 describe('provider account usage store', () => {
+  it('merges subscription observations independently without re-aging or replacing newer usage', async () => {
+    const module = await loadStoreModule();
+    const store = module!.createProviderAccountUsageStore();
+    const subscription = { status: 'subscribed', renewal: 'on', observedAtMs: 1_000, staleAfterMs: 300_000,
+      currentPeriodEndAtMs: 50_000 } as const;
+    const initial = createSnapshot({ subscription });
+    store.recordSnapshot(initial);
+    store.recordSnapshot(createSnapshot({ fetchedAtMs: 3_000, observedAtMs: 3_000, planLabel: 'Latest usage' }));
+    expect(store.resolveRecordId(initial.recordId)?.subscription).toEqual(subscription);
+    const refreshed = { ...subscription, observedAtMs: 4_000, renewal: 'off' } as const;
+    expect(store.recordSnapshot(createSnapshot({ fetchedAtMs: 2_000, observedAtMs: 2_000, subscription: refreshed }))
+      .snapshotAdvanced).toBe(true);
+    expect(store.resolveRecordId(initial.recordId)).toMatchObject({ fetchedAtMs: 3_000, observedAtMs: 3_000,
+      planLabel: 'Latest usage', subscription: refreshed });
+    const other = createSnapshot({ recordKey: createKey('another-account'), fetchedAtMs: 5_000 });
+    store.recordSnapshot(other);
+    expect(store.resolveRecordId(other.recordId)?.subscription).toBeUndefined();
+  });
+
+  it('retains last good subscription through failure and clears it only on an explicit newer none observation', async () => {
+    const module = await loadStoreModule();
+    const store = module!.createProviderAccountUsageStore();
+    const initial = createSnapshot({ subscription: { status: 'subscribed', renewal: 'off',
+      observedAtMs: 1_000, staleAfterMs: 300_000, currentPeriodEndAtMs: 50_000 } });
+    store.recordSnapshot(initial);
+    const lastRefreshError = { code: 'network', observedAtMs: 2_000 } as const;
+    store.recordSnapshot(createSnapshot({ subscription: { status: 'unavailable', renewal: 'unknown',
+      observedAtMs: 2_000, staleAfterMs: 300_000, lastRefreshError } }));
+    expect(store.resolveRecordId(initial.recordId)?.subscription).toEqual({ ...initial.subscription, lastRefreshError });
+    const none = { status: 'none', renewal: 'unknown', observedAtMs: 3_000, staleAfterMs: 300_000 } as const;
+    store.recordSnapshot(createSnapshot({ subscription: none }));
+    expect(store.resolveRecordId(initial.recordId)?.subscription).toEqual(none);
+  });
+
+  it('publishes subscription freshness and refresh failure changes even when quota content is unchanged', () => {
+    const key = new Uint8Array(32);
+    const initial = createSnapshot({ subscription: { status: 'subscribed', renewal: 'on',
+      observedAtMs: 1_000, staleAfterMs: 300_000, currentPeriodEndAtMs: 50_000 } });
+    const fingerprint = computeProviderAccountUsageSnapshotFingerprint(initial, key);
+    expect(computeProviderAccountUsageSnapshotFingerprint({ ...initial,
+      subscription: { ...initial.subscription!, observedAtMs: 2_000 } }, key)).not.toBe(fingerprint);
+    expect(computeProviderAccountUsageSnapshotFingerprint({ ...initial,
+      subscription: { ...initial.subscription!, lastRefreshError: { code: 'network', observedAtMs: 2_000 } } }, key))
+      .not.toBe(fingerprint);
+  });
+
   it('uses the typed status as the only mutation-acceptance authority', async () => {
     const module = await loadStoreModule();
     expect(module).not.toBeNull();

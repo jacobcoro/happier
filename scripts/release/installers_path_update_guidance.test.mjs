@@ -198,6 +198,14 @@ printf '%s' '${releaseJson}'
   assert.ok(!bashrc.includes('/tmp/old-happier-home'), 'expected installer to remove stale ~/.bashrc HAPPIER_HOME_DIR exports');
   assert.ok(!profile.includes('/tmp/old-happier-home'), 'expected installer to remove stale ~/.profile HAPPIER_HOME_DIR exports');
   assert.match(stdout, /(source|reload).*(bashrc|profile)|open a new terminal/i, 'expected installer to print a PATH reload hint');
+  assert.equal((stdout.match(/^Next steps$/gmu) ?? []).length, 0, 'PATH guidance must not create a second next-steps section');
+  assert.equal((stdout.match(/^\s*source\s+/gmu) ?? []).length, 1, 'expected one relevant source command, not multiple shell files');
+  assert.ok(
+    stdout.indexOf('Happier CLI installed:') < stdout.search(/^PATH$/mu),
+    'expected PATH guidance after the install summary',
+  );
+  assert.equal((stdout.match(/^\s*version:\s*9\.9\.9\s*$/gmu) ?? []).length, 1, 'expected one labeled installed version');
+  assert.doesNotMatch(stdout, /^9\.9\.9\s*$/mu, 'the installer must not print a naked --version result');
 
   await rm(root, { recursive: true, force: true });
 });

@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSetting } from '@/sync/domains/state/storage';
 import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
-import { resolveRichEligibility } from '@/components/ui/markdown/editor/core/eligibility/richEligibility';
+import { useRichEligibility } from '@/components/ui/markdown/editor/core/eligibility/richEligibility';
 import type { MarkdownRichIneligibleReason } from '@/components/ui/markdown/editor/core/eligibility/markdownRichEligibility';
 import type { MarkdownEditMode } from '@/components/ui/markdown/editor/markdownEditorTypes';
 
@@ -41,6 +41,7 @@ export type MarkdownEditModeState = Readonly<{
     markdownEditMode: MarkdownEditMode;
     /** Whether the current value can be rich-edited (flag on, `.md`, in-budget, round-trippable). */
     richEligible: boolean;
+    richEligibilityPending: boolean;
     /** Why rich is unavailable (drives the menu's disabled-reason copy). */
     richDisabledReason?: MarkdownRichIneligibleReason;
     /** Composite reset key remounting the active surface on mode switch / host reseed. */
@@ -85,17 +86,11 @@ export function useMarkdownEditMode(input: Readonly<{
 
     // Eligibility is decided on the freshest authoritative `value` the rich surface
     // would receive. Rich is offered only for clean, in-budget `.md` (flag on).
-    const eligibility = React.useMemo(() => {
-        if (!markdownRichEditorEnabled) {
-            return { eligible: false, reason: undefined as MarkdownRichIneligibleReason | undefined };
-        }
-        const result = resolveRichEligibility(input.value, {
-            language: input.language,
-            maxBytes,
-            htmlRoundTripMaxBytes,
-        });
-        return { eligible: result.eligible, reason: result.reason };
-    }, [markdownRichEditorEnabled, input.value, input.language, maxBytes, htmlRoundTripMaxBytes]);
+    const eligibility = useRichEligibility(input.value, {
+        language: markdownRichEditorEnabled ? input.language : null,
+        maxBytes,
+        htmlRoundTripMaxBytes,
+    });
 
     const richEligible = eligibility.eligible;
 
@@ -131,7 +126,8 @@ export function useMarkdownEditMode(input: Readonly<{
     return {
         markdownEditMode,
         richEligible,
-        richDisabledReason: richEligible ? undefined : eligibility.reason,
+        richEligibilityPending: eligibility.pending === true,
+        richDisabledReason: richEligible || !markdownRichEditorEnabled ? undefined : eligibility.reason,
         resetKey,
         showToggle,
         onToggle,

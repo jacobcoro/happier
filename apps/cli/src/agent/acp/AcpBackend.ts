@@ -122,6 +122,7 @@ import {
   classifyAcpSessionUpdateDisposition,
 } from './connection/sdkContractDisposition';
 import type { PermissionResult } from '@/agent/permissions/permissionResult';
+import type { PermissionMode } from '@/api/types';
 import { AcpPlanProjection, type NormalizedAcpPlanSnapshot } from './plans';
 
 function makeAbortError(message: string): Error {
@@ -335,7 +336,8 @@ export interface AcpPermissionHandler {
   handleToolCall(
     toolCallId: string,
     toolName: string,
-    input: unknown
+    input: unknown,
+    context?: Readonly<{ permissionMode?: PermissionMode }>,
   ): Promise<PermissionResult>;
 
   /**

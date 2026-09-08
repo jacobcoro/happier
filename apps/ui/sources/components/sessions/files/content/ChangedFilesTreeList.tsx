@@ -34,10 +34,12 @@ function entryToFileStatus(entry: any): ScmFileStatus {
         fullPath: entry.path,
         status: entry.kind,
         isIncluded: preferIncluded,
+        hasIncludedDelta: entry.hasIncludedDelta,
         linesAdded: preferIncluded ? (entry.stats?.includedAdded ?? 0) : (entry.stats?.pendingAdded ?? 0),
         linesRemoved: preferIncluded ? (entry.stats?.includedRemoved ?? 0) : (entry.stats?.pendingRemoved ?? 0),
         oldPath: entry.previousPath ?? undefined,
         isBinary: entry.stats?.isBinary ?? undefined,
+        isComplete: entry.stats?.isComplete,
     };
 }
 
@@ -118,12 +120,12 @@ export const ChangedFilesTreeList = React.memo((props: ChangedFilesTreeListProps
                             <Text style={{ fontSize: 12, color: props.theme.colors.state.neutral.foreground, ...Typography.mono('semiBold') }}>
                                 {`${badge.kindLetter}${badge.changedCount}`}
                             </Text>
-                            {badge.added > 0 ? (
+                            {badge.isComplete !== false && badge.added > 0 ? (
                                 <Text style={{ fontSize: 12, color: props.theme.colors.state.success.foreground, ...Typography.mono('semiBold') }}>
                                     {`+${badge.added}`}
                                 </Text>
                             ) : null}
-                            {badge.removed > 0 ? (
+                            {badge.isComplete !== false && badge.removed > 0 ? (
                                 <Text
                                     style={{
                                         fontSize: 12,
@@ -161,12 +163,12 @@ export const ChangedFilesTreeList = React.memo((props: ChangedFilesTreeListProps
                         <Text style={{ fontSize: 12, color: props.theme.colors.state.neutral.foreground, ...Typography.mono('semiBold') }}>
                             {resolved.kindLetter}
                         </Text>
-                        {resolved.added > 0 ? (
+                        {resolved.isComplete !== false && resolved.added > 0 ? (
                             <Text style={{ fontSize: 12, color: props.theme.colors.state.success.foreground, ...Typography.mono('semiBold') }}>
                                 {`+${resolved.added}`}
                             </Text>
                         ) : null}
-                        {resolved.removed > 0 ? (
+                        {resolved.isComplete !== false && resolved.removed > 0 ? (
                             <Text
                                 style={{
                                     fontSize: 12,

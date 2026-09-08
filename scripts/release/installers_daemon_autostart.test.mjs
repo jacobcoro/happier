@@ -562,17 +562,24 @@ test('install.sh skips daemon service preflight when daemon setup is explicitly 
   }
 });
 
-test('install.sh prints download and extraction progress so large installs do not look stuck', async () => {
+test('install.sh renders truthful linear download, verify, and install phases when redirected', async () => {
   const scenario = await runInstallerScenario();
   try {
+    assert.match(scenario.stdout, /^Happier\nSecure installer\nDownload -> Verify -> Install\n/m);
+    assert.doesNotMatch(scenario.stdout, /3443|\x1b|\r/);
+    assert.ok(scenario.stdout.indexOf('\n[Download]\n') < scenario.stdout.indexOf('\n[Verify]\n'));
+    assert.ok(scenario.stdout.indexOf('\n[Verify]\n') < scenario.stdout.indexOf('\n[Install]\n'));
     assert.match(scenario.stdout, /- \[\.\.\] Fetching cli-stable release metadata/);
-    assert.match(scenario.stdout, /- \[✓\] Fetching cli-stable release metadata/);
+    assert.match(scenario.stdout, /- \[ok\] Fetching cli-stable release metadata/);
     assert.match(scenario.stdout, /- \[\.\.\] Downloading release archive/);
-    assert.match(scenario.stdout, /- \[✓\] Downloading release archive/);
+    assert.match(scenario.stdout, /- \[ok\] Downloading release archive/);
     assert.match(scenario.stdout, /- \[\.\.\] Downloading checksums/);
-    assert.match(scenario.stdout, /- \[✓\] Downloading minisign signature/);
+    assert.match(scenario.stdout, /- \[ok\] Downloading minisign signature/);
+    assert.match(scenario.stdout, /- \[ok\] Verifying archive checksum/);
+    assert.match(scenario.stdout, /- \[ok\] Verifying release signature/);
     assert.match(scenario.stdout, /- \[\.\.\] Extracting payload/);
-    assert.match(scenario.stdout, /- \[✓\] Extracting payload/);
+    assert.match(scenario.stdout, /- \[ok\] Extracting payload/);
+    assert.doesNotMatch(scenario.stdout, /Expected SHA-256|Actual SHA-256|minisign verification passed/);
   } finally {
     await scenario.cleanup();
   }
@@ -586,8 +593,19 @@ test('install.sh retries transient minisign signature downloads before failing t
   });
   try {
     assert.match(scenario.stdout, /- \[\.\.\] Downloading minisign signature/);
-    assert.match(scenario.stdout, /- \[✓\] Downloading minisign signature/);
-    assert.match(scenario.stdout, /Signature verified\./);
+    assert.match(scenario.stdout, /- \[ok\] Downloading minisign signature/);
+    assert.match(scenario.stdout, /- \[ok\] Verifying release signature/);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh exposes verification details only in verbose output', async () => {
+  const scenario = await runInstallerScenario({ HAPPIER_INSTALLER_VERBOSE: '1' });
+  try {
+    assert.match(scenario.stdout, /Expected SHA-256: [a-f0-9]{64}/);
+    assert.match(scenario.stdout, /Actual SHA-256:\s+[a-f0-9]{64}/);
+    assert.match(scenario.stdout, /minisign verification passed\./);
   } finally {
     await scenario.cleanup();
   }
@@ -601,8 +619,8 @@ test('install.sh retries a transient rolling release metadata gap', async () => 
     HAPPIER_INSTALLER_DOWNLOAD_RETRY_DELAY_SECONDS: '0',
   });
   try {
-    assert.match(scenario.stdout, /- \[✓\] Fetching cli-stable release metadata/);
-    assert.match(scenario.stdout, /Signature verified\./);
+    assert.match(scenario.stdout, /- \[ok\] Fetching cli-stable release metadata/);
+    assert.match(scenario.stdout, /- \[ok\] Verifying release signature/);
   } finally {
     await scenario.cleanup();
   }
@@ -772,6 +790,61 @@ test('install.sh does not render a shell-owned post-install summary when doctor 
     assert.match(scenario.log, /doctor repair-report-only 1\.2\.4 args=doctor repair --report-only/);
     assert.doesNotMatch(scenario.stdout, /Automatic Startup/);
     assert.doesNotMatch(scenario.stdout, /Installed background services:/);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh keeps the doctor preflight but skips its repair report for a fresh install', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_NONINTERACTIVE: '',
+    HAPPIER_TEST_LOG_SERVICE_PREFLIGHT: '1',
+    HAPPIER_TEST_DOCTOR_REPAIR_REPORT_ONLY_TEXT: 'Warning: sign in and install a background service.',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [],
+      actions: [],
+      manualWarnings: [],
+      report: {
+        findings: [
+          { kind: 'no_servers_configured', actions: [{ kind: 'run-setup' }] },
+          { kind: 'automatic_startup_missing', actions: [{ kind: 'background-service-plan' }] },
+        ],
+        manualWarnings: [],
+      },
+    }),
+  });
+  try {
+    assert.match(scenario.log, /doctor repair-json 1\.2\.4/);
+    assert.doesNotMatch(scenario.log, /doctor repair-report-only 1\.2\.4/);
+    assert.doesNotMatch(scenario.stdout, /sign in and install a background service/i);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh still renders actionable non-service doctor findings when no service exists', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_NONINTERACTIVE: '',
+    HAPPIER_TEST_LOG_SERVICE_PREFLIGHT: '1',
+    HAPPIER_TEST_DOCTOR_REPAIR_REPORT_ONLY_TEXT: 'Warning: an installed local Relay is stale.',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [],
+      actions: [],
+      manualWarnings: [],
+      report: {
+        findings: [{ kind: 'local_relay_version_stale', actions: [] }],
+        manualWarnings: [],
+      },
+    }),
+  });
+  try {
+    assert.match(scenario.log, /doctor repair-json 1\.2\.4/);
+    assert.match(scenario.log, /doctor repair-report-only 1\.2\.4/);
+    assert.match(scenario.stdout, /installed local Relay is stale/i);
   } finally {
     await scenario.cleanup();
   }
@@ -1004,19 +1077,28 @@ test('install.sh fails closed and prints sudo repair guidance when noninteractiv
   }
 });
 
-test('install.sh does not attempt tty prompting for daemon opt-in when no controlling tty is available', async () => {
+test('install.sh does not render fresh-install repair output when no controlling tty is available', async () => {
   const scenario = await runInstallerScenario({
     HAPPIER_NONINTERACTIVE: '',
+    HAPPIER_TEST_LOG_SERVICE_PREFLIGHT: '1',
     HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
       ok: true,
       executed: false,
       existingServices: [],
       actions: [],
       manualWarnings: [],
+      report: {
+        findings: [
+          { kind: 'no_servers_configured', actions: [{ kind: 'run-setup' }] },
+          { kind: 'automatic_startup_missing', actions: [{ kind: 'background-service-plan' }] },
+        ],
+        manualWarnings: [],
+      },
     }),
   });
   try {
-    assert.match(scenario.log, /doctor repair-report-only 1\.2\.4 args=doctor repair --report-only/);
+    assert.match(scenario.log, /doctor repair-json 1\.2\.4 args=doctor repair --json/);
+    assert.doesNotMatch(scenario.log, /doctor repair-report-only 1\.2\.4 args=doctor repair --report-only/);
     assert.doesNotMatch(scenario.stderr, /\/dev\/tty/);
   } finally {
     await scenario.cleanup();
@@ -1222,4 +1304,14 @@ test('install.sh --help documents the non-interactive flag', async () => {
   assert.match(help, /--yes/, 'usage should document --yes');
   assert.match(help, /--non-interactive/, 'usage should document the --non-interactive alias');
   assert.match(help, /HAPPIER_NONINTERACTIVE/, 'usage should point at the matching environment variable');
+});
+
+test('install.sh suppresses the installer welcome for help and invalid arguments', () => {
+  const installerPath = join(repoRoot, 'scripts', 'release', 'installers', 'install.sh');
+  const help = spawnSync('bash', [installerPath, '--help'], { encoding: 'utf8' });
+  const invalid = spawnSync('bash', [installerPath, '--definitely-invalid'], { encoding: 'utf8' });
+  assert.equal(help.status, 0);
+  assert.notEqual(invalid.status, 0);
+  assert.doesNotMatch(String(help.stdout ?? ''), /^Happier\nSecure installer/m);
+  assert.doesNotMatch(`${invalid.stdout ?? ''}${invalid.stderr ?? ''}`, /^Happier\nSecure installer/m);
 });

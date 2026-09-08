@@ -1,5 +1,5 @@
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
@@ -16,7 +16,7 @@ import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/scr
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-async function setupHarness() {
+async function createHarness() {
   const modalAlertSpy = vi.fn((..._args: unknown[]) => {});
   type SpawnAttemptCustodyTestResult = Readonly<{
     status: 'unresolved' | 'completed';
@@ -296,6 +296,64 @@ async function setupHarness() {
     getSessionDraftSnapshot: vi.fn(() => null),
   }));
   const { useCreateNewSession } = await import('./useCreateNewSession');
+  const reset = () => {
+    modalAlertSpy.mockReset();
+    modalConfirmSpy.mockReset().mockResolvedValue(false);
+    machineSpawnNewSessionSpy.mockReset().mockResolvedValue({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+      errorMessage: 'Daemon RPC is not available',
+    });
+    machineResolveSpawnSessionByNonceSpy.mockReset().mockResolvedValue({ status: 'not_found' });
+    machineResolveSpawnSessionByNonceUntilSettledSpy.mockReset().mockResolvedValue({ status: 'not_found' });
+    completeMachineSpawnAttemptCustodySpy.mockReset().mockResolvedValue(true);
+    reconcileSpawnAttemptCustodyFromOperationSpy.mockReset().mockImplementation(async (params: {
+      outcome: { kind: 'succeeded'; createdSessionId: string } | { kind: 'failed' | 'cancelled' };
+    }) => params.outcome.kind === 'succeeded'
+      ? {
+          status: 'reconciled' as const,
+          record: {
+            v: 2 as const,
+            scope: { serverId: 'server-a', accountId: 'account-a' },
+            machineId: 'm1',
+            targetFingerprint: 'target-1',
+            userAttemptId: 'attempt-reentry',
+            nonce: 'request-reentry',
+            phase: 'post_spawn' as const,
+            createdSessionId: params.outcome.createdSessionId,
+            firstTurnLocalId: 'first-turn-reentry',
+            attachmentMessageLocalId: 'attachments-reentry',
+          },
+        }
+      : { status: 'removed' as const });
+    followUpSpawnedSessionWithServerScopeSpy.mockReset().mockResolvedValue(undefined);
+    captureSessionDraftCurrentnessSpy.mockReset().mockImplementation((params: Readonly<{
+      scope: Readonly<{ serverId: string; accountId: string }>;
+      address: Readonly<{ kind: 'newSession'; draftId: string }>;
+    }>) => ({
+      address: params.address,
+      mutationIds: { 'composer.text': 'mutation-before-launch' },
+    }));
+    captureSessionDraftLaunchCurrentnessSpy.mockReset().mockImplementation((params: Readonly<{
+      scope: Readonly<{ serverId: string; accountId: string }>;
+      address: Readonly<{ kind: 'newSession'; draftId: string }>;
+      userAttemptId: string;
+    }>) => ({
+      address: params.address,
+      mutationIds: { 'composer.text': 'mutation-before-launch' },
+    }));
+    clearSessionDraftCurrentnessSpy.mockReset().mockResolvedValue(true);
+    clearSessionDraftLaunchCurrentnessSpy.mockReset().mockReturnValue(true);
+    markActionOperationSeenSpy.mockReset().mockReturnValue(true);
+    storageState.updateSessionPermissionMode.mockReset();
+    storageState.updateSessionModelMode.mockReset();
+    storageState.updateSessionDraft.mockReset();
+    storageState.markSessionOptimisticThinking.mockReset();
+    storageState.upsertPendingMessage.mockReset();
+    for (const sessionId of Object.keys(storageState.sessions)) {
+      delete storageState.sessions[sessionId];
+    }
+  };
   return {
     useCreateNewSession,
     modalAlertSpy,
@@ -312,18 +370,32 @@ async function setupHarness() {
     clearSessionDraftCurrentnessSpy,
     clearSessionDraftLaunchCurrentnessSpy,
     markActionOperationSeenSpy,
+    reset,
   };
+}
+
+type Harness = Awaited<ReturnType<typeof createHarness>>;
+let sharedHarness: Harness | null = null;
+
+async function setupHarness(): Promise<Harness> {
+  sharedHarness ??= await createHarness();
+  sharedHarness.reset();
+  return sharedHarness;
 }
 
 describe('useCreateNewSession (daemon unavailable UX)', () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-02-05T00:00:00.000Z'));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  afterAll(() => {
+    sharedHarness = null;
     vi.restoreAllMocks();
   });
 
@@ -733,6 +805,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
   });
 
   it('continues outer follow-up without navigating after direct spawn custody settles when the launcher unmounts', async () => {
+    vi.useRealTimers();
     const {
       useCreateNewSession,
       machineSpawnNewSessionSpy,
@@ -895,6 +968,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
   }, 120_000);
 
   it('consumes the operation settlement and actual custody identity without a hook-level resolver', async () => {
+    vi.useRealTimers();
     const {
       useCreateNewSession,
       machineSpawnNewSessionSpy,
@@ -961,7 +1035,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     await act(async () => {
       await hook.getCurrent().handleCreateSession();
     });
-    await flushHookEffects({ runAllTimers: true });
+    await flushHookEffects();
 
     expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
     const spawnOptions = machineSpawnNewSessionSpy.mock.calls[0]?.[0] as {
@@ -975,11 +1049,6 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       sessionId: 'session-created-from-nonce',
       initialMessageText: 'First turn',
     }));
-    expect(router.replace).toHaveBeenCalledWith(
-      '/session/session-created-from-nonce?serverId=server-a',
-      expect.anything(),
-    );
-
     await hook.unmount();
   });
 

@@ -124,6 +124,26 @@ function escapeRipgrepGlob(input: string): string {
         .replace(/\]/g, '\\]');
 }
 
+// Keep fuzzy score ordering within each relevance tier. Test/spec variants are
+// basename prefixes, after the exact stem, and before broader fuzzy matches.
+function fileSearchRelevance(file: FileItem, query: string): number {
+    const needle = query.trim().toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
+    const name = file.fileName.toLowerCase().replace(/\/$/, '');
+    const path = file.fullPath.toLowerCase().replace(/\/$/, '');
+    if (path === needle || name === needle) return 0;
+    if (!needle.includes('/') && !needle.includes('.') && file.fileType === 'file') {
+        const extension = name.lastIndexOf('.');
+        if (extension > 0 && name.slice(0, extension) === needle) return 1;
+    }
+    if (!needle.includes('/') && name.startsWith(`${needle}.`)) return 2;
+    if ((needle.includes('/') ? path : name).startsWith(needle)) return 3;
+    return 4;
+}
+
+function rankFileSearchResults(files: FileItem[], query: string, limit: number): FileItem[] {
+    return files.sort((a, b) => fileSearchRelevance(a, query) - fileSearchRelevance(b, query)).slice(0, limit);
+}
+
 class FileSearchCache {
     private scopes = new Map<string, ScopeCache>();
 
@@ -223,7 +243,7 @@ class FileSearchCache {
         return this.buildFileItemsFromPaths(filePaths);
     }
 
-    private async buildFileItemsFromRipgrepGlob(scope: FileSuggestionScope, query: string, limit: number): Promise<FileItem[] | null> {
+    private async buildFileItemsFromRipgrepGlob(scope: FileSuggestionScope, query: string): Promise<FileItem[] | null> {
         const trimmed = query.trim();
         if (!trimmed) return null;
 
@@ -240,8 +260,7 @@ class FileSearchCache {
         const filePaths: string[] = response.stdout
             .split('\n')
             .map((p) => p.trim())
-            .filter(Boolean)
-            .slice(0, Math.max(50, limit * 5));
+            .filter(Boolean);
 
         if (filePaths.length === 0) return null;
         return this.buildFileItemsFromPaths(filePaths);
@@ -354,19 +373,16 @@ class FileSearchCache {
         }
 
         // Perform fuzzy search
-        const searchOptions = {
-            limit,
-            threshold
-        };
+        const searchOptions = { limit: -1, threshold };
 
         const results = cache.fuse.search(query, searchOptions);
         if (results.length > 0) {
-            return results.map(result => result.item);
+            return rankFileSearchResults(results.map(result => result.item), query, limit);
         }
 
         // If the initial index is incomplete (e.g., truncated transport), try a targeted glob request.
         // This keeps UX predictable for exact-ish filename queries without having to ship a full file index.
-        const globItems = await this.buildFileItemsFromRipgrepGlob(scope, query, limit);
+        const globItems = await this.buildFileItemsFromRipgrepGlob(scope, query);
         if (!globItems || globItems.length === 0) {
             return [];
         }
@@ -385,7 +401,7 @@ class FileSearchCache {
             this.initializeFuse(cache);
         }
 
-        return globItems.slice(0, limit);
+        return rankFileSearchResults(globItems, query, limit);
     }
 
     getAllFiles(scope: FileSuggestionScope): FileItem[] {

@@ -3,7 +3,7 @@ import type { StyleProp, TextStyle } from 'react-native';
 import { Platform, View } from 'react-native';
 
 import type { Option, OptionLongPressHandler } from '../MarkdownBlockView';
-import type { MarkdownSourceRange, MarkdownSourceRangeAction } from '../MarkdownView';
+import type { MarkdownSourceRange, MarkdownSourceRangeAction, MarkdownSourceRangeLayoutObserver } from '../MarkdownView';
 import { usePreparedStreamingMarkdown, type MarkdownStreamingMode } from '../streaming/usePreparedStreamingMarkdown';
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
@@ -31,6 +31,7 @@ type MarkdownViewRendererProps = Readonly<{
     streamingParseCacheKey?: string | null;
     streamingRevealPreset?: StreamingTextRevealPreset;
     staticRenderPlaceholderEnabled?: boolean;
+    sourceRangeLayoutObserver?: MarkdownSourceRangeLayoutObserver;
     onPressSourceRange?: (action: MarkdownSourceRangeAction) => void;
     renderAfterSourceRange?: (action: MarkdownSourceRangeAction) => React.ReactNode;
     highlightSourceRange?: MarkdownSourceRange | null;
@@ -74,6 +75,7 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
         mode: props.streamingMode,
     });
     const sourceRangeInteractionsActive = Boolean(
+        props.sourceRangeLayoutObserver ||
         props.onPressSourceRange ||
         props.renderAfterSourceRange ||
         props.highlightSourceRange,
@@ -102,6 +104,36 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
         });
         return nextSegments;
     }, [preparedMarkdown, props.streamingMode, props.streamingParseCacheKey, sourceRangeInteractionsActive]);
+    const segmentKeys = React.useMemo(() => {
+        if (!props.sourceRangeLayoutObserver) return segments.map((segment) => segment.key);
+        const occurrences = new Map<string, number>();
+        return segments.map((segment) => {
+            const occurrence = occurrences.get(segment.sourceHash) ?? 0;
+            occurrences.set(segment.sourceHash, occurrence + 1);
+            return `${segment.sourceHash}:${occurrence}`;
+        });
+    }, [segments, props.sourceRangeLayoutObserver]);
+    const contentRef = React.useRef<View>(null);
+    const measureSourceRanges = React.useCallback(() => {
+        if (Platform.OS !== 'web' || !props.sourceRangeLayoutObserver) return;
+        // RNW View refs expose the DOM node. ResizeObserver does not report pure position changes.
+        const element = contentRef.current as unknown as HTMLElement | null;
+        if (typeof element?.getBoundingClientRect !== 'function') return;
+        const top = element.getBoundingClientRect().top;
+        const layouts = Array.from(element.children).map((child) => {
+            const rectangle = child.getBoundingClientRect();
+            return { y: rectangle.top - top, height: rectangle.height };
+        });
+        // Read all geometry before the scroll owner writes its corrected offset.
+        layouts.forEach((layout, index) => {
+            const segment = segments[index];
+            if (segment) props.sourceRangeLayoutObserver?.onLayout(segment, layout);
+        });
+    }, [segments, props.sourceRangeLayoutObserver]);
+    React.useLayoutEffect(() => {
+        props.sourceRangeLayoutObserver?.onRanges(segments);
+        measureSourceRanges();
+    }, [segments, props.sourceRangeLayoutObserver, measureSourceRanges]);
     const streamingReveal = props.streamingMode === 'streaming' && props.streamingAnimated === true;
     const staticRenderPlaceholder = useDelayedStaticMarkdownRenderPlaceholder({
         enabled:
@@ -115,13 +147,17 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
     return (
         <View testID={props.testID} style={styles.root}>
             <View
+                ref={contentRef}
                 testID="markdown-static-render-content"
-                onLayout={staticRenderPlaceholder.onContentLayout}
+                onLayout={(event) => {
+                    staticRenderPlaceholder.onContentLayout(event);
+                    measureSourceRanges();
+                }}
                 style={styles.content}
             >
-                {segments.map((segment) => (
+                {segments.map((segment, index) => (
                     <MarkdownSegmentView
-                        key={segment.key}
+                        key={segmentKeys[index]}
                         segment={segment}
                         selectable={props.selectable}
                         onOptionPress={props.onOptionPress}
@@ -132,6 +168,7 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
                         streamingReveal={streamingReveal}
                         streamingRevealPreset={props.streamingRevealPreset}
                         sourceRangeInteractionsActive={sourceRangeInteractionsActive}
+                        sourceRangeLayoutObserver={props.sourceRangeLayoutObserver}
                         onPressSourceRange={props.onPressSourceRange}
                         renderAfterSourceRange={props.renderAfterSourceRange}
                         highlightSourceRange={props.highlightSourceRange}

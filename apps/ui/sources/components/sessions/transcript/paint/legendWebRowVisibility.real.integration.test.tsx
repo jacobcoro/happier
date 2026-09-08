@@ -40,6 +40,8 @@ const ROW_COUNT = 30;
 const VIEWPORT_HEIGHT = 500;
 
 const resizeObservers = new Set<ResizeObserverRecord>();
+let footerMeasurementsEnabled = true;
+const FOOTER_TEST_ID = 'legend-visibility-footer';
 
 const DATA: readonly Row[] = Array.from({ length: ROW_COUNT }, (_value, index) => ({
     id: `row-${index}`,
@@ -68,6 +70,11 @@ function measuredRect(element: Element): DOMRectReadOnly {
     if (htmlElement.id === HOST_ID) return rect(800, VIEWPORT_HEIGHT);
     if (htmlElement.style.overflowY === 'auto' || htmlElement.style.overflow === 'auto') {
         return rect(800, VIEWPORT_HEIGHT);
+    }
+    const footer = htmlElement.querySelector<HTMLElement>(`[data-testid="${FOOTER_TEST_ID}"]`);
+    if (footer && !htmlElement.querySelector(`[data-testid^="${ROW_TESTID_PREFIX}"]`)) {
+        if (!footerMeasurementsEnabled) return rect(0, 0);
+        return rect(800, Number.parseFloat(footer.style.height || '0') || 0);
     }
     if (htmlElement.querySelector<HTMLElement>(`[data-testid^="${ROW_TESTID_PREFIX}"]`)) {
         return rect(800, ROW_HEIGHT);
@@ -122,6 +129,7 @@ describe('Legend web row visibility contract', () => {
     beforeEach(() => {
         vi.useFakeTimers();
         resizeObservers.clear();
+        footerMeasurementsEnabled = true;
         vi.spyOn(console, 'warn').mockImplementation(() => {});
         container = document.createElement('div');
         container.style.height = `${VIEWPORT_HEIGHT}px`;
@@ -279,6 +287,50 @@ describe('Legend web row visibility contract', () => {
         expect(settled.opacity).toBe(1);
     });
 
+    it('keeps painted rows visible when a one-pixel footer measurement arrives after onLoad', async () => {
+        const onLoad = vi.fn();
+        // A not-yet-laid-out footer reports 0x0; Legend ignores that initial measurement.
+        footerMeasurementsEnabled = false;
+        await act(async () => {
+            root.render(<div id={HOST_ID} style={{ height: VIEWPORT_HEIGHT }}>
+                <LegendList
+                    data={DATA}
+                    dataKey="footer-visibility"
+                    estimatedItemSize={ROW_HEIGHT}
+                    initialScrollAtEnd
+                    keyExtractor={keyExtractor}
+                    ListFooterComponent={<div data-testid={FOOTER_TEST_ID} style={{ height: 160 }} />}
+                    onLoad={onLoad}
+                    recycleItems={false}
+                    renderItem={renderRow}
+                />
+            </div>);
+        });
+        for (let pass = 0; pass < 12 && onLoad.mock.calls.length === 0; pass += 1) {
+            await act(async () => {
+                flushResizeObservers();
+                await vi.advanceTimersByTimeAsync(16);
+            });
+        }
+        expect(onLoad).toHaveBeenCalledTimes(1);
+        expect(readRowContainerOpacity()).toBe(1);
+        const paintedRow = document.querySelector(`[data-testid^="${ROW_TESTID_PREFIX}"]`);
+        expect(paintedRow).not.toBeNull();
+        const footerElement = document.querySelector<HTMLElement>(`[data-testid="${FOOTER_TEST_ID}"]`);
+        if (!footerElement) throw new Error('Expected mounted footer');
+        footerElement.style.height = '1px';
+        footerMeasurementsEnabled = true;
+        await act(async () => { flushResizeObservers(); });
+        const opacitySamples: Array<number | null> = [readRowContainerOpacity()];
+        for (let pass = 0; pass < 8; pass += 1) {
+            await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+            opacitySamples.push(readRowContainerOpacity());
+        }
+        expect(paintedRow?.isConnected).toBe(true);
+        expect(readRowContainerOpacity()).toBe(1);
+        expect(opacitySamples).not.toContain(0);
+    });
+
     it('never re-covers an already painted dataset when a transient empty snapshot refills', async () => {
         let loadCount = 0;
         const render = (data: readonly Row[]) => (
@@ -340,5 +392,39 @@ describe('Legend web row visibility contract', () => {
                 .map((sample) => sample.opacity),
         ).toEqual(refilledSamples.filter((sample) => sample.rows > 0).map(() => 1));
         expect(loadCount).toBe(1);
+    });
+
+    it('conceals a genuinely different dataset until its initial layout settles', async () => {
+        const render = (dataKey: string, data: readonly Row[]) => (
+            <div id={HOST_ID} style={{ height: VIEWPORT_HEIGHT }}>
+                <LegendList
+                    data={data}
+                    dataKey={dataKey}
+                    estimatedItemSize={ROW_HEIGHT}
+                    initialScrollAtEnd
+                    keyExtractor={keyExtractor}
+                    recycleItems={false}
+                    renderItem={renderRow}
+                />
+            </div>
+        );
+        await act(async () => { root.render(render('first', DATA)); });
+        for (let pass = 0; pass < 12; pass += 1) {
+            await act(async () => {
+                flushResizeObservers();
+                await vi.advanceTimersByTimeAsync(16);
+            });
+        }
+        expect(readRowContainerOpacity()).toBe(1);
+        const replacement = DATA.map((row) => ({ id: `replacement-${row.id}` }));
+        await act(async () => { root.render(render('replacement', replacement)); });
+        expect(readRowContainerOpacity()).toBe(0);
+        for (let pass = 0; pass < 12; pass += 1) {
+            await act(async () => {
+                flushResizeObservers();
+                await vi.advanceTimersByTimeAsync(16);
+            });
+        }
+        expect(readRowContainerOpacity()).toBe(1);
     });
 });

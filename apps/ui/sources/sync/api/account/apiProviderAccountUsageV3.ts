@@ -5,6 +5,7 @@ import { backoff } from '@/utils/timing/time';
 
 import {
   ProviderAccountUsageRecordIdSchema,
+  PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
   ProviderAccountUsageSnapshotV1Schema,
   StoredJsonContentEnvelopeSchema,
   type ProviderAccountUsageRecordId,
@@ -20,6 +21,7 @@ function extractErrorCode(json: unknown): string | null {
 
 const ProviderAccountUsageV3ResponseSchema = z.object({
   content: StoredJsonContentEnvelopeSchema,
+  subscription: z.unknown().optional(),
   metadata: z.object({
     fetchedAt: z.number().int().nonnegative(),
     staleAfterMs: z.number().int().nonnegative(),
@@ -43,6 +45,7 @@ export async function getProviderAccountUsageSnapshotPlain(
         headers: {
           Authorization: `Bearer ${credentials.token}`,
           'Content-Type': 'application/json',
+          Accept: PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT,
         },
       },
       { includeAuth: false },
@@ -72,7 +75,10 @@ export async function getProviderAccountUsageSnapshotPlain(
 
     if (parsed.data.content.t !== 'plain') return null;
 
-    const snapshot = ProviderAccountUsageSnapshotV1Schema.safeParse(parsed.data.content.v);
+    const baseSnapshot = ProviderAccountUsageSnapshotV1Schema.safeParse(parsed.data.content.v);
+    const snapshot = baseSnapshot.success && parsed.data.subscription !== undefined
+      ? ProviderAccountUsageSnapshotV1Schema.safeParse({ ...baseSnapshot.data, subscription: parsed.data.subscription })
+      : baseSnapshot;
     if (!snapshot.success || snapshot.data.recordId !== recordId) {
       throw new Error('Invalid provider account usage response');
     }

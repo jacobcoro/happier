@@ -7,44 +7,38 @@ export function useChangedFilesReviewFocusPath(input: Readonly<{
     reviewFiles: readonly ScmFileStatus[];
     expandPath: (path: string) => void;
     scrollToPath: (path: string) => void;
-}>): string | null {
-    const focusPath = input.focusPath;
-    const reviewFiles = input.reviewFiles;
-    const expandPath = input.expandPath;
-    const scrollToPath = input.scrollToPath;
-
+}>): Readonly<{ highlightedPath: string | null; focus: (path: string) => void }> {
     const [highlightedPath, setHighlightedPath] = React.useState<string | null>(null);
     const appliedFocusPathRef = React.useRef<string | null>(null);
-    const expandPathRef = React.useRef(expandPath);
-    const scrollToPathRef = React.useRef(scrollToPath);
-
-    expandPathRef.current = expandPath;
-    scrollToPathRef.current = scrollToPath;
+    const latestInputRef = React.useRef(input);
+    latestInputRef.current = input;
+    const scrollTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const clearTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const clearTimers = React.useCallback(() => {
+        if (scrollTimerRef.current !== null) clearTimeout(scrollTimerRef.current);
+        if (clearTimerRef.current !== null) clearTimeout(clearTimerRef.current);
+    }, []);
+    const focus = React.useCallback((path: string) => {
+        if (!latestInputRef.current.reviewFiles.some((file) => file.fullPath === path)) return;
+        clearTimers();
+        setHighlightedPath(path);
+        latestInputRef.current.expandPath(path);
+        scrollTimerRef.current = setTimeout(() => latestInputRef.current.scrollToPath(path), 50);
+        clearTimerRef.current = setTimeout(() => setHighlightedPath(null), 8000);
+    }, [clearTimers]);
 
     React.useEffect(() => {
-        const resolved = typeof focusPath === 'string' ? focusPath : null;
-        if (!resolved) {
+        const path = input.focusPath;
+        if (!path) {
             appliedFocusPathRef.current = null;
             return;
         }
-        if (appliedFocusPathRef.current === resolved) return;
-        if (!reviewFiles.some((f) => f.fullPath === resolved)) return;
-        appliedFocusPathRef.current = resolved;
+        if (appliedFocusPathRef.current === path) return;
+        if (!input.reviewFiles.some((file) => file.fullPath === path)) return;
+        appliedFocusPathRef.current = path;
+        focus(path);
+    }, [focus, input.focusPath, input.reviewFiles]);
+    React.useEffect(() => clearTimers, [clearTimers]);
 
-        setHighlightedPath(resolved);
-        expandPathRef.current(resolved);
-
-        const scrollTimer = setTimeout(() => {
-            scrollToPathRef.current(resolved);
-        }, 50);
-        const clearTimer = setTimeout(() => {
-            setHighlightedPath(null);
-        }, 8000);
-        return () => {
-            clearTimeout(scrollTimer);
-            clearTimeout(clearTimer);
-        };
-    }, [focusPath, reviewFiles]);
-
-    return highlightedPath;
+    return { highlightedPath, focus };
 }

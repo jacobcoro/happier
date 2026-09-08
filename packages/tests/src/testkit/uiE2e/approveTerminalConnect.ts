@@ -7,12 +7,14 @@ async function maybeDismissWebModal(params: Readonly<{ page: Page; timeoutMs: nu
 
   while (Date.now() - startedAt < params.timeoutMs) {
     if ((await confirm.count()) > 0) {
-      await confirm.click({ timeout: 15_000 });
+      // Modal closure is the boundary here; authenticateAndStartDaemon then
+      // waits for CLI authentication success before starting the daemon.
+      await confirm.click({ timeout: 15_000, noWaitAfter: true });
       await expect(confirm).toHaveCount(0, { timeout: 60_000 });
       return true;
     }
     if ((await button0.count()) > 0) {
-      await button0.click({ timeout: 15_000 });
+      await button0.click({ timeout: 15_000, noWaitAfter: true });
       await expect(button0).toHaveCount(0, { timeout: 60_000 });
       return true;
     }

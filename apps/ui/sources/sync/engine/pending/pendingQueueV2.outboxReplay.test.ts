@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
+import { Platform } from 'react-native';
 
 import { storage } from '@/sync/domains/state/storage';
 import {
@@ -57,6 +59,37 @@ describe('pendingQueueV2 durable outbox', () => {
         resetPendingQueueState();
     });
 
+    it('does not send or release the composer when browser durable custody fails', async () => {
+        const sessionId = 'browser-storage-failed';
+        storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+        const platform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        vi.stubGlobal('indexedDB', new IDBFactory());
+        const originalPut = IDBObjectStore.prototype.put;
+        const put = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, ...args) {
+            const request = originalPut.apply(this, args);
+            this.transaction.abort();
+            return request;
+        });
+        const request = vi.fn(async () => Response.json({}));
+        const onLocalPendingProjectionCreated = vi.fn();
+        try {
+            await expect(enqueuePendingMessageV2({
+                sessionId, localId: 'browser-custody', text: 'retain composer',
+                encryption: { getSessionEncryption: () => null }, request,
+                onLocalPendingProjectionCreated, outboxScope: targetScope,
+            })).rejects.toThrow();
+            expect(request).not.toHaveBeenCalled();
+            expect(onLocalPendingProjectionCreated).not.toHaveBeenCalled();
+            expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+            expect(storage.getState().sessions[sessionId]?.optimisticThinkingAt).toBeNull();
+        } finally {
+            put.mockRestore();
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('replays a retained pre-action envelope unchanged and accepts the server enqueue translation', async () => {
         const sessionId = 's_outbox_legacy_omission';
         const localId = 'legacy-omitted-action';
@@ -65,14 +98,14 @@ describe('pendingQueueV2 durable outbox', () => {
             messageRole: 'user',
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained' }, meta: {} } },
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
             text: 'retained',
             rawRecord: { role: 'user', content: { type: 'text', text: 'retained' }, meta: {} },
             request: { v: 1, body },
-        }, targetScope);
+        }, targetScope));
         const sentBodies: string[] = [];
 
         await expect(retryPendingOutboxOperationV2({
@@ -101,7 +134,7 @@ describe('pendingQueueV2 durable outbox', () => {
             outboxScope: targetScope,
             request: async () => {
                 // At the moment of the write, the row must already be persisted (write-ahead).
-                outboxDuringWrite = loadPendingOutboxForSession(sessionId, targetScope).length;
+                outboxDuringWrite = (await loadPendingOutboxForSession(sessionId, targetScope)).length;
                 return Response.json({ requestedAction: { v: 1, kind: 'enqueue' } });
             },
         });
@@ -109,7 +142,7 @@ describe('pendingQueueV2 durable outbox', () => {
         expect(result.accepted).toBe(true);
         expect(outboxDuringWrite).toBe(1);
         // Confirmed => the durable outbox row is cleared so it is not replayed.
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
     });
 
     it('retains the outbox row when the write hits transient connectivity and marks it unconfirmed', async () => {
@@ -128,7 +161,7 @@ describe('pendingQueueV2 durable outbox', () => {
         });
 
         expect(result.accepted).toBe(false);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toHaveLength(1);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toHaveLength(1);
         const row = storage.getState().sessionPending[sessionId]?.messages?.[0];
         expect(row?.sendState).toBe('unconfirmed');
     });
@@ -153,7 +186,7 @@ describe('pendingQueueV2 durable outbox', () => {
         })).resolves.toEqual({ localId, accepted: false });
 
         expect(transportCompleted).toBe(true);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([
             expect.objectContaining({ localId, operation: 'enqueue' }),
         ]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
@@ -173,15 +206,15 @@ describe('pendingQueueV2 durable outbox', () => {
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'exact replay' }, meta: {} } },
             messageRole: 'user',
         });
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
             text: 'exact replay',
             rawRecord: { role: 'user', content: { type: 'text', text: 'exact replay' }, meta: {} },
             request: { v: 1, body },
-        }, targetScope);
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        }, targetScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         let transportCompleted = false;
 
         await expect(retryPendingOutboxOperationV2({
@@ -195,7 +228,7 @@ describe('pendingQueueV2 durable outbox', () => {
         })).rejects.toThrow('Pending queue owner scope changed after transport');
 
         expect(transportCompleted).toBe(true);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([
             expect.objectContaining({ localId, operation: 'enqueue', request: { v: 1, body } }),
         ]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
@@ -221,7 +254,7 @@ describe('pendingQueueV2 durable outbox', () => {
         });
 
         expect(firstAttempt.accepted).toBe(false);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toHaveLength(1);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toHaveLength(1);
 
         await retryPendingOutboxOperationV2({
             sessionId,
@@ -233,7 +266,7 @@ describe('pendingQueueV2 durable outbox', () => {
             }),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages?.[0]).toMatchObject({
             localId: firstAttempt.localId,
             pendingDeliveryStatus: 'external_handoff',
@@ -268,7 +301,7 @@ describe('pendingQueueV2 durable outbox', () => {
             }),
         );
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([
             expect.objectContaining({ localId, operation: 'enqueue', request: { v: 1, body: frozenBody } }),
         ]);
         let releasePost!: () => void;
@@ -300,7 +333,7 @@ describe('pendingQueueV2 durable outbox', () => {
 
         expect(methods).toEqual(['POST', 'DELETE']);
         expect(sentBodies).toEqual([frozenBody]);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -450,9 +483,9 @@ describe('pendingQueueV2 durable outbox', () => {
         )?.pendingOutboxQuarantineReason).toBeUndefined();
     });
 
-    it('re-hydrates a persisted outbox row that is absent from the in-memory slice', () => {
+    it('re-hydrates a persisted outbox row that is absent from the in-memory slice', async () => {
         const sessionId = 's_outbox_replay';
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId: 'orphan-1',
             createdAt: 42,
@@ -462,9 +495,9 @@ describe('pendingQueueV2 durable outbox', () => {
                 v: 1,
                 body: '{"localId":"orphan-1","content":{"t":"plain","v":{}},"messageRole":"user"}',
             },
-        }, targetScope);
+        }, targetScope));
 
-        const localIds = replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        const localIds = (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         expect(localIds).toEqual(['orphan-1']);
 
         const rows = storage.getState().sessionPending[sessionId]?.messages ?? [];
@@ -485,7 +518,7 @@ describe('pendingQueueV2 durable outbox', () => {
             content: { type: 'text' as const, text: 'retry only when asked' },
             meta: {},
         };
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
@@ -499,17 +532,17 @@ describe('pendingQueueV2 durable outbox', () => {
                     messageRole: 'user',
                 }),
             },
-        }, targetScope);
+        }, targetScope));
 
-        expect(replayPersistedPendingOutboxForSession(sessionId, targetScope)).toEqual([localId]);
-        setPendingMessageSendState(sessionId, localId, 'failed', targetScope);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, targetScope))).toEqual([localId]);
+        (await setPendingMessageSendState(sessionId, localId, 'failed', targetScope));
 
-        expect(replayPersistedPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({ localId, sendState: 'failed', pendingOutboxScope: targetScope }),
         ]);
 
-        setPendingMessageSendState(sessionId, localId, 'unconfirmed', targetScope);
+        (await setPendingMessageSendState(sessionId, localId, 'unconfirmed', targetScope));
         const requests: string[] = [];
         await expect(retryPendingOutboxOperationV2({
             sessionId,
@@ -522,23 +555,23 @@ describe('pendingQueueV2 durable outbox', () => {
         })).resolves.toEqual({ accepted: true });
 
         expect(requests).toEqual([`/v2/sessions/${sessionId}/pending`]);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
     });
 
-    it('allocates normal replay projections without overwriting canonical or cross-scope IDs', () => {
+    it('allocates normal replay projections without overwriting canonical or cross-scope IDs', async () => {
         const sessionId = 's_normal_projection_id_reservations';
         const crossScopeLocalId = 'cross-scope-reserved-id';
         const canonicalReservedId = 'canonical-reserved-id';
-        const save = (localId: string) => savePendingOutboxMessage({
+        const save = async (localId: string) => (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
             text: `target ${localId}`,
             rawRecord: { role: 'user', content: { type: 'text', text: `target ${localId}` }, meta: {} },
             request: { v: 1, body: JSON.stringify({ localId, content: { t: 'plain', v: {} }, messageRole: 'user' }) },
-        }, targetScope);
-        save(crossScopeLocalId);
-        save(canonicalReservedId);
+        }, targetScope));
+        (await save(crossScopeLocalId));
+        (await save(canonicalReservedId));
         storage.getState().upsertPendingMessage(sessionId, {
             id: crossScopeLocalId,
             localId: crossScopeLocalId,
@@ -563,7 +596,7 @@ describe('pendingQueueV2 durable outbox', () => {
             rawRecord: { role: 'user', content: { type: 'text', text: 'canonical reserved' }, meta: {} },
         });
 
-        expect(replayPersistedPendingOutboxForSession(sessionId, targetScope)).toEqual([
+        expect((await replayPersistedPendingOutboxForSession(sessionId, targetScope))).toEqual([
             crossScopeLocalId,
             canonicalReservedId,
         ]);
@@ -645,14 +678,14 @@ describe('pendingQueueV2 durable outbox', () => {
         const localIds = ['refresh-target-pending', 'refresh-target-discarded'] as const;
         storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
         for (const localId of localIds) {
-            savePendingOutboxMessage({
+            (await savePendingOutboxMessage({
                 sessionId,
                 localId,
                 createdAt: 42,
                 text: localId,
                 rawRecord: { role: 'user', content: { type: 'text', text: localId }, meta: {} },
                 request: { v: 1, body: JSON.stringify({ localId, content: { t: 'plain', v: {} }, messageRole: 'user' }) },
-            }, targetScope);
+            }, targetScope));
             storage.getState().upsertPendingMessage(sessionId, {
                 id: localId,
                 localId: `other-${localId}`,
@@ -666,7 +699,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 rawRecord: { role: 'user', content: { type: 'text', text: `reserve ${localId}` }, meta: {} },
             });
         }
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         const preferredIds = localIds.map((localId) => storage.getState().sessionPending[sessionId]?.messages.find((message) =>
             message.localId === localId && message.pendingOutboxScope === targetScope
         )!.id);
@@ -708,11 +741,11 @@ describe('pendingQueueV2 durable outbox', () => {
         ]);
     });
 
-    it('persists and replays whitespace-distinct opaque local ids as separate rows', () => {
+    it('persists and replays whitespace-distinct opaque local ids as separate rows', async () => {
         const sessionId = 's_outbox_opaque_ids';
         const localIds = [' request-1', 'request-1 '] as const;
         for (const localId of localIds) {
-            savePendingOutboxMessage({
+            (await savePendingOutboxMessage({
                 sessionId,
                 localId,
                 createdAt: 42,
@@ -726,16 +759,16 @@ describe('pendingQueueV2 durable outbox', () => {
                         messageRole: 'user',
                     }),
                 },
-            }, targetScope);
+            }, targetScope));
         }
 
-        expect(loadPendingOutboxForSession(sessionId, targetScope).map((row) => row.localId)).toEqual(localIds);
-        expect(replayPersistedPendingOutboxForSession(sessionId, targetScope)).toEqual(localIds);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope)).map((row) => row.localId)).toEqual(localIds);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, targetScope))).toEqual(localIds);
         expect(storage.getState().sessionPending[sessionId]?.messages.map((message) => message.localId)).toEqual(localIds);
     });
 
-    it('isolates persisted enqueue envelopes by exact server-account scope', () => {
-        savePendingOutboxMessage({
+    it('isolates persisted enqueue envelopes by exact server-account scope', async () => {
+        (await savePendingOutboxMessage({
             sessionId: 's_scoped',
             localId: 'scoped-local',
             createdAt: 42,
@@ -745,15 +778,15 @@ describe('pendingQueueV2 durable outbox', () => {
                 v: 1,
                 body: '{"localId":"scoped-local","content":{"t":"plain","v":{}},"messageRole":"user"}',
             },
-        }, targetScope);
+        }, targetScope));
 
-        expect(loadPendingOutboxForSession('s_scoped', targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession('s_scoped', targetScope))).toEqual([
             expect.objectContaining({
                 localId: 'scoped-local',
                 request: { v: 1, body: expect.any(String) },
             }),
         ]);
-        expect(loadPendingOutboxForSession('s_scoped', otherScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession('s_scoped', otherScope))).toEqual([]);
     });
 
 
@@ -764,8 +797,8 @@ describe('pendingQueueV2 durable outbox', () => {
         const scopeB = { serverId: 'server-b', accountId: 'account-b' } as const;
         const bodyA = JSON.stringify({ localId, content: { t: 'plain', v: { scope: 'A' } }, messageRole: 'user' });
         const bodyB = JSON.stringify({ localId, content: { t: 'plain', v: { scope: 'B' } }, messageRole: 'user' });
-        const save = (scope: typeof scopeA | typeof scopeB, text: string, body: string, operation: 'enqueue' | 'cancel') => {
-            savePendingOutboxMessage({
+        const save = async (scope: typeof scopeA | typeof scopeB, text: string, body: string, operation: 'enqueue' | 'cancel') => {
+            (await savePendingOutboxMessage({
                 sessionId,
                 localId,
                 createdAt: 42,
@@ -773,13 +806,13 @@ describe('pendingQueueV2 durable outbox', () => {
                 operation,
                 rawRecord: { role: 'user', content: { type: 'text', text }, meta: {} },
                 request: { v: 1, body },
-            }, scope);
+            }, scope));
         };
-        save(scopeA, 'A', bodyA, 'enqueue');
-        save(scopeB, 'B', bodyB, 'enqueue');
+        (await save(scopeA, 'A', bodyA, 'enqueue'));
+        (await save(scopeB, 'B', bodyB, 'enqueue'));
 
-        expect(replayPersistedPendingOutboxForSession(sessionId, scopeA)).toEqual([localId]);
-        expect(replayPersistedPendingOutboxForSession(sessionId, scopeB)).toEqual([localId]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scopeA))).toEqual([localId]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, scopeB))).toEqual([localId]);
         const callsA: Array<{ method?: string; body?: string }> = [];
         const callsB: Array<{ method?: string; body?: string }> = [];
         const requestFor = (calls: Array<{ method?: string; body?: string }>) => async (_path: string, init?: RequestInit) => {
@@ -791,10 +824,10 @@ describe('pendingQueueV2 durable outbox', () => {
         expect(callsA).toEqual([{ method: 'POST', body: bodyA }]);
         expect(callsB).toEqual([{ method: 'POST', body: bodyB }]);
 
-        save(scopeA, 'A', bodyA, 'cancel');
-        save(scopeB, 'B', bodyB, 'cancel');
-        replayPersistedPendingOutboxForSession(sessionId, scopeA);
-        replayPersistedPendingOutboxForSession(sessionId, scopeB);
+        (await save(scopeA, 'A', bodyA, 'cancel'));
+        (await save(scopeB, 'B', bodyB, 'cancel'));
+        (await replayPersistedPendingOutboxForSession(sessionId, scopeA));
+        (await replayPersistedPendingOutboxForSession(sessionId, scopeB));
         await retryPendingOutboxOperationV2({ sessionId, localId, outboxScope: scopeA, request: requestFor(callsA) });
         await retryPendingOutboxOperationV2({ sessionId, localId, outboxScope: scopeB, request: requestFor(callsB) });
         expect(callsA).toEqual([{ method: 'POST', body: bodyA }, { method: 'DELETE', body: undefined }]);
@@ -806,16 +839,16 @@ describe('pendingQueueV2 durable outbox', () => {
         const localId = 'same-retry-id';
         const scopeA = { serverId: 'server-a', accountId: 'account-a' } as const;
         const scopeB = { serverId: 'server-b', accountId: 'account-b' } as const;
-        const save = (scope: typeof scopeA | typeof scopeB, text: string) => savePendingOutboxMessage({
+        const save = async (scope: typeof scopeA | typeof scopeB, text: string) => (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
             text,
             rawRecord: { role: 'user', content: { type: 'text', text }, meta: {} },
             request: { v: 1, body: JSON.stringify({ localId, content: { t: 'plain', v: { text } }, messageRole: 'user' }) },
-        }, scope);
-        save(scopeA, 'A');
-        replayPersistedPendingOutboxForSession(sessionId, scopeA);
+        }, scope));
+        (await save(scopeA, 'A'));
+        (await replayPersistedPendingOutboxForSession(sessionId, scopeA));
         let postStarted!: () => void;
         const postStartedGate = new Promise<void>((resolve) => { postStarted = resolve; });
         let releasePost!: () => void;
@@ -832,8 +865,8 @@ describe('pendingQueueV2 durable outbox', () => {
         });
         await postStartedGate;
 
-        save(scopeB, 'B');
-        replayPersistedPendingOutboxForSession(sessionId, scopeB);
+        (await save(scopeB, 'B'));
+        (await replayPersistedPendingOutboxForSession(sessionId, scopeB));
         releasePost();
         await retryA;
 
@@ -842,7 +875,7 @@ describe('pendingQueueV2 durable outbox', () => {
             expect.objectContaining({ localId, text: 'B', pendingOutboxScope: scopeB }),
         ]));
         expect(storage.getState().sessionPending[sessionId]?.messages).toHaveLength(2);
-        expect(loadPendingOutboxForSession(sessionId, scopeB)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, scopeB))).toEqual([
             expect.objectContaining({ localId, text: 'B' }),
         ]);
     });
@@ -852,16 +885,16 @@ describe('pendingQueueV2 durable outbox', () => {
         const blockerLocalId = 'blocker';
         const localId = 'already-settled';
         storage.getState().applySessions([buildSession({ sessionId })]);
-        const save = (candidateLocalId: string) => savePendingOutboxMessage({
+        const save = async (candidateLocalId: string) => (await savePendingOutboxMessage({
             sessionId,
             localId: candidateLocalId,
             createdAt: 42,
             text: candidateLocalId,
             rawRecord: { role: 'user', content: { type: 'text', text: candidateLocalId }, meta: {} },
             request: { v: 1, body: JSON.stringify({ localId: candidateLocalId, content: { t: 'plain', v: {} }, messageRole: 'user' }) },
-        }, targetScope);
-        save(blockerLocalId);
-        save(localId);
+        }, targetScope));
+        (await save(blockerLocalId));
+        (await save(localId));
         storage.getState().upsertPendingMessage(sessionId, {
             id: localId,
             localId,
@@ -909,7 +942,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 return Response.json({ requestedAction: { v: 1, kind: 'enqueue' } });
             },
         });
-        removePendingOutboxMessage(sessionId, localId, targetScope);
+        (await removePendingOutboxMessage(sessionId, localId, targetScope));
         releaseBlocker();
 
         await expect(Promise.all([blocker, target])).resolves.toEqual([{ accepted: true }, { accepted: true }]);
@@ -925,16 +958,16 @@ describe('pendingQueueV2 durable outbox', () => {
         const blockerLocalId = 'direct-blocker';
         const localId = 'direct-settled';
         storage.getState().applySessions([buildSession({ sessionId })]);
-        const save = (candidateLocalId: string) => savePendingOutboxMessage({
+        const save = async (candidateLocalId: string) => (await savePendingOutboxMessage({
             sessionId,
             localId: candidateLocalId,
             createdAt: 42,
             text: candidateLocalId,
             rawRecord: { role: 'user', content: { type: 'text', text: candidateLocalId }, meta: {} },
             request: { v: 1, body: JSON.stringify({ localId: candidateLocalId, content: { t: 'plain', v: {} }, messageRole: 'user' }) },
-        }, targetScope);
-        save(blockerLocalId);
-        save(localId);
+        }, targetScope));
+        (await save(blockerLocalId));
+        (await save(localId));
         let releaseBlocker!: () => void;
         const blockerGate = new Promise<void>((resolve) => { releaseBlocker = resolve; });
         let blockerStarted!: () => void;
@@ -986,7 +1019,7 @@ describe('pendingQueueV2 durable outbox', () => {
             text: 'canonical remains',
             rawRecord: { role: 'user', content: { type: 'text', text: 'canonical remains' }, meta: {} },
         });
-        removePendingOutboxMessage(sessionId, localId, targetScope);
+        (await removePendingOutboxMessage(sessionId, localId, targetScope));
         releaseBlocker();
 
         await expect(Promise.all([blocker, directRejoin])).resolves.toEqual([
@@ -1013,7 +1046,7 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_outbox_unsupported_action';
         const localId = 'unsupported-action';
         storage.getState().applySessions([buildSession({ sessionId })]);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
@@ -1028,8 +1061,8 @@ describe('pendingQueueV2 durable outbox', () => {
                     requestedAction: { v: 1, kind: 'future_action' },
                 }),
             },
-        }, targetScope);
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        }, targetScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         const request = async (): Promise<Response> => {
             throw new Error('unsupported work must not reach provider transport');
         };
@@ -1039,7 +1072,7 @@ describe('pendingQueueV2 durable outbox', () => {
         await expect(retryPendingOutboxOperationV2({ sessionId, localId, outboxScope: targetScope, request }))
             .resolves.toEqual({ accepted: false, terminal: true });
 
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([
             expect.objectContaining({ localId }),
         ]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
@@ -1113,7 +1146,7 @@ describe('pendingQueueV2 durable outbox', () => {
             undefined,
         ]);
         expect(methods).toEqual(['POST', 'DELETE']);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -1192,7 +1225,7 @@ describe('pendingQueueV2 durable outbox', () => {
             isOutboxScopeCurrent: () => true,
             request,
         });
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -1230,7 +1263,7 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_external_handoff_cancel_races_replay_ack';
         const localId = 'external-handoff-cancel-races-replay-ack';
         const rawRecord = { role: 'user' as const, content: { type: 'text' as const, text: 'replayed external handoff' }, meta: {} };
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
@@ -1245,8 +1278,8 @@ describe('pendingQueueV2 durable outbox', () => {
                     deliveryMode: 'external_handoff',
                 }),
             },
-        }, targetScope);
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        }, targetScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         let releasePost!: () => void;
         const postGate = new Promise<void>((resolve) => { releasePost = resolve; });
         let postStarted!: () => void;
@@ -1273,7 +1306,7 @@ describe('pendingQueueV2 durable outbox', () => {
 
         await expect(Promise.all([retry, cancel])).resolves.toEqual([{ accepted: true }, undefined]);
         expect(methods).toEqual(['POST', 'DELETE']);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -1319,7 +1352,7 @@ describe('pendingQueueV2 durable outbox', () => {
             scopedSessionLocalStateKey('session-pending-outbox-v1', targetScope),
             JSON.stringify({ [sessionId]: rows }),
         );
-        expect(replayPersistedPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 localId: 'unknown-operation',
@@ -1413,7 +1446,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 }],
             }),
         );
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         const originalDiagnostic = storage.getState().sessionPending[sessionId]?.messages[0]!;
         storage.getState().removePendingMessage(sessionId, originalDiagnostic.id);
         storage.getState().upsertPendingMessage(sessionId, {
@@ -1427,7 +1460,7 @@ describe('pendingQueueV2 durable outbox', () => {
             text: 'canonical server authority',
             rawRecord: { role: 'user', content: { type: 'text', text: 'canonical server authority' }, meta: {} },
         });
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         const collisionSafeDiagnostic = storage.getState().sessionPending[sessionId]?.messages.find((message) =>
             message.pendingOutboxQuarantineReason !== undefined
         )!;
@@ -1476,7 +1509,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 }],
             }),
         );
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         const syntheticBaseId = storage.getState().sessionPending[sessionId]?.messages[0]!.id;
         storage.getState().removePendingMessage(sessionId, syntheticBaseId);
         storage.getState().upsertPendingMessage(sessionId, {
@@ -1532,7 +1565,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 }],
             }),
         );
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         const discardedId = storage.getState().sessionPending[sessionId]?.messages[0]!.id;
         storage.getState().applyPendingSnapshot(sessionId, {
             messages: [],
@@ -1550,7 +1583,7 @@ describe('pendingQueueV2 durable outbox', () => {
             }],
         });
 
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         let diagnostic = storage.getState().sessionPending[sessionId]?.messages.find((message) =>
             message.pendingOutboxQuarantineReason !== undefined
         )!;
@@ -1637,7 +1670,7 @@ describe('pendingQueueV2 durable outbox', () => {
     it('retires only same-scope enqueue custody after a requested-action update proves server presence', async () => {
         const sessionId = 's_action_update_reconciles_enqueue';
         const localId = 'action-update-reconciles-enqueue';
-        const save = (scope: typeof targetScope | typeof otherScope) => savePendingOutboxMessage({
+        const save = async (scope: typeof targetScope | typeof otherScope) => (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
@@ -1651,9 +1684,9 @@ describe('pendingQueueV2 durable outbox', () => {
                     messageRole: 'user',
                 }),
             },
-        }, scope);
-        save(targetScope);
-        save(otherScope);
+        }, scope));
+        (await save(targetScope));
+        (await save(otherScope));
 
         await updatePendingRequestedActionV2({
             sessionId,
@@ -1663,8 +1696,8 @@ describe('pendingQueueV2 durable outbox', () => {
             request: async () => Response.json({ didUpdate: true }),
         });
 
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
-        expect(loadPendingOutboxForSession(sessionId, otherScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, otherScope))).toEqual([
             expect.objectContaining({ localId, operation: 'enqueue' }),
         ]);
     });
@@ -1680,7 +1713,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 meta: {},
             };
             storage.getState().applySessions([buildSession({ sessionId })]);
-            savePendingOutboxMessage({
+            (await savePendingOutboxMessage({
                 sessionId,
                 localId,
                 createdAt: 42,
@@ -1694,7 +1727,7 @@ describe('pendingQueueV2 durable outbox', () => {
                         messageRole: 'user',
                     }),
                 },
-            }, targetScope);
+            }, targetScope));
             storage.getState().upsertPendingMessage(sessionId, {
                 id: localId,
                 localId,
@@ -1724,7 +1757,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 },
             });
 
-            expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+            expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
             expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
                 expect.objectContaining({
                     localId,
@@ -1753,7 +1786,7 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_action_update_delete_requires_server_proof';
         const localId = 'action-update-delete-requires-server-proof';
         const rawRecord = { role: 'user' as const, content: { type: 'text' as const, text: 'server-proven pending' }, meta: {} };
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
@@ -1768,8 +1801,8 @@ describe('pendingQueueV2 durable outbox', () => {
                     requestedAction: { v: 1, kind: 'enqueue' },
                 }),
             },
-        }, targetScope);
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        }, targetScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
 
         await updatePendingRequestedActionV2({
             sessionId,
@@ -1778,7 +1811,7 @@ describe('pendingQueueV2 durable outbox', () => {
             outboxScope: targetScope,
             request: async () => Response.json({ didUpdate: true }),
         });
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
 
         let failedDeleteCalled = false;
         await expect(deletePendingMessageV2({
@@ -1812,7 +1845,7 @@ describe('pendingQueueV2 durable outbox', () => {
     it('does not retire cancel or newly quarantined custody after a requested-action update', async () => {
         const cancelSessionId = 's_action_update_keeps_cancel';
         const cancelLocalId = 'action-update-keeps-cancel';
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId: cancelSessionId,
             localId: cancelLocalId,
             createdAt: 42,
@@ -1822,8 +1855,8 @@ describe('pendingQueueV2 durable outbox', () => {
                 v: 1,
                 body: JSON.stringify({ localId: cancelLocalId, content: { t: 'plain', v: {} }, messageRole: 'user' }),
             },
-        }, targetScope);
-        markPendingOutboxMessageCancelRequested(cancelSessionId, cancelLocalId, targetScope);
+        }, targetScope));
+        (await markPendingOutboxMessageCancelRequested(cancelSessionId, cancelLocalId, targetScope));
 
         await updatePendingRequestedActionV2({
             sessionId: cancelSessionId,
@@ -1832,13 +1865,13 @@ describe('pendingQueueV2 durable outbox', () => {
             outboxScope: targetScope,
             request: async () => Response.json({ didUpdate: true }),
         });
-        expect(loadPendingOutboxForSession(cancelSessionId, targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession(cancelSessionId, targetScope))).toEqual([
             expect.objectContaining({ localId: cancelLocalId, operation: 'cancel' }),
         ]);
 
         const quarantineSessionId = 's_action_update_keeps_quarantine';
         const quarantineLocalId = 'action-update-keeps-quarantine';
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId: quarantineSessionId,
             localId: quarantineLocalId,
             createdAt: 42,
@@ -1848,7 +1881,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 v: 1,
                 body: JSON.stringify({ localId: quarantineLocalId, content: { t: 'plain', v: {} }, messageRole: 'user' }),
             },
-        }, targetScope);
+        }, targetScope));
         await updatePendingRequestedActionV2({
             sessionId: quarantineSessionId,
             localId: quarantineLocalId,
@@ -1871,7 +1904,7 @@ describe('pendingQueueV2 durable outbox', () => {
                 return Response.json({ didUpdate: true });
             },
         });
-        expect(loadPendingOutboxForSession(quarantineSessionId, targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession(quarantineSessionId, targetScope))).toEqual([
             expect.objectContaining({ localId: quarantineLocalId, operation: 'quarantined' }),
         ]);
     });
@@ -1913,7 +1946,7 @@ describe('pendingQueueV2 durable outbox', () => {
             }),
         );
 
-        expect(replayPersistedPendingOutboxForSession(sessionId, targetScope)).toEqual([
+        expect((await replayPersistedPendingOutboxForSession(sessionId, targetScope))).toEqual([
             enqueueLocalId,
             cancelLocalId,
         ]);
@@ -1996,7 +2029,7 @@ describe('pendingQueueV2 durable outbox', () => {
             }),
         );
 
-        expect(replayPersistedPendingOutboxForSession(sessionId, targetScope)).toEqual([localId]);
+        expect((await replayPersistedPendingOutboxForSession(sessionId, targetScope))).toEqual([localId]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({
                 localId,
@@ -2108,7 +2141,7 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_outbox_cancel_replay';
         const localId = 'cancel-replay-local';
         storage.getState().applySessions([buildSession({ sessionId })]);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
@@ -2119,8 +2152,8 @@ describe('pendingQueueV2 durable outbox', () => {
                 v: 1,
                 body: JSON.stringify({ localId, content: { t: 'plain', v: {} }, messageRole: 'user' }),
             },
-        }, targetScope);
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        }, targetScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         const requests: Array<{ path: string; method?: string }> = [];
 
         await expect(retryPendingOutboxOperationV2({
@@ -2134,7 +2167,7 @@ describe('pendingQueueV2 durable outbox', () => {
         })).resolves.toEqual({ accepted: true });
 
         expect(requests).toEqual([{ path: `/v2/sessions/${sessionId}/pending/${localId}`, method: 'DELETE' }]);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
     });
 
@@ -2142,7 +2175,7 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_outbox_cancel_server_projection';
         const localId = 'cancel-server-projection';
         storage.getState().applySessions([buildSession({ sessionId })]);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 42,
@@ -2150,7 +2183,7 @@ describe('pendingQueueV2 durable outbox', () => {
             rawRecord: { role: 'user', content: { type: 'text', text: 'cancelled row' }, meta: {} },
             operation: 'cancel',
             request: { v: 1, body: JSON.stringify({ localId, content: { t: 'plain', v: {} }, messageRole: 'user' }) },
-        }, targetScope);
+        }, targetScope));
         storage.getState().upsertPendingMessage(sessionId, {
             id: 'ordinary-server-row', localId, createdAt: 42, updatedAt: 42,
             source: 'server_pending', deliveryStatus: 'accepted', pendingDeliveryStatus: 'server_queued',
@@ -2178,11 +2211,11 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_outbox_cancel_direct_projection';
         const localId = 'cancel-direct-projection';
         storage.getState().applySessions([buildSession({ sessionId })]);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId, localId, createdAt: 42, text: 'cancel direct', operation: 'cancel',
             rawRecord: { role: 'user', content: { type: 'text', text: 'cancel direct' }, meta: {} },
             request: { v: 1, body: JSON.stringify({ localId, content: { t: 'plain', v: {} }, messageRole: 'user' }) },
-        }, targetScope);
+        }, targetScope));
         storage.getState().upsertPendingMessage(sessionId, {
             id: 'ordinary-direct-row', localId, createdAt: 42, updatedAt: 42,
             source: 'server_pending', deliveryStatus: 'accepted', pendingDeliveryStatus: 'server_queued',
@@ -2213,7 +2246,7 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_cancel_canonical_cleanup_boundaries';
         const localId = 'cancel-canonical-cleanup-boundaries';
         const rawRecord = { role: 'user' as const, content: { type: 'text' as const, text: 'cancel target' }, meta: {} };
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId,
             localId,
             createdAt: 1,
@@ -2221,8 +2254,8 @@ describe('pendingQueueV2 durable outbox', () => {
             rawRecord,
             operation: 'cancel',
             request: { v: 1, body: JSON.stringify({ localId, content: { t: 'plain', v: rawRecord }, messageRole: 'user' }) },
-        }, targetScope);
-        replayPersistedPendingOutboxForSession(sessionId, targetScope);
+        }, targetScope));
+        (await replayPersistedPendingOutboxForSession(sessionId, targetScope));
         storage.getState().upsertPendingMessage(sessionId, {
             id: 'ordinary-unscoped-canonical', localId, createdAt: 2, updatedAt: 2,
             source: 'server_pending', deliveryStatus: 'accepted', pendingDeliveryStatus: 'server_queued',
@@ -2257,7 +2290,7 @@ describe('pendingQueueV2 durable outbox', () => {
         });
 
         expect(methods).toEqual(['DELETE']);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([]);
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
             expect.objectContaining({ id: 'external-unscoped-canonical', pendingDeliveryStatus: 'external_handoff' }),
             expect.objectContaining({ id: 'quarantine-preserve', pendingOutboxQuarantineReason: 'unsupported_persisted_operation' }),
@@ -2314,7 +2347,7 @@ describe('pendingQueueV2 durable outbox', () => {
         });
 
         expect(requestCalled).toBe(true);
-        expect(loadPendingOutboxForSession(sessionId, targetScope)).toEqual([
+        expect((await loadPendingOutboxForSession(sessionId, targetScope))).toEqual([
             expect.objectContaining({ localId, operation: 'quarantined' }),
         ]);
         expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
@@ -2327,11 +2360,11 @@ describe('pendingQueueV2 durable outbox', () => {
         const sessionId = 's_outbox_cancel_original_retry';
         const localId = 'cancel-original-local';
         storage.getState().applySessions([buildSession({ sessionId })]);
-        savePendingOutboxMessage({
+        (await savePendingOutboxMessage({
             sessionId, localId, createdAt: 42, text: 'must stay cancelled', operation: 'cancel',
             rawRecord: { role: 'user', content: { type: 'text', text: 'must stay cancelled' }, meta: {} },
             request: { v: 1, body: JSON.stringify({ localId, content: { t: 'plain', v: {} }, messageRole: 'user' }) },
-        }, targetScope);
+        }, targetScope));
         const requests: Array<{ path: string; method?: string }> = [];
 
         await expect(enqueuePendingMessageV2({

@@ -23,6 +23,9 @@ type TemporaryThrottleRecoveryLike = Readonly<{
   enable(input: Readonly<{
     sessionId: string;
     issueFingerprint: string;
+    serviceId?: string;
+    profileId?: string | null;
+    groupId?: string | null;
     retryAfterMs?: number | null;
     resetAtMs?: number | null;
   }>): Promise<Readonly<{
@@ -167,6 +170,9 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
     const recovery = await input.temporaryThrottleRecovery.enable({
       sessionId: input.sessionId,
       issueFingerprint: buildTemporaryThrottleIssueFingerprint(decision),
+      serviceId: decision.serviceId,
+      profileId: decision.profileId,
+      groupId: decision.groupId,
       retryAfterMs: decision.retryAfterMs,
       resetAtMs: decision.resetAtMs,
     });

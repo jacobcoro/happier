@@ -77,6 +77,21 @@ const directScrollTopWrites: PhysicalScrollWrite[] = [];
 let scrollMethodActive = false;
 let viewportHeight = 600;
 
+function writePhysicalScroll(element: HTMLElement, top: number): void {
+    const previousTop = element.scrollTop;
+    physicalScrollWrites.push({
+        stack: new Error('real Legend physical scroll write').stack ?? '',
+        top,
+    });
+    scrollMethodActive = true;
+    try {
+        element.scrollTop = top;
+    } finally {
+        scrollMethodActive = false;
+    }
+    if (element.scrollTop !== previousTop) element.dispatchEvent(new Event('scroll'));
+}
+
 function rows(count: number, prefix: string): Row[] {
     return Array.from({ length: count }, (_value, index) => ({
         height: index % 7 === 0 ? 420 : index % 3 === 0 ? 180 : 72,
@@ -315,9 +330,17 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
                 for (const row of rowsInElement) materializedTotal += Number(row.dataset.height ?? 0);
                 let virtualContentHeight = 0;
                 for (const descendant of element.querySelectorAll<HTMLElement>('[style]')) {
+                    // DOM MVCP temporarily pads the content before its new height commits.
+                    // Model that real scroll range so early scrollBy is not falsely clamped.
+                    let padding = 0;
+                    for (let ancestor: HTMLElement | null = descendant; ancestor; ancestor = ancestor.parentElement) {
+                        padding += Number.parseFloat(ancestor.style.paddingTop || '0') || 0;
+                        padding += Number.parseFloat(ancestor.style.paddingBottom || '0') || 0;
+                        if (ancestor === element) break;
+                    }
                     virtualContentHeight = Math.max(
                         virtualContentHeight,
-                        Number.parseFloat(descendant.style.height || '0') || 0,
+                        (Number.parseFloat(descendant.style.height || '0') || 0) + padding,
                     );
                 }
                 return Math.max(element.clientHeight, materializedTotal, virtualContentHeight);
@@ -346,17 +369,7 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
                 const top = typeof options === 'number'
                     ? (y ?? 0)
                     : (options.top ?? this.scrollTop);
-                physicalScrollWrites.push({
-                    stack: new Error('real Legend physical scroll write').stack ?? '',
-                    top,
-                });
-                scrollMethodActive = true;
-                try {
-                    this.scrollTop = top;
-                } finally {
-                    scrollMethodActive = false;
-                }
-                this.dispatchEvent(new Event('scroll'));
+                writePhysicalScroll(this, top);
             },
         });
         Object.defineProperty(HTMLElement.prototype, 'scrollBy', {
@@ -365,7 +378,8 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
                 const delta = typeof options === 'number'
                     ? (y ?? 0)
                     : (options.top ?? 0);
-                this.scrollTo({ top: this.scrollTop + delta });
+                // Native DOM scrollBy does not call the public JS scrollTo method.
+                writePhysicalScroll(this, this.scrollTop + delta);
             },
         });
         vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => (
@@ -386,6 +400,39 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
         vi.unstubAllGlobals();
         resetTranscriptViewportDiagnosticsForTests();
         vi.useRealTimers();
+    });
+
+    it('revokes a pending tail command through the real wheel takeover before its commit', async () => {
+        const Renderer = legendListRenderer.Component;
+        const listRef = React.createRef<TranscriptListShellRef<Row>>();
+        await act(async () => {
+            root.render(<Renderer
+                ref={listRef}
+                data={rows(20, 'cancel-tail')}
+                dataKey="cancel-tail"
+                frame={resolveMainTranscriptListShellFrame({
+                    legendInitialScrollAtEnd: false,
+                    nativeID: 'real-legend-host',
+                    platformOS: 'web',
+                })}
+                keyExtractor={(item: Row) => item.id}
+                renderItem={renderRow}
+                webDomObservation={createWebDomScrollObservation()}
+            />);
+        });
+        await flushLegendWork();
+        const scrollElement = findScrollElement();
+        scrollElement.scrollTo({ top: 120 });
+        await flushLegendWork();
+        physicalScrollWrites.length = 0;
+        const before = scrollElement.scrollTop;
+        await act(async () => {
+            void listRef.current?.scrollToEnd?.({ animated: false });
+            scrollElement.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -100 }));
+        });
+        await flushLegendWork();
+        expect(scrollElement.scrollTop).toBe(before);
+        expect(physicalScrollWrites).toEqual([]);
     });
 
     it('cancels preserved initial-end correction on user takeover while retaining the no-user correction', async () => {
@@ -456,7 +503,7 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
             await Promise.resolve();
         });
         expect(correctionFrames.length).toBeGreaterThan(0);
-        listRef.current!.cancelInitialScrollPreservation();
+        listRef.current!.cancelScroll();
 
         // The second geometry change has armed a fresh preserved-end correction, but its RAF
         // has not run yet. This next event is genuine user movement and must not be interpreted
@@ -782,7 +829,7 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
         expect(takeoverHandoffFrames[0]!.readyAtSchedule).toBe(true);
         hasMaintainIntent = false;
         await act(async () => {
-            listRef.current!.cancelInitialScrollPreservation();
+            listRef.current!.cancelScroll();
             await Promise.resolve();
         });
         physicalScrollWrites.length = 0;
@@ -1535,7 +1582,7 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
         );
         expect(legendMaintainWrites.length).toBeLessThanOrEqual(1);
         expectArmedPhysicalWriteRing();
-        expect(readDiagnostics().physicalWrites.length).toBeLessThanOrEqual(LATE_TAIL_LIBRARY_WRITE_CEILING);
+        expect(readDiagnostics().physicalWrites.length, JSON.stringify(readDiagnostics().physicalWrites)).toBeLessThanOrEqual(LATE_TAIL_LIBRARY_WRITE_CEILING);
         expect(readDiagnostics().writes).toHaveLength(0);
     });
 
@@ -1635,15 +1682,7 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
         expect(
             adapterFrameIndex,
             scheduledFrames.map((frame) => frame.stack).join('\n---\n'),
-        ).toBeGreaterThanOrEqual(0);
-        expect(scheduledFrames.slice(0, adapterFrameIndex).some(
-            (frame) => frame.stack.includes('doMaintainScrollAtEnd'),
-        )).toBe(false);
-
-        const [adapterFrame] = scheduledFrames.splice(adapterFrameIndex, 1);
-        act(() => {
-            adapterFrame?.callback(Date.now());
-        });
+        ).toBe(-1);
 
         expect(readDiagnostics().heldIntents).not.toContainEqual(
             expect.objectContaining({ event: 'residual-write' }),
@@ -1673,6 +1712,7 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
             const nextFrame = scheduledFrames.shift();
             await act(async () => {
                 nextFrame!.callback(Date.now());
+                await vi.runOnlyPendingTimersAsync();
                 await Promise.resolve();
             });
         }
@@ -1832,7 +1872,7 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
         physicalScrollWrites.length = 0;
         directScrollTopWrites.length = 0;
 
-        const remeasuredRows = initialRows.map((row, index) => {
+        let remeasuredRows = initialRows.map((row, index) => {
             if (index === beforeAnchorIndex) return { ...row, height: row.height - 988 };
             if (index === afterAnchorIndex) return { ...row, height: row.height + 988 };
             return row;
@@ -1870,6 +1910,31 @@ describe('Legend transcript renderer real installed-package lifecycle', () => {
         expect(scheduledFrames).toHaveLength(0);
         expect(distanceFromLiveTail(scrollElement)).toBeLessThanOrEqual(1);
         expect(directScrollTopWrites).toHaveLength(0);
+
+        remeasuredRows = [
+            { height: 1_200, id: 'semantic-mvcp-pinned-prepend' },
+            ...remeasuredRows,
+        ];
+        await act(async () => {
+            root.render(render(remeasuredRows));
+            flushResizeObservers();
+            await Promise.resolve();
+        });
+        // Anchor to the real rows, not MVCP's temporary overflow padding.
+        const prependedTailOffset = remeasuredRows.reduce((sum, row) => sum + row.height, 0) - viewportHeight;
+        const prependBoundaryDistances = [Math.abs(prependedTailOffset - scrollElement.scrollTop)];
+        for (let pass = 0; pass < 32 && scheduledFrames.length > 0; pass += 1) {
+            const nextFrame = scheduledFrames.shift()!;
+            await act(async () => {
+                nextFrame.callback(Date.now());
+                await Promise.resolve();
+            });
+            prependBoundaryDistances.push(Math.abs(prependedTailOffset - scrollElement.scrollTop));
+        }
+        expect(
+            Math.max(...prependBoundaryDistances),
+            `Pinned history insertion must not expose new geometry at the old scroll offset: ${JSON.stringify({ prependBoundaryDistances, writes: physicalScrollWrites.map(write => ({ top: write.top, stack: write.stack.split('\n').slice(0, 7) })) })}`,
+        ).toBeLessThanOrEqual(1);
 
         semanticEnd = false;
         const detachedScrollTop = Math.max(

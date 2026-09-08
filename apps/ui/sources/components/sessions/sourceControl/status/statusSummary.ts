@@ -9,6 +9,7 @@ export type ScmStatusSummary = {
     linesAdded: number;
     linesRemoved: number;
     hasLineChanges: boolean;
+    isComplete?: boolean;
     hasAnyChanges: boolean;
 };
 
@@ -35,6 +36,7 @@ export function buildScmStatusSummaryFromSnapshot(snapshot: ScmWorkingSnapshot |
         ahead: snapshot.branch.ahead,
         behind: snapshot.branch.behind,
         changedFiles,
+        ...(snapshot.totals.isComplete === undefined ? {} : { isComplete: snapshot.totals.isComplete }),
         linesAdded,
         linesRemoved,
         hasLineChanges: linesAdded > 0 || linesRemoved > 0,

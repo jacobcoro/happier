@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable } from 'react-native';
+import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { IconAction } from '@/components/ui/buttons/IconAction';
@@ -45,6 +45,8 @@ export const ScmCommitSelectionToggleButton = React.memo((props: ScmCommitSelect
     return (
         <IconAction
             size="sm"
+            // Keep the 28px press target inside row padding with the adjacent 22px overflow footprint.
+            style={Platform.OS === 'web' ? { marginVertical: -3 } : undefined}
             testID={`scm-commit-selection-toggle-${toTestIdSafeValue(props.file.fullPath)}`}
             accessibilityLabel={accessibilityLabel}
             // A file already staged is a control that is ON, which is what the resting fill means.

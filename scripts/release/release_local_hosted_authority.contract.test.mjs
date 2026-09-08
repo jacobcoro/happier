@@ -85,6 +85,32 @@ exit 0
     assert.match(output, /release profile=stable/);
     assert.match(output, /hosted release workflow/i);
     assert.doesNotMatch(commands, /publish-server-runtime|promote-deploy-branch|release upload/);
+
+    writeFileSync(log, '');
+    execFileSync(
+      process.execPath,
+      [
+        'scripts/pipeline/run.mjs',
+        'release',
+        '--confirm', 'release dev to preview and main',
+        '--repository', 'happier-dev/happier',
+        '--deploy-environment', 'preview-and-production',
+        '--deploy-targets', 'ui,server',
+        '--source-sha', AUTHORIZED_DEV_SHA,
+        '--workflow-control-sha', AUTHORIZED_DEV_SHA,
+        '--release-notes-id', '2026-09-07.1',
+        '--allow-dirty', 'true',
+      ],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
+        encoding: 'utf8',
+      },
+    );
+    const combinedCommands = readFileSync(log, 'utf8');
+    assert.match(combinedCommands, /gh workflow run release-preview-and-production\.yml/);
+    assert.doesNotMatch(combinedCommands, /-f environment=/);
+    assert.doesNotMatch(combinedCommands, /-f confirm=/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

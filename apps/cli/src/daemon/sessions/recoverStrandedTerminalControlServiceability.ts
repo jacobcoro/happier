@@ -1,3 +1,4 @@
+import { isPidAliveBySignal } from '@/daemon/processRunState';
 import { buildTerminalHostHandleFromAttachmentMetadata } from '@/agent/runtime/terminal/attachmentMetadata';
 import { evaluateTerminalHostLivenessForRecovery } from '@/integrations/terminalHost/livenessPolicy';
 import type { Credentials } from '@/persistence';
@@ -42,6 +43,19 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
   if (!metadata || readNonEmptyString(metadata.machineId) !== currentMachineId) return null;
 
   const parsedTerminal = SessionTerminalMetadataSchema.safeParse(metadata.terminal);
+  // createSessionMetadata omits terminal when no terminal runtime was requested.
+  if (metadata.terminal === undefined || (parsedTerminal.success && parsedTerminal.data.mode === 'plain')) {
+    if (params.expectedAttachmentId) return incompleteStopSession('attachment_mismatch');
+    const pid = metadata.hostPid;
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) {
+      return incompleteStopSession('missing_topology_proof');
+    }
+    // Only the owning machine can prove this runner absent. The RPC server captures
+    // publisher authority before Stop and fences the inactive transition after this proof.
+    return !isPidAliveBySignal(pid)
+      ? { status: 'stopped' }
+      : incompleteStopSession('tracked_runner_absent');
+  }
   if (!parsedTerminal.success) return null;
   const terminal = parsedTerminal.data;
   const serviceability = terminal.controlServiceabilityV1;
@@ -53,7 +67,6 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
     || !attachmentId
     || (serviceability.state !== 'servable' && serviceability.state !== 'recoverable_unservable')
     || !terminal.mode
-    || terminal.mode === 'plain'
     || (serviceability.retired === true && !expectedAttachmentId)
   ) {
     return null;

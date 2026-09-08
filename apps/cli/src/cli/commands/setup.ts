@@ -9,7 +9,10 @@
  * terminal; this file owns prompting and delegation only.
  */
 
+import { hostname } from 'node:os';
+
 import { AGENT_IDS, type AgentId } from '@happier-dev/agents';
+import { createSetupChoicePrompt, renderSetupWelcome } from '@happier-dev/cli-common/output';
 import {
     resolveTailscaleInstallStrategy,
     type TailscaleStatusSnapshot,
@@ -108,15 +111,21 @@ function describeTailscaleState(reachability: SetupRelayReachability): string {
 
 function printRelayReachabilityIntro(reachability: SetupRelayReachability): void {
     console.log('');
-    console.log('The relay will run here, and your phone has to reach it over the network.');
+    console.log('This installs an additional Happier server on this actual computer or VM.');
+    console.log('`localhost` means this machine; inside a VM, it means the VM, not its host.');
+    console.log('Your phone needs a real route: Tailscale on both devices with Tailscale Serve,');
+    console.log('a server bound to a reachable LAN interface with the firewall permitting it, or HTTPS.');
+    console.log('On a headless VM, a browser on your laptop is not a same-machine browser.');
+    console.log('Your coding agents still run on this computer; only the server placement changes.');
+    console.log('');
     console.log(describeTailscaleState(reachability));
     if (reachability.kind === 'tailnet') {
         console.log('Once it is installed, one command publishes it on your tailnet.');
     } else if (reachability.kind === 'tailscaleNotRunning') {
         console.log('Nothing is behind your tailnet addresses until it is running.');
     } else {
-        console.log('Without it, the relay stays on this computer unless you already have an HTTPS');
-        console.log('address for it.');
+        console.log('Without it, the server stays local unless you configure a reachable LAN listener');
+        console.log('and firewall or give it an HTTPS address.');
     }
     console.log('');
 }
@@ -240,35 +249,37 @@ async function runCliStep(
 }
 
 async function askWhereTheRelayLives(): Promise<SetupRelaySelection> {
-    // Wording reused from the client's own pre-auth screen so the terminal and
-    // the app ask the same question the same way.
+    const setupChoicePrompt = createSetupChoicePrompt({
+        machineName: hostname(),
+        subtitle: 'Connect your devices. Your coding agents run here.',
+        question: 'How would you like to connect your devices?',
+        choices: [
+            { id: 'cloud', key: 'c', label: 'Happier Cloud (recommended)', description: 'No server maintenance', isDefault: true },
+            { id: 'existing', key: 'r', label: 'Existing server', description: 'Address from the Happier app or your administrator' },
+            { id: 'thisComputer', key: 't', label: 'Host on this computer', description: 'Installs an additional server; needs a reachable network route' },
+        ],
+    });
     const choice = await promptMultipleChoice(
-        [
-            '',
-            'Where does your relay live?',
-            '',
-            'Your relay routes messages between your phone and your computers.',
-            'Choose where it lives — you can change this later.',
-            '',
-            '  c) Happier Cloud            Hosted relay — easiest to start with',
-            '  r) A relay I already run',
-            '  t) On this computer',
-            '',
-            'Choose',
-        ].join('\n'),
+        setupChoicePrompt.message,
         [
             { id: 'cloud', keys: ['c', 'cloud', ''], short: 'C' },
             { id: 'existing', keys: ['r', 'relay'], short: 'r' },
             { id: 'thisComputer', keys: ['t', 'this'], short: 't' },
         ] as const,
-        { defaultId: 'cloud', maxAttempts: 3 },
+        {
+            defaultId: 'cloud',
+            maxAttempts: 3,
+            ...(setupChoicePrompt.renderMessage
+                ? { animate: setupChoicePrompt.animate === true, renderMessage: setupChoicePrompt.renderMessage }
+                : {}),
+        },
     );
 
     if (choice === 'cloud') return { kind: 'cloud' };
     if (choice === 'thisComputer') return { kind: 'thisComputer' };
 
-    const url = (await promptInput('Relay URL: ')).trim();
-    if (!url) throw new Error('A relay URL is required to continue. Re-run `happier setup` when you have it.');
+    const url = (await promptInput('Server address from the Happier app or your administrator: ')).trim();
+    if (!url) throw new Error('A server address is required to continue. Re-run `happier setup` when you have it.');
     return { kind: 'existing', url };
 }
 
@@ -396,9 +407,17 @@ export async function handleSetupCliCommand(context: CommandContext): Promise<vo
 
     let plan = await planFor(relaySelection);
 
+    const needsRelayChoice = !relaySelection && !plan.stop && plan.steps.length === 0;
+    if (autonomy === 'interactive' && !needsRelayChoice && !plan.steps.some((step) => step.kind === 'alreadyConfigured')) {
+        console.log(renderSetupWelcome({
+            machineName: hostname(),
+            subtitle: 'Connect your devices. Your coding agents run here.',
+        }));
+    }
+
     // The one question setup owns. A plan that stops has already said why, so
     // asking here would be asking someone who is not there.
-    if (!relaySelection && !plan.stop && plan.steps.length === 0) {
+    if (needsRelayChoice) {
         relaySelection = await askWhereTheRelayLives();
         plan = await planFor(relaySelection);
     }

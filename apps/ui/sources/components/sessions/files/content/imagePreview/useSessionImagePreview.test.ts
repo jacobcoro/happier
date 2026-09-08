@@ -74,11 +74,12 @@ describe('useSessionImagePreview', () => {
             return { ok: true, name: 'image.png', sizeBytes: 2_700_000 };
         });
 
+        let revision = 'sha-1';
         const hook = await renderHook(() => useSessionImagePreview({
             sessionId: 'session-1',
             filePath: '.happier/uploads/generated/message/image.png',
             enabled: true,
-            cacheKey: 'sha-1',
+            cacheKey: revision,
             mimeType: 'image/png',
             sizeBytes: 2_700_000,
         }));
@@ -94,5 +95,11 @@ describe('useSessionImagePreview', () => {
         expect(sessionReadFile).not.toHaveBeenCalled();
         expect(downloadDaemonSessionFileToDestination).toHaveBeenCalledTimes(1);
         expect(createObjectURL).toHaveBeenCalledTimes(1);
+
+        revision = 'sha-2';
+        createObjectURL.mockReturnValueOnce('blob:happier-preview-2');
+        await hook.rerender();
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'loaded', uri: 'blob:happier-preview-2' }));
+        expect(downloadDaemonSessionFileToDestination).toHaveBeenCalledTimes(2);
     });
 });

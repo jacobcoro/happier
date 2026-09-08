@@ -317,6 +317,7 @@ export function buildObservedFailureMemberRuntimeState(input: Readonly<{
   existing: ConnectedServiceAuthGroupMemberRuntimeState | null;
   policy: ConnectedServiceAuthGroupPolicyV1;
   reason: string;
+  limitCategory?: string | null;
   retryAtMs: number | null;
   planType: string | null | undefined;
   observedAtMs: number;
@@ -335,6 +336,16 @@ export function buildObservedFailureMemberRuntimeState(input: Readonly<{
     lastObservedAtMs: input.observedAtMs,
     ...(input.planType ? { lastObservedPlanType: input.planType } : {}),
   };
+  if (input.reason === 'permission_denied' && input.limitCategory === 'plan_invalid') {
+    return {
+      ...state,
+      planUnavailableUntilMs: resolveAuthFailureRetryAtMs({
+        policy: input.policy,
+        retryAtMs: input.retryAtMs,
+        observedAtMs: input.observedAtMs,
+      }),
+    };
+  }
   switch (input.reason) {
     case 'usage_limit':
       return { ...state, quotaExhaustedUntilMs: resolveLimiterRetryAtMs(input.retryAtMs) };

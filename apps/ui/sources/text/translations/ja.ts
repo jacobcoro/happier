@@ -2143,6 +2143,7 @@ export const ja: TranslationStructure = {
         title: "Happier 実行の指示",
         subtitle: "オフにすると、ネイティブ優先ルーティングと Happier 実行の仕組みがコーディングエージェントのシステムプロンプトから削除されます。",
       },
+      notifyParentOnCompletion: { title: '実行完了時に親へ通知', subtitle: '親エージェントに構造化された完了イベントを送信します。' },
       characterBudget: {
         title: "カスタムルールの文字数上限",
         subtitle: ({ value }: { value: string }) => `${value} 文字`,
@@ -2768,6 +2769,28 @@ localTailscale: {
   },
 
   connectedServices: {
+      subscription: {
+          title: "サブスクリプション",
+          currentPeriod: "現在の期間",
+          renewal: "更新",
+          renewalOn: "オン",
+          renewalOff: "オフ",
+          renewalUnknown: "不明",
+          renews: ({ date }: { date: string }) => `${date}に更新`,
+          ends: ({ date }: { date: string }) => `${date}に終了`,
+          renewsInDays: ({ days }: { days: number }) => `${days}日後に更新`,
+          endsInDays: ({ days }: { days: number }) => `${days}日後に終了`,
+          periodEnds: ({ date }: { date: string }) => `現在の期間は${date}に終了`,
+          period: ({ start, end }: { start: string; end: string }) => `${start} – ${end}`,
+          periodStarted: ({ date }: { date: string }) => `${date}に開始`,
+          accessUntil: ({ date }: { date: string }) => `${date}までアクセス可能`,
+          checked: ({ time }: { time: string }) => `${time}に確認`,
+          lastKnown: ({ summary }: { summary: string }) => `前回の情報：${summary}`,
+          unavailable: "サブスクリプションの詳細を取得できません",
+          refreshFailed: "サブスクリプションの詳細を更新できませんでした。前回取得した情報を表示しています。",
+          outdated: "サブスクリプションの詳細が古い可能性があります。",
+          none: "サブスクリプションなし",
+      },
     fallbackName: "連携サービス",
     serviceNames: {
       claudeSubscription: "Claude サブスクリプション",
@@ -3285,6 +3308,8 @@ localTailscale: {
         membersSubtitle: ({ enabled, total }: { enabled: number; total: number }) => `${enabled}/${total} 有効`,
         optionsTitle: "オプション",
         autoSwitchTitle: "自動フォールバック",
+        autoQuotaResetTitle: "クォータリセットを自動的に使用",
+        autoQuotaResetSubtitle: "プール内に利用可能なアカウントがなく、使い切ったクォータをリセットできる場合にのみ、保存されたリセットを消費します。初期設定はオフです。",
         autoSwitchEnabledSubtitle: "アクティブなアカウントに回復が必要なとき、別のメンバーへ切り替えます。",
         autoSwitchDisabledSubtitle: "手動で切り替えるまでアクティブなメンバーを使い続けます。",
         strategyTitle: "選択戦略",
@@ -3825,6 +3850,8 @@ localTailscale: {
       readySubtitle: "ターンが終了したときにローカル通知を表示します",
       readyPreviewTitle: "準備完了メッセージのプレビュー",
       readyPreviewSubtitle: "このデバイスの準備完了通知に最新のアシスタントメッセージを含めます",
+      requestPreviewTitle: "リクエストのプレビュー",
+      requestPreviewSubtitle: "許可が必要なコマンド、質問、回答の選択肢を含めます。ロック画面に表示される場合があります。",
       permissionRequestsTitle: "権限リクエスト",
       permissionRequestsSubtitle: "セッションが承認を必要とするときにローカル通知を表示します",
       userActionsTitle: "操作リクエスト",
@@ -3972,6 +3999,8 @@ localTailscale: {
       readySubtitle: "ターンが終了し、エージェントがコマンドを待っているときに送信します",
       readyPreviewTitle: "準備完了メッセージのプレビュー",
       readyPreviewSubtitle: "この webhook の準備完了通知に最新のアシスタントメッセージを含めます",
+      requestPreviewTitle: "リクエストのプレビュー",
+      requestPreviewSubtitle: "この Webhook のデータに、許可が必要なコマンド、質問、回答の選択肢を含めます。",
       permissionRequestsTitle: "権限リクエスト",
       permissionRequestsSubtitle: "セッションが承認待ちでブロックされているときに送信します",
       userActionsTitle: "操作リクエスト",
@@ -4000,6 +4029,10 @@ localTailscale: {
         title: "準備完了メッセージのプレビュー",
         subtitle: "準備完了ターンのプッシュ通知に最新のアシスタントメッセージ本文を含めます",
       },
+      requestPreview: {
+          title: "リクエストのプレビュー",
+          subtitle: "許可が必要なコマンド、質問、回答の選択肢を含めます。ロック画面に表示される場合があります。",
+      },
       permissionRequests: {
         title: "権限リクエスト",
         subtitle:
@@ -4024,6 +4057,15 @@ localTailscale: {
       readyFallbackBody: "ターンが終了しました。続行するにはセッションを開いてください。",
       permissionFallbackBody: "承認が必要です。",
       userActionFallbackBody: "このセッションには入力が必要です。",
+      requestLabels: {
+          command: "コマンド",
+          file: "ファイル",
+          selectOne: "1 つ選択",
+          selectMultiple: "複数選択",
+          customAnswer: "自由回答が可能",
+          localMessages: "ローカルメッセージ",
+          remoteMessages: "リモートメッセージ",
+      },
     },
     channels: {
       default: "デフォルト",
@@ -5322,6 +5364,16 @@ localTailscale: {
       railScrollDownA11y: "ナビゲーションを下にスクロール",
     },
     usageLimitRecovery: {
+        overloadTitle: "モデルが過負荷です",
+        overloadWaiting: "再試行を待機中。",
+        overloadDispatching: "再試行中。",
+        overloadAwaiting: "モデルの応答を待っています。",
+        overloadStopped: "自動再試行を停止しました。準備ができたら再試行できます。",
+        overloadExhausted: "自動再試行の上限に達しました。手動で再試行できます。",
+        overloadOffline: "再試行の状態を確認するにはセッションのマシンに再接続してください。",
+        stopRetrying: "再試行を停止",
+        overloadCountdown: ({ seconds, attempt }: { seconds: number; attempt: number }) => `モデルが過負荷です — ${seconds}秒後に再試行 · ${attempt}回目`,
+        overloadAttempt: ({ attempt }: { attempt: number }) => `${attempt}回目`,
       title: "使用制限に達しました",
       readyTitle: "使用制限がリセットされました",
       resetBody: ({ time }: { time: string }) =>
@@ -7224,6 +7276,8 @@ localTailscale: {
   },
 
   files: {
+            revealInFiles: "ファイルで表示",
+            openChanges: "変更を開く",
     searchPlaceholder: "ファイルを検索...",
     clearSearchA11y: "検索をクリア",
     createFileA11y: "ファイルを作成",
@@ -7475,6 +7529,10 @@ localTailscale: {
       noFilesInProject: "プロジェクトにファイルがありません",
       repositoryFolderLoadFailed: "フォルダを読み込めません",
       repositoryCollapseAll: "すべて折りたたむ",
+    commitCreated: "コミットを作成しました",
+    commitRefreshFailed: ({ sha }: { sha: string }) => `コミット ${sha} は作成されましたが、リポジトリの更新に失敗しました。ソース管理の状態を更新するため、再試行してください。`,
+    refreshingRepository: "リポジトリの状態を更新中…",
+    retryRefresh: "更新を再試行",
     sourceControlOperationsLog: {
       title: "最近のソース管理操作",
       allSessions: "すべてのセッション",
@@ -7490,8 +7548,11 @@ localTailscale: {
       reviewNoMatches: "一致するものがありません",
       reviewLargeDiffOneAtATime: "大きな差分を検出しました。スクロールに応じて差分を読み込みます。",
       reviewDiffRequestFailed: "差分を読み込めません",
+      reviewPreviousHunk: "前の変更箇所",
+      reviewNextHunk: "次の変更箇所",
       reviewUnableToLoadDiff: "差分を読み込めません",
       tryDifferentTerm: "別の検索語を試してください",
+      previousSearchResults: "前の検索結果",
       searchResults: ({ count }: { count: number }) => `検索結果 (${count})`,
       projectRoot: "プロジェクトルート",
     stagedChanges: ({ count }: { count: number }) =>
@@ -7513,7 +7574,9 @@ localTailscale: {
         "編集中にこのファイルがディスク上で変更されました。下書きは変更していません。保存する前に最新のファイルを確認してください。",
       selectionFailed: "選択を更新できませんでした",
       openReviewCommentsFailed: "レビューコメントを開けませんでした",
-        reviewComments: {
+        reviewPreviousFile: "前のファイル",
+                  reviewNextFile: "次のファイル",
+                  reviewComments: {
           title: ({ count }: { count: number }) => `レビューコメント (${count})`,
           placeholder: "レビューコメントを追加…",
           jump: "ジャンプ",
@@ -7523,6 +7586,7 @@ localTailscale: {
           modalSubtitle: "次のメッセージで送信するコメントを確認します。",
           modalSummary: ({ included, count }: { included: number; count: number }) =>
             `${count} 件中 ${included} 件を次のプロンプトに選択中`,
+          goToComposer: 'メッセージ入力へ',
           detachOrDiscardTitle: "レビューコメントを外しますか？",
           detachOrDiscardBody:
             "切り離すとコメントは保存したまま次のプロンプトから除外されます。破棄すると削除されます。",
@@ -7590,6 +7654,8 @@ localTailscale: {
       combined: "統合",
     },
     fileActions: {
+      selectEntireFileForCommit: 'ファイル全体をコミット対象に選択',
+      selectLines: '行を選択',
       selectForCommit: "コミット対象に選択",
       selectFilesToCommit: "コミットするファイルを選択",
       stageFile: "ファイルをステージ",
@@ -7607,6 +7673,9 @@ localTailscale: {
     },
 	    toolbar: {
 	      changedFiles: "変更されたファイル",
+	      projectFiles: "プロジェクト",
+	      allFiles: "すべてのファイル",
+	      projectFilesUnavailable: "ここではプロジェクトの絞り込みを利用できません。すべてのファイルを表示しています。",
 	      hiddenFiles: "隠しファイルを表示",
 	      details: "詳細",
 	      upload: "アップロード",

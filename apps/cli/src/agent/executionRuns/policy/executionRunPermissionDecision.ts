@@ -70,9 +70,20 @@ export function resolveExecutionRunPermissionDecision(args: Readonly<{
 export function createExecutionRunPermissionHandler(args: Readonly<{
   permissionMode: string;
   backendId: string;
+  interactiveHandler?: AcpPermissionHandler;
 }>): AcpPermissionHandler {
   return {
-    async handleToolCall(_toolCallId, toolName, input) {
+    async handleToolCall(toolCallId, toolName, input) {
+      if (
+        permissionModeForExecutionRunPolicy(args.permissionMode) === 'default'
+        && !shouldAlwaysApproveExecutionRunTool(toolName)
+        && isExecutionRunWriteLikeToolName(toolName)
+      ) {
+        if (!args.interactiveHandler) return { decision: 'denied' };
+        return args.interactiveHandler.handleToolCall(toolCallId, toolName, input, {
+          permissionMode: permissionModeForExecutionRunPolicy(args.permissionMode),
+        });
+      }
       return {
         decision: resolveExecutionRunPermissionDecision({
           permissionMode: args.permissionMode,
@@ -81,6 +92,9 @@ export function createExecutionRunPermissionHandler(args: Readonly<{
           input,
         }),
       };
+    },
+    cancelPendingRequest(requestId, reason) {
+      return args.interactiveHandler?.cancelPendingRequest?.(requestId, reason) ?? false;
     },
   };
 }

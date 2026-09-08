@@ -80,7 +80,8 @@ export type ActivityNotificationEvent =
   }>
   | Readonly<{
     topic: 'connected_service_quota_recovered';
-    sessionId: string;
+    sessionId?: string;
+    recoveryReason?: 'automatic_quota_reset';
     sessionTitle?: string | null;
     serviceId: string;
     serviceDisplayName?: string | null;

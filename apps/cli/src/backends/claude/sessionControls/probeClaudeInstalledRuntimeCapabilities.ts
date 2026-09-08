@@ -70,6 +70,7 @@ type ProbeClaudeCli = (params: Readonly<{
   args: readonly string[];
   cwd: string;
   timeoutMs: number;
+  processEnv?: NodeJS.ProcessEnv;
 }>) => Promise<string | null>;
 
 function reportsUnknownEffortValue(output: string, value: string): boolean {
@@ -81,15 +82,17 @@ async function probeClaudeCli(params: Readonly<{
   args: readonly string[];
   cwd: string;
   timeoutMs: number;
+  processEnv?: NodeJS.ProcessEnv;
 }>): Promise<string | null> {
   const timeoutMs = Math.max(250, params.timeoutMs);
+  const processEnv = params.processEnv ?? process.env;
 
   let command: string;
   let args: string[];
   let windowsVerbatimArguments: boolean | undefined;
 
   try {
-    const launch = requireProviderCliLaunchSpec('claude');
+    const launch = requireProviderCliLaunchSpec('claude', { processEnv });
     const launchArgs = [...launch.args, ...params.args];
     if (isClaudeCliJavaScriptFile(launch.resolvedPath)) {
       const runtimeExecutable = await requireJavaScriptRuntimeExecutable({
@@ -99,7 +102,7 @@ async function probeClaudeCli(params: Readonly<{
       const invocation = resolveWindowsCommandInvocation({
         command: runtimeExecutable,
         args: [launch.resolvedPath, ...params.args],
-        env: process.env,
+        env: processEnv,
       });
       command = invocation.command;
       args = [...invocation.args];
@@ -108,7 +111,7 @@ async function probeClaudeCli(params: Readonly<{
       const invocation = resolveWindowsCommandInvocation({
         command: launch.command,
         args: launchArgs,
-        env: process.env,
+        env: processEnv,
       });
       command = invocation.command;
       args = [...invocation.args];
@@ -132,7 +135,7 @@ async function probeClaudeCli(params: Readonly<{
 
     const child = spawn(command, args, {
       cwd: params.cwd,
-      env: { ...process.env, CI: '1' },
+      env: { ...processEnv, CI: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
@@ -197,7 +200,7 @@ type InstalledRuntimeCapabilitiesProbeOutcome = Readonly<{
  * separate catalog prerequisite at the option/launch resolver.
  */
 async function runInstalledRuntimeCapabilitiesProbe(
-  params: Readonly<{ cwd: string; timeoutMs: number }>,
+  params: Readonly<{ cwd: string; timeoutMs: number; processEnv?: NodeJS.ProcessEnv }>,
   probe: ProbeClaudeCli,
 ): Promise<InstalledRuntimeCapabilitiesProbeOutcome> {
   const runProbeFailClosed = (args: readonly string[]) => probe({ args, ...params }).catch(() => null);
@@ -255,8 +258,8 @@ export function resetClaudeInstalledRuntimeCapabilitiesCacheForTests(): void {
  * same path (`claude update`, an npm reinstall, a managed-tool swap), which a path-only key would
  * miss for the whole TTL.
  */
-export function resolveInstalledClaudeCliIdentity(): string | null {
-  const launch = resolveProviderCliLaunchSpec('claude');
+export function resolveInstalledClaudeCliIdentity(processEnv: NodeJS.ProcessEnv = process.env): string | null {
+  const launch = resolveProviderCliLaunchSpec('claude', { processEnv });
   if (!launch) return null;
   try {
     const stats = statSync(launch.resolvedPath);
@@ -289,14 +292,14 @@ export function resolveInstalledClaudeCliIdentity(): string | null {
  * neither the cache nor the de-dupe has a second reader there.
  */
 export async function probeClaudeInstalledRuntimeCapabilities(
-  params: Readonly<{ cwd: string; timeoutMs: number }>,
+  params: Readonly<{ cwd: string; timeoutMs: number; processEnv?: NodeJS.ProcessEnv }>,
   probe: ProbeClaudeCli = probeClaudeCli,
   options: Readonly<{
-    resolveInstalledCliIdentity?: () => string | null;
+    resolveInstalledCliIdentity?: (processEnv?: NodeJS.ProcessEnv) => string | null;
     nowMs?: () => number;
   }> = {},
 ): Promise<ClaudeInstalledRuntimeCapabilities> {
-  const identity = (options.resolveInstalledCliIdentity ?? resolveInstalledClaudeCliIdentity)();
+  const identity = (options.resolveInstalledCliIdentity ?? resolveInstalledClaudeCliIdentity)(params.processEnv);
   if (identity === null) return (await runInstalledRuntimeCapabilitiesProbe(params, probe)).capabilities;
 
   const nowMs = options.nowMs ?? Date.now;

@@ -77,6 +77,26 @@ function createGroupResponse() {
 }
 
 describe('apiConnectedServiceAuthGroupsV3', () => {
+    it('negotiates quota-reset policy visibility for both reads and mutations', async () => {
+        mockServerConfig();
+        vi.stubGlobal('fetch', vi.fn(async (_input: unknown, init?: RequestInit) => {
+            const group = createGroupResponse().group;
+            const policy = new Headers(init?.headers).get('accept') === 'application/json; happier-connected-service-auto-quota-reset=1'
+                ? { ...group.policy, autoUseQuotaResetsWhenExhausted: true }
+                : group.policy;
+            return { ok: true, status: 200, json: async () => init?.method === 'PATCH'
+                ? { group: { ...group, policy } }
+                : { groups: [{ ...group, policy }] } };
+        }));
+        const api = await import('./apiConnectedServiceAuthGroupsV3');
+        const groups = await api.listConnectedServiceAuthGroupsV3(credentials, { serviceId: 'openai-codex' });
+        expect(groups[0]?.policy.autoUseQuotaResetsWhenExhausted).toBe(true);
+        const updated = await api.patchConnectedServiceAuthGroupV3(credentials, {
+            serviceId: 'openai-codex', groupId: 'primary', patch: { displayName: 'Renamed' },
+        });
+        expect(updated.policy.autoUseQuotaResetsWhenExhausted).toBe(true);
+    });
+
     it('lists connected-service auth groups through the v3 route', async () => {
         mockServerConfig();
         const fetchMock = vi.fn(async (input: unknown) => {

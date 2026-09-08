@@ -59,7 +59,11 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'automations.form.schedule.manualTitle',
         'settingsSession.sessionList.headerIdentityDisplayAvatarTitle',
     ]),
-    it: new Set(['settingsSession.sessionList.headerIdentityDisplayAvatarTitle']),
+    it: new Set([
+        // "File" is the standard Italian computing noun, not an untranslated fallback.
+        'notifications.activity.requestLabels.file',
+        'settingsSession.sessionList.headerIdentityDisplayAvatarTitle',
+    ]),
     pt: new Set([
         'agentInput.suggestionGroups.plugins',
         'automations.form.schedule.manualTitle',

@@ -85,6 +85,20 @@ Current scope:
 - GitLab and Bitbucket repository creation are not currently supported from Happier.
 - Publishing is explicit; Happier does not create a repository, remote, commit, or push without a user action.
 
+## Commit created, refresh failed
+
+<Callout type="info">
+  This recovery flow describes the current development build and is unreleased.
+</Callout>
+
+If a commit succeeds but the following status or history refresh fails, Happier
+keeps the commit's SHA and clears the selection consumed by that commit. The
+**Commit created** message distinguishes the completed commit from the failed
+refresh.
+
+Choose **Retry refresh** to reload repository status and history. This retries
+the read operation; it does not create another commit.
+
 ## Remote operations
 
 The remote-actions area covers routine network operations without leaving the session.

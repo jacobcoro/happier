@@ -15,35 +15,12 @@ import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFrom
 import { toTestIdSafeValue } from '../../src/testkit/uiE2e/testIdSafeValue';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
+import { selectRepositoryAllFiles } from '../../src/testkit/uiE2e/repositoryTreeVisibility';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
 test.use({ acceptDownloads: true });
-
-function collectBrowserDiagnostics(params: Readonly<{ page: Page }>): () => string {
-  const pageConsole: string[] = [];
-  const pageErrors: string[] = [];
-  const requestFailures: string[] = [];
-  const responseErrors: string[] = [];
-
-  params.page.on('console', (msg) => pageConsole.push(`[${msg.type()}] ${msg.text()}`));
-  params.page.on('pageerror', (err) => pageErrors.push(String(err)));
-  params.page.on('requestfailed', (request) => {
-    const failure = request.failure();
-    requestFailures.push(`${request.method()} ${request.url()} ${failure ? `-> ${failure.errorText}` : ''}`.trim());
-  });
-  params.page.on('response', (response) => {
-    const status = response.status();
-    if (status >= 400) responseErrors.push(`${status} ${response.request().method()} ${response.url()}`);
-  });
-
-  return () =>
-    `# Browser diagnostics\n\n` +
-    `## Console\n\n${pageConsole.length ? pageConsole.join('\n') : '(none)'}\n\n` +
-    `## Page errors\n\n${pageErrors.length ? pageErrors.join('\n') : '(none)'}\n\n` +
-    `## Request failures\n\n${requestFailures.length ? requestFailures.join('\n') : '(none)'}\n\n` +
-    `## Response errors\n\n${responseErrors.length ? responseErrors.join('\n') : '(none)'}\n`;
-}
 
 function rightPaneLocator(page: Page) {
   return page.getByTestId('multi-pane-right-docked').or(page.getByTestId('multi-pane-right-overlay'));
@@ -179,6 +156,7 @@ async function expectFilesToolbarPrimaryOrOverflowAction(rightPane: Locator, act
 async function waitForUploadToComplete(params: Readonly<{
   rightPane: Locator;
   uploadedPath: string;
+  phase: string;
 }>): Promise<void> {
   const uploadStatus = params.rightPane.getByTestId('repository-tree-upload-status');
   const uploadedRow = params.rightPane.getByTestId(`repository-tree-row-${toTestIdSafeValue(params.uploadedPath)}`);
@@ -186,15 +164,15 @@ async function waitForUploadToComplete(params: Readonly<{
   await expect
     .poll(
       async () => (await uploadStatus.count()) > 0 || (await uploadedRow.count()) > 0,
-      { timeout: 60_000 },
+      { message: `wait for ${params.phase} upload to start or appear in the repository tree`, timeout: 60_000 },
     )
     .toBe(true);
 
   if ((await uploadStatus.count()) > 0) {
-    await expect(uploadStatus).toHaveCount(0, { timeout: 180_000 });
+    await expect(uploadStatus, `${params.phase} upload status should finish`).toHaveCount(0, { timeout: 180_000 });
   }
 
-  await expect(uploadedRow).toHaveCount(1, { timeout: 120_000 });
+  await expect(uploadedRow, `${params.phase} upload should appear at ${params.uploadedPath}`).toHaveCount(1, { timeout: 120_000 });
 }
 
 test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
@@ -351,6 +329,7 @@ test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
       });
 
       await expect(rightPane.getByTestId('session-rightpanel-surface-files')).toHaveCount(1, { timeout: 120_000 });
+      await selectRepositoryAllFiles({ rightPane, timeoutMs: 120_000 });
       try {
         await expectFilesToolbarPrimaryOrOverflowAction(rightPane, 'repository-tree-upload', 180_000);
       } catch (error) {
@@ -385,7 +364,7 @@ test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
 
       const uploadedPath = 'upload-source.txt';
       try {
-        await waitForUploadToComplete({ rightPane, uploadedPath });
+        await waitForUploadToComplete({ rightPane, uploadedPath, phase: 'initial file' });
       } catch (error) {
         await writeFile(
           resolve(join(testDir, 'upload-input-state.json')),
@@ -448,7 +427,7 @@ test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
       await page.getByTestId('upload-conflicts-keep-both').click();
 
       await expect(rightPane.getByTestId(`repository-tree-row-${toTestIdSafeValue(conflictPath)}`)).toHaveCount(1, { timeout: 120_000 });
-      await waitForUploadToComplete({ rightPane, uploadedPath: keepBothPath });
+      await waitForUploadToComplete({ rightPane, uploadedPath: keepBothPath, phase: 'keep-both conflict' });
 
       await expect.poll(async () => await readFile(resolve(join(workspaceDir, conflictPath)), 'utf8')).toBe('existing target\n');
       await expect.poll(async () => await readFile(resolve(join(workspaceDir, keepBothPath)), 'utf8')).toBe('conflicting upload\n');
@@ -469,7 +448,7 @@ test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
         expect(zipStats.size).toBeGreaterThan(0);
       }
     } catch (error) {
-      throw new Error(`${String(error)}\n\n${browserDiagnostics()}`);
+      throw appendBrowserDiagnostics(error, browserDiagnostics());
     } finally {
       await runDaemon?.stop().catch(() => {});
     }

@@ -321,6 +321,12 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
         description: 'Include assistant message text in local ready notifications on this device',
         storageScope: 'local',
     },
+    localNotificationsShowRequestMessageText: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Include permission commands and questions in local request notifications on this device',
+        storageScope: 'local',
+    },
     localNotificationsShowPendingPermissionRequests: {
         schema: z.boolean(),
         default: true,

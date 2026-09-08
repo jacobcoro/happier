@@ -2,7 +2,7 @@ import * as React from 'react';
 import {
     createBottomTabNavigator,
 } from '@react-navigation/bottom-tabs';
-import { NavigationContainer, NavigationIndependentTree, useIsFocused } from '@react-navigation/native';
+import { NavigationContainer, NavigationIndependentTree, useIsFocused, type TabNavigationState } from '@react-navigation/native';
 import { Platform, StyleSheet, View, type ViewProps } from 'react-native';
 
 import { usePersistSessionLastMobileSurface } from '@/sync/domains/state/storage';
@@ -91,6 +91,18 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
                                 <SessionCockpitSceneActivityBoundary surface={surface}>
                                     <SessionCockpitSurfaceNavigationProvider
                                         value={{
+                                            returnToPreviousSurface: () => {
+                                                const state: TabNavigationState<SessionCockpitTabParamList> = navigation.getState();
+                                                const previousKey = state.history[state.history.length - 2]?.key;
+                                                const previousRoute = state.routes.find((route) => route.key === previousKey);
+                                                if (previousRoute) {
+                                                    navigation.goBack();
+                                                    persistSessionSurface(previousRoute.name);
+                                                } else {
+                                                    navigation.navigate('chat');
+                                                    persistSessionSurface('chat');
+                                                }
+                                            },
                                             switchSurface: (targetSurface) => {
                                                 navigation.navigate(targetSurface);
                                                 persistSessionSurface(targetSurface);

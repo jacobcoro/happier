@@ -104,12 +104,12 @@ export const agent = {
   getAcpForkContinuationHandler: async () => (await import('@/backends/codex/acp/forkContinuationHandler')).codexAcpForkContinuationHandler,
   getProviderNativeForkHandler: async () => (await import('@/backends/codex/appServer/providerNativeForkHandler')).codexAppServerProviderNativeForkHandler,
   needsAccountSettingsForProbes: true,
-  resolveModelsProbeVariant: ({ accountSettings, connectedServices }) => {
+  resolveModelsProbeVariant: ({ accountSettings, connectedServices, processEnv }) => {
     // Keep dynamic model probes cache-partitioned by runtime flavor (appServer vs ACP vs MCP).
     const backendMode =
       resolveCodexSessionBackendMode({ metadata: null, accountSettings: accountSettings ?? null }) ?? 'appServer';
     // Speed eligibility is auth-dependent; include auth method to avoid stale modelOptions.
-    const authMethod = readCodexEnvironmentAuthState().method ?? 'unknown';
+    const authMethod = readCodexEnvironmentAuthState(processEnv).method ?? 'unknown';
     return `codex:${backendMode}:${authMethod}:${resolveCodexProbeConnectedServicesIdentity(connectedServices)}`;
   },
   getPreflightSessionControlsProbeAdapter: async () =>

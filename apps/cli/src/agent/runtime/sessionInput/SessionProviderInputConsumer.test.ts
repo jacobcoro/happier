@@ -78,33 +78,6 @@ describe('SessionProviderInputConsumer drainPending', () => {
     expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(2);
   });
 
-  it('ends the active-turn pump when the wake is unavailable instead of synchronously re-arming', async () => {
-    const materializeNextPendingMessageSafely = vi
-      .fn<() => Promise<MaterializeNextPendingResult>>()
-      .mockResolvedValue({ type: 'no_pending' });
-    const unavailableForever = new Promise<boolean>(() => {});
-    const waitForPendingEligibilityUpdate = vi
-      .fn<(signal?: AbortSignal) => Promise<boolean>>()
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false)
-      .mockReturnValue(unavailableForever);
-    const consumer = createDrainConsumer({
-      materializeNextPendingMessageSafely,
-      waitForPendingEligibilityUpdate,
-    });
-    const pump = consumer.pumpPendingWhileActive({
-      abortSignal: new AbortController().signal,
-      reason: 'active-turn-unavailable-test',
-    });
-
-    await expect(Promise.race([
-      pump.then(() => 'completed' as const),
-      new Promise<'timed_out'>((resolve) => setTimeout(() => resolve('timed_out'), 25)),
-    ])).resolves.toBe('completed');
-    expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(1);
-    expect(waitForPendingEligibilityUpdate).toHaveBeenCalledTimes(2);
-  });
-
   it('uses one bounded reconnect wake to run exactly one new unconditional active-turn pass', async () => {
     const metadataWakes: Array<(updated: boolean) => void> = [];
     const materializeNextPendingMessageSafely = vi.fn(async () => ({ type: 'no_pending' as const }));

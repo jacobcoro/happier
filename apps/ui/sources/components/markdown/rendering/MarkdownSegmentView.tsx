@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { EnrichedMarkdownTextAdapter } from '../enriched/EnrichedMarkdownTextAdapter';
 import type { Option, OptionLongPressHandler } from '../MarkdownBlockView';
-import type { MarkdownSourceRange, MarkdownSourceRangeAction } from '../MarkdownView';
+import type { MarkdownSourceRange, MarkdownSourceRangeAction, MarkdownSourceRangeLayoutObserver } from '../MarkdownView';
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { MarkdownRenderSegment } from './markdownRenderSegmentTypes';
@@ -28,6 +28,7 @@ type MarkdownSegmentViewProps = Readonly<{
      * type because a live handler, highlight or comment came and went.
      */
     sourceRangeInteractionsActive: boolean;
+    sourceRangeLayoutObserver?: MarkdownSourceRangeLayoutObserver;
     onPressSourceRange?: (action: MarkdownSourceRangeAction) => void;
     renderAfterSourceRange?: (action: MarkdownSourceRangeAction) => React.ReactNode;
     highlightSourceRange?: MarkdownSourceRange | null;
@@ -45,7 +46,7 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     const content = props.segment.type === 'enriched-markdown'
         ? (
             <EnrichedMarkdownTextAdapter
-                markdown={props.segment.markdown}
+                markdown={props.segment.renderMarkdown ?? props.segment.markdown}
                 profile={props.profile}
                 selectable={props.selectable}
                 onLinkPress={props.onLinkPress}
@@ -84,7 +85,11 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     // plain container it replaces and selection and link presses inside still reach the content.
     const pressable = props.onPressSourceRange !== undefined;
     return (
-        <View style={styles.sourceRangeContainer}>
+        <View style={styles.sourceRangeContainer}
+            onLayout={props.sourceRangeLayoutObserver
+                ? (event) => props.sourceRangeLayoutObserver?.onLayout(sourceAction, event.nativeEvent.layout)
+                : undefined}
+        >
             <Pressable
                 testID={testID}
                 accessibilityRole={pressable ? 'button' : undefined}

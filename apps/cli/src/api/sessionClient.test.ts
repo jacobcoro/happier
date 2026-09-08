@@ -10,6 +10,7 @@ import {
     bindApiSessionSocketPairMock,
     createApiSessionSocketStub,
     flushApiSessionClientMessageCommitQueue,
+    resolveApiSessionSocketDefaultAck,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import { createMockSession, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -2667,14 +2668,20 @@ describe('ApiSessionClient connection handling', () => {
         await expect(waitPromise).resolves.toBe(true);
     });
 
-    it('waitForMetadataUpdate resolves false when user-scoped socket disconnects', async () => {
+    it('waitForMetadataUpdate stays subscribed across user-scoped disconnects', async () => {
         mockUserSocket.connected = true;
         const client = createClient('fake-token', mockSession);
 
         const waitPromise = startMetadataWait(client);
 
-        triggerLastUserSocketLifecycleEvent('disconnect');
-        await expect(waitPromise).resolves.toBe(false);
+        mockUserSocket.trigger('disconnect', 'transport close');
+        emitMetadataWakeUpdate({
+            session: mockSession,
+            path: '/tmp/after-disconnect',
+            updateId: 'update-after-disconnect',
+            seq: 2,
+        });
+        await expect(waitPromise).resolves.toBe(true);
     });
 
     it('waitForMetadataUpdate does not miss fast user-scoped update-session wakeups', async () => {
@@ -2717,9 +2724,6 @@ describe('ApiSessionClient connection handling', () => {
     });
 
     it('updateMetadata syncs a snapshot first when metadataVersion is unknown', async () => {
-                const sessionSocket = createConfiguredSocket({ connected: true });
-                const userSocket = createConfiguredSocket({ connected: false });
-
                 const serverMetadata = {
                     ...mockSession.metadata,
                     tools: ['tool-1'],
@@ -2729,12 +2733,17 @@ describe('ApiSessionClient connection handling', () => {
                     serverMetadata,
                 );
 
-                const emitWithAck = vi.fn().mockResolvedValueOnce({
-                    result: 'success',
-                    version: 6,
-                    metadata: encryptedServerMetadata,
+                const sessionSocket = createConfiguredSocket({
+                    connected: true,
+                    emitWithAck: (event, payload) => event === 'update-metadata'
+                        ? {
+                            result: 'success',
+                            version: 6,
+                            metadata: encryptedServerMetadata,
+                        }
+                        : resolveApiSessionSocketDefaultAck(event, payload),
                 });
-                sessionSocket.emitWithAck = emitWithAck;
+                const userSocket = createConfiguredSocket({ connected: false });
 
                 replaceSocketPair({ sessionSocket, userSocket });
 
@@ -2761,7 +2770,7 @@ describe('ApiSessionClient connection handling', () => {
                     return metadata;
                 });
 
-                expect(emitWithAck).toHaveBeenCalledWith(
+                expect(sessionSocket.emitWithAck).toHaveBeenCalledWith(
                     'update-metadata',
                     expect.objectContaining({ expectedVersion: 5 }),
                 );

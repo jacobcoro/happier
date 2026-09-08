@@ -21,6 +21,10 @@ on:
         required: false
         default: ''
         type: string
+      status_artifact_name:
+        required: false
+        default: happier-release-status
+        type: string
     outputs:
       source_sha:
         value: ${{ jobs.resolve.outputs.source_sha }}
@@ -184,6 +188,7 @@ jobs:
           EXPECTED_CHANNEL: ${{ inputs.expected_channel }}
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_OPERATION_ID: ${{ inputs.expected_operation_id }}
+          STATUS_ARTIFACT_NAME: ${{ inputs.status_artifact_name }}
         run: |
           set -euo pipefail
           if ! [[ "$ORIGIN_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
@@ -203,6 +208,7 @@ jobs:
             --expected-channel "$EXPECTED_CHANNEL" \
             --expected-source-sha "$EXPECTED_SOURCE_SHA" \
             --expected-operation-id "$EXPECTED_OPERATION_ID" \
+            --status-artifact-name "$STATUS_ARTIFACT_NAME" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Download and verify exact release status bytes
@@ -231,6 +237,7 @@ jobs:
           EXPECTED_CHANNEL: ${{ inputs.expected_channel }}
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_OPERATION_ID: ${{ inputs.expected_operation_id }}
+          STATUS_ARTIFACT_NAME: ${{ inputs.status_artifact_name }}
           DOWNLOADED_DIGEST: ${{ steps.inspect.outputs.artifact_digest }}
         run: |
           set -euo pipefail
@@ -245,4 +252,5 @@ jobs:
             --expected-channel "$EXPECTED_CHANNEL" \
             --expected-source-sha "$EXPECTED_SOURCE_SHA" \
             --expected-operation-id "$EXPECTED_OPERATION_ID" \
+            --status-artifact-name "$STATUS_ARTIFACT_NAME" \
             --github-output "$GITHUB_OUTPUT"

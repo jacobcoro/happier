@@ -4,7 +4,7 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSetting } from '@/sync/domains/state/storage';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
 import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
-import { resolveRichEligibility } from '@/components/ui/markdown/editor/core/eligibility/richEligibility';
+import { useRichEligibility } from '@/components/ui/markdown/editor/core/eligibility/richEligibility';
 import type { MarkdownRichIneligibleReason } from '@/components/ui/markdown/editor/core/eligibility/markdownRichEligibility';
 import type { MarkdownEditMode } from '@/components/ui/markdown/editor/markdownEditorTypes';
 
@@ -40,6 +40,7 @@ export type MarkdownFileEditModeState = Readonly<{
     markdownEditMode: MarkdownEditMode;
     /** Whether the current file can be rich-edited (flag on, `.md`, in-budget, round-trippable). */
     richEligible: boolean;
+    richEligibilityPending: boolean;
     /** Why rich is unavailable (drives the toggle's disabled reason copy). */
     richDisabledReason?: MarkdownRichIneligibleReason;
     /** Markdown to seed the active surface with (host seed, mode-switched, or fallback-latest). */
@@ -72,6 +73,10 @@ function cancelScheduledFrame(handle: RafHandle): void {
 export function useMarkdownFileEditMode(input: Readonly<{
     /** File path (drives language detection — `.md` only is rich-eligible). */
     filePath: string;
+    /** Eligibility work is needed only while the file editor is active. */
+    isEditing?: boolean;
+    /** Pause live raw-value reads without changing the retained editor identity. */
+    isActive?: boolean;
     /** Host's authoritative seed for the editor (from `useSessionFileEditorState`). */
     editorSeedText: string;
     /** Host's authoritative reset key — changes on external refresh / cancel / save. */
@@ -113,7 +118,10 @@ export function useMarkdownFileEditMode(input: Readonly<{
         setMarkdownModeResetNonce((nonce) => nonce + 1);
     }, [input.editorResetKey, input.editorSeedText]);
 
+    // The handle exposes pre-debounce text but no live-value subscription. Read it
+    // only for visible raw editing so unflushed edits can update the eligibility gate.
     React.useEffect(() => {
+        if (input.isEditing === false || input.isActive === false || !markdownRichEditorEnabled || language !== 'markdown') return;
         if (markdownEditMode !== 'raw') {
             setLiveMarkdownText((current) => current === markdownEditorSeedText ? current : markdownEditorSeedText);
             return;
@@ -137,23 +145,17 @@ export function useMarkdownFileEditMode(input: Readonly<{
                 cancelScheduledFrame(frameHandle);
             }
         };
-    }, [input.editorHandleRef, input.getEditorText, markdownEditMode, markdownEditorSeedText]);
+    }, [input.editorHandleRef, input.getEditorText, input.isEditing, input.isActive, language, markdownRichEditorEnabled, markdownEditMode, markdownEditorSeedText]);
 
     // Eligibility is decided on the live raw text while the raw surface is active,
     // otherwise on the latest rich/raw seed. This keeps the file-pane toggle in
     // sync with authoritative edits instead of only host reseeds.
     const eligibilityText = markdownEditMode === 'raw' ? liveMarkdownText : markdownEditorSeedText;
-    const eligibility = React.useMemo(() => {
-        if (!markdownRichEditorEnabled) {
-            return { eligible: false, reason: undefined as MarkdownRichIneligibleReason | undefined };
-        }
-        const result = resolveRichEligibility(eligibilityText, {
-            language,
-            maxBytes,
-            htmlRoundTripMaxBytes,
-        });
-        return { eligible: result.eligible, reason: result.reason };
-    }, [eligibilityText, htmlRoundTripMaxBytes, language, markdownRichEditorEnabled, maxBytes]);
+    const eligibility = useRichEligibility(eligibilityText, {
+        language: markdownRichEditorEnabled && input.isEditing !== false ? language : null,
+        maxBytes,
+        htmlRoundTripMaxBytes,
+    });
 
     const richEligible = eligibility.eligible;
 
@@ -194,7 +196,8 @@ export function useMarkdownFileEditMode(input: Readonly<{
     return {
         markdownEditMode,
         richEligible,
-        richDisabledReason: richEligible ? undefined : eligibility.reason,
+        richEligibilityPending: eligibility.pending === true,
+        richDisabledReason: richEligible || !markdownRichEditorEnabled ? undefined : eligibility.reason,
         seedText: markdownEditorSeedText,
         resetKey,
         onToggle,

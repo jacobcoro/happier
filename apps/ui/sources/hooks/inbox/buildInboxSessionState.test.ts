@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
-import { buildInboxSessionState } from './buildInboxSessionState';
+import { buildInboxSessionState, hasInboxSessionContent } from './buildInboxSessionState';
 
 function makeUnreadRenderable(overrides: Partial<SessionListRenderableSession> = {}): SessionListRenderableSession {
     return {
@@ -210,5 +210,39 @@ describe('buildInboxSessionState', () => {
 
         expect(state.sessionsNeedingAttention).toEqual([]);
         expect(state.unreadSessions).toEqual([]);
+    });
+
+    it('excludes archived sessions from both actionable and unread inbox attention', () => {
+        const archivedSession = makeSession({
+            archivedAt: 123,
+            agentState: {
+                controlledByUser: null,
+                requests: {
+                    request_1: {
+                        tool: 'Bash',
+                        kind: 'permission',
+                        arguments: {},
+                        createdAt: now,
+                    },
+                },
+            },
+        });
+        const archivedRenderable = makeUnreadRenderable({
+            hasUnreadMessages: true,
+        });
+
+        const state = buildInboxSessionState({
+            sessions: [archivedSession],
+            sessionRows: [archivedRenderable],
+            nowMs: now,
+        });
+
+        expect(state.sessionsNeedingAttention).toEqual([]);
+        expect(state.unreadSessions).toEqual([]);
+        expect(hasInboxSessionContent({
+            sessions: [archivedSession],
+            sessionRows: [archivedRenderable],
+            nowMs: now,
+        })).toBe(false);
     });
 });

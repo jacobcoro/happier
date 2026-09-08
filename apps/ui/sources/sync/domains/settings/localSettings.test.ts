@@ -26,6 +26,7 @@ describe('localSettingsParse', () => {
         expect(parsed.localNotificationsEnabled).toBe(true);
         expect(parsed.localNotificationsShowReady).toBe(true);
         expect(parsed.localNotificationsShowReadyMessageText).toBe(true);
+        expect(parsed.localNotificationsShowRequestMessageText).toBe(true);
         expect(parsed.localNotificationsShowPendingPermissionRequests).toBe(true);
         expect(parsed.localNotificationsShowPendingUserActionRequests).toBe(true);
         expect(parsed.localNotificationsForegroundBehavior).toBe('full');
@@ -265,6 +266,7 @@ describe('localSettingsParse', () => {
             localNotificationsEnabled: false,
             localNotificationsShowReady: false,
             localNotificationsShowReadyMessageText: false,
+            localNotificationsShowRequestMessageText: false,
             localNotificationsShowPendingPermissionRequests: false,
             localNotificationsShowPendingUserActionRequests: false,
             localNotificationsForegroundBehavior: 'silent',
@@ -276,6 +278,7 @@ describe('localSettingsParse', () => {
         expect(parsed.localNotificationsEnabled).toBe(false);
         expect(parsed.localNotificationsShowReady).toBe(false);
         expect(parsed.localNotificationsShowReadyMessageText).toBe(false);
+        expect(parsed.localNotificationsShowRequestMessageText).toBe(false);
         expect(parsed.localNotificationsShowPendingPermissionRequests).toBe(false);
         expect(parsed.localNotificationsShowPendingUserActionRequests).toBe(false);
         expect(parsed.localNotificationsForegroundBehavior).toBe('silent');

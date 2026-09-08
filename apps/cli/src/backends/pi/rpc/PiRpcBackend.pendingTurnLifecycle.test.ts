@@ -612,6 +612,50 @@ describe('PiRpcBackend pending turn lifecycle', () => {
     }
   });
 
+  it('settles the cancelled turn from Pi\'s successful abort response when its terminal event is absent', async () => {
+    const workDir = makeTempDir('happier-pi-rpc-abort-response-settlement-');
+    tempDirs.push(workDir);
+    const backend = createBackend({
+      workDir,
+      scriptPath: writeFakePiRpcScript(
+        workDir,
+        'fake-pi-rpc-abort-response-settlement.js',
+        "      out({ type: 'agent_start' });",
+      ),
+    });
+    const messages: AgentMessage[] = [];
+    let resolveRunning: (() => void) | null = null;
+    const running = new Promise<void>((resolve) => {
+      resolveRunning = resolve;
+    });
+    backend.onMessage((message) => {
+      messages.push(message);
+      if (message.type === 'status' && message.status === 'running') resolveRunning?.();
+    });
+    shortenPendingTurnTimeout(backend, 100);
+
+    try {
+      const session = await backend.startSession();
+      const promptOutcome = backend.sendPrompt(session.sessionId, 'cancel this turn').then(
+        () => 'resolved',
+        (error: Error) => `rejected: ${error.message}`,
+      );
+      await Promise.race([
+        running,
+        rejectAfter(500, 'Pi prompt did not enter the running state'),
+      ]);
+
+      await expect(Promise.race([
+        backend.cancel(session.sessionId),
+        rejectAfter(500, 'successful Pi abort response did not settle the pending turn'),
+      ])).resolves.toBeUndefined();
+      await expect(promptOutcome).resolves.toBe('resolved');
+      expect(messages).toContainEqual(expect.objectContaining({ type: 'status', status: 'idle' }));
+    } finally {
+      await backend.dispose();
+    }
+  });
+
   it('does not replace an existing pending turn when creating another turn', async () => {
     const workDir = makeTempDir('happier-pi-rpc-pending-turn-existing-');
     tempDirs.push(workDir);

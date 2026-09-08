@@ -54,6 +54,49 @@ export const LEGEND_NATIVE_RUNTIME_BUILDS = Object.freeze(['react-native.mjs', '
  */
 export const LEGEND_PATCH_MARKERS = Object.freeze([
     {
+        id: 'maintained-end-commit-anchor',
+        marker: 'HAPPIER-MVCP-END-ANCHOR',
+        minOccurrences: 1,
+        defect: 'Suppressing MVCP while following the tail exposed prepended geometry before the deferred end-maintenance scroll. Nonanimated maintenance now anchors the end through the same commit, without taking over an explicit command.',
+        evidence: 'sources/components/sessions/transcript/viewport/shell/renderer/legendListRenderer.real.integration.test.tsx, sources/components/sessions/transcript/viewport/shell/renderer/legendListRenderer.native.real.integration.test.tsx',
+        removeWhen: 'upstream preserves nonanimated held-end geometry through MVCP commits and respects explicit scrolling authority',
+    },
+    {
+        id: 'painted-dataset-readiness',
+        marker: 'preserveReadyToRender = ctx.state.didLoad',
+        minOccurrences: 1,
+        defect: 'A delayed one-pixel footer measurement reset initial-scroll readiness after onLoad, hiding the same painted rows until bootstrap settled again.',
+        evidence: 'sources/components/sessions/transcript/paint/legendWebRowVisibility.real.integration.test.tsx',
+        removeWhen: 'upstream preserves painted dataset readiness during geometry retargeting while concealing genuine dataset replacements',
+    },
+    {
+        id: 'native-initial-retry-takeover-cancellation',
+        marker: 'if (state.scrollingTo !== isStillScrollingTo) return;',
+        minOccurrences: 1,
+        builds: LEGEND_NATIVE_RUNTIME_BUILDS,
+        defect: 'Android silent initial retry queued its return-to-target frame after a nudge without checking whether user takeover had retired that target.',
+        evidence: '.project/reviews/2026-09-05-14-11-29-transcript-fresh-eyes-4cefb8/subagents/viewport_authority.md',
+        removeWhen: 'upstream binds delayed silent-initial retry writes to their scrollingTo lifecycle',
+    },
+    {
+        id: 'imperative-scroll-takeover-cancellation',
+        marker: 'cancelScroll: () => {',
+        minOccurrences: 1,
+        defect: 'User takeover cancelled initial preservation but left queued ordinary commands and their completion work authorized.',
+        evidence: '.project/reviews/2026-09-05-14-11-29-transcript-fresh-eyes-4cefb8/subagents/viewport_authority.md',
+        removeWhen: 'upstream exposes cancellation covering queued and in-flight imperative positioning and initial preservation',
+    },
+    {
+        id: 'keyed-measurement-current-data',
+        marker: 'resolveMeasuredItemIndex(',
+        minOccurrences: 5,
+        defect: 'A keyed measurement arriving before data reconciliation used the previous position '
+            + 'index against current data, assigning a neighboring row size version and invalidating '
+            + 'the measurement when the correct row was read.',
+        evidence: '.project/reviews/2026-09-05-11-54-08-scm-files-experience-7780e6/evidence/focus-exit-version-trace.json',
+        removeWhen: 'upstream resolves keyed measurement inputs against current data while preserving the MVCP position model',
+    },
+    {
         id: 'position-suffix-shift',
         marker: 'positionShift',
         minOccurrences: 1,

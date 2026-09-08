@@ -1,4 +1,5 @@
 import type { AgentBackend } from '@/agent/core/AgentBackend';
+import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import type { AgentPromptPayload } from '@/agent/core/AgentPromptPayload';
 import type { AgentId } from '@happier-dev/agents';
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV1 } from '@happier-dev/protocol';
@@ -15,6 +16,9 @@ import { readCredentials, readSettings } from '@/persistence';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { assertBackendEnabledByAccountSettings } from '@/settings/backendEnabled';
+import { createRunScopedExecutionPermissionHandler } from './runScopedExecutionPermissionHandler';
+
+export { createRunScopedExecutionPermissionHandler } from './runScopedExecutionPermissionHandler';
 
 export { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
 
@@ -55,15 +59,22 @@ function createLazyConfiguredAcpExecutionRunBackend(opts: Readonly<{
   backendTarget: BackendTargetRefV1;
   modelId?: string;
   permissionMode: string;
+  runId?: string;
   credentials?: Awaited<ReturnType<typeof readCredentials>> | null;
   accountSettings?: Readonly<Record<string, unknown>> | null;
+  interactivePermissionHandler?: AcpPermissionHandler;
 }>): AgentBackend {
   const configuredBackendId = opts.backendTarget.kind === 'configuredAcpBackend'
     ? opts.backendTarget.backendId
     : '';
+  const runId = normalizeNonEmptyString(opts.runId);
+  const runPermissionScope = opts.interactivePermissionHandler && runId
+    ? createRunScopedExecutionPermissionHandler({ runId, handler: opts.interactivePermissionHandler })
+    : null;
   const permissionHandler = createExecutionRunPermissionHandler({
     backendId: configuredBackendId || 'customAcp',
     permissionMode: opts.permissionMode,
+    interactiveHandler: runPermissionScope?.handler,
   });
   const handlers = new Set<Parameters<AgentBackend['onMessage']>[0]>();
   const registeredHandlers = new Set<Parameters<AgentBackend['onMessage']>[0]>();
@@ -188,6 +199,7 @@ function createLazyConfiguredAcpExecutionRunBackend(opts: Readonly<{
       await backend.waitForResponseComplete(timeoutMs);
     },
     async dispose() {
+      runPermissionScope?.dispose('Execution run disposed');
       const backend = await resolvedBackendPromise?.catch(() => null);
       if (!backend) return;
       await backend.dispose();
@@ -223,6 +235,7 @@ export function createExecutionRunBackend(opts: Readonly<{
    * root is run-scoped, so a later resume re-materializes rather than reusing a stale root.
    */
   connectedServicesCleanup?: (() => Promise<void>) | null;
+  interactivePermissionHandler?: AcpPermissionHandler;
 }>): AgentBackend {
   const connectedServicesCleanup = opts.connectedServicesCleanup ?? null;
   let acquiredIsolationCleanup: (() => void | Promise<void>) | null = null;
@@ -246,18 +259,26 @@ export function createExecutionRunBackend(opts: Readonly<{
       });
     }
     if (backendId === 'customAcp' && opts.backendTarget?.kind === 'configuredAcpBackend') {
+      const runId = normalizeNonEmptyString(opts.runId);
       return createLazyConfiguredAcpExecutionRunBackend({
         cwd: opts.cwd,
         backendTarget: opts.backendTarget,
         modelId: opts.modelId,
         permissionMode: opts.permissionMode,
+        ...(runId ? { runId } : {}),
         credentials: null,
         accountSettings,
+        interactivePermissionHandler: opts.interactivePermissionHandler,
       });
     }
+    const runId = normalizeNonEmptyString(opts.runId);
+    const runPermissionScope = opts.interactivePermissionHandler && runId
+      ? createRunScopedExecutionPermissionHandler({ runId, handler: opts.interactivePermissionHandler })
+      : null;
     const permissionHandler = createExecutionRunPermissionHandler({
       backendId,
       permissionMode: opts.permissionMode,
+      interactiveHandler: runPermissionScope?.handler,
     });
     const descriptor = getExecutionRunBackendDescriptor(backendId);
     if (!descriptor) {
@@ -329,12 +350,13 @@ export function createExecutionRunBackend(opts: Readonly<{
       ...(bundle ? { isolation: { env: bundle.env, settingsPath: bundle.settingsPath } } : {}),
     });
 
-    if (shouldCleanupBundleOnDispose || connectedServicesCleanup) {
+    if (shouldCleanupBundleOnDispose || connectedServicesCleanup || runPermissionScope) {
       const originalDispose = backend.dispose.bind(backend);
       let disposal: Promise<void> | null = null;
       backend.dispose = () => {
         if (!disposal) {
           disposal = (async () => {
+            runPermissionScope?.dispose('Execution run disposed');
             try {
               await originalDispose();
             } finally {

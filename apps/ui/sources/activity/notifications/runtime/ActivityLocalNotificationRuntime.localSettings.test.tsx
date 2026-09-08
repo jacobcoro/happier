@@ -61,6 +61,25 @@ describe('ActivityLocalNotificationRuntime local settings subscriptions', () => 
         vi.clearAllMocks();
     });
 
+    it('updates request privacy without hiding the request notification', async () => {
+        const { ActivityLocalNotificationRuntime } = await import('./ActivityLocalNotificationRuntime');
+        const { notifyActivityAgentRequest } = await import('./activityLocalNotificationBus');
+        const { sendExpoLocalNotification } = await import('../channels/sendExpoLocalNotification');
+        const screen = await renderScreen(<ActivityLocalNotificationRuntime />);
+        const request = { sessionId: 'private-session', requestId: 'request-1', requestKind: 'permission' as const,
+            toolName: 'Bash', toolArgs: { command: 'cat private.txt' } };
+        await act(async () => { notifyActivityAgentRequest(request); });
+        expect(vi.mocked(sendExpoLocalNotification).mock.calls.at(-1)?.[0].body).toContain('cat private.txt');
+        await act(async () => {
+            getStorage().getState().applyLocalSettings({ localNotificationsShowRequestMessageText: false });
+        });
+        await act(async () => { notifyActivityAgentRequest({ ...request, requestId: 'request-2' }); });
+        const privateNotification = vi.mocked(sendExpoLocalNotification).mock.calls.at(-1)?.[0];
+        expect(privateNotification?.body).not.toContain('private.txt');
+        expect(privateNotification?.data?.requestId).toBe('request-2');
+        await act(async () => { screen.tree.unmount(); });
+    });
+
     it('does not rerender for local setting writes unrelated to local notifications', async () => {
         const { ActivityLocalNotificationRuntime } = await import('./ActivityLocalNotificationRuntime');
         let updateCount = 0;

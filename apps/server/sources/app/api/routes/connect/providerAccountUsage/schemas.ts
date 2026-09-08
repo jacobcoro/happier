@@ -5,6 +5,7 @@ import {
     ProviderAccountUsageRecordIdSchema,
     ProviderAccountUsageRecordKeyV1Schema,
     ProviderAccountUsageSnapshotV1Schema,
+    ProviderAccountSubscriptionV1Schema,
     SealedProviderAccountUsageSnapshotV1Schema,
     buildProviderAccountUsageRecordId,
 } from "@happier-dev/protocol";
@@ -25,6 +26,7 @@ export const ProviderAccountUsageStatusSchema = z.enum([
 
 export const ProviderAccountUsageRecordMetadataSchema = z.object({
     materialFingerprint: z.string().trim().min(1).max(256).optional(),
+    subscription: ProviderAccountSubscriptionV1Schema.optional(),
 }).strict();
 
 export const UpsertProviderAccountUsageRecordSchema = z.object({

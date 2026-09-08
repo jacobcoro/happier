@@ -2528,15 +2528,11 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         recordLayoutCommitObserved,
         scrollObservationHost.observeCommittedProjectionLayout,
     ]);
-    const webViewInteractionProps = Platform.OS === 'web'
-        ? scrollObservationHost.platformInteractionProps as Partial<React.ComponentProps<typeof View>>
-        : undefined;
     return (
         <SessionTranscriptAgentAttributionProvider value={agentAttributionIndex}>
         <TranscriptMotionProvider sessionKey={props.sessionId} config={motionConfig}>
               <View
                 style={{ flex: 1 }}
-                {...webViewInteractionProps}
               >
                 <TranscriptListShell<ChatTranscriptListItem>
                     ref={commitListRef}

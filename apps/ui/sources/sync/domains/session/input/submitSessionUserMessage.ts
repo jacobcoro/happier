@@ -100,7 +100,6 @@ function resolveSubmitDecision(opts: SubmitSessionUserMessageOptions): SessionMe
     return decideSessionMessageDelivery({
         configuredMode: opts.configuredMode,
         busySteerSendPolicy: opts.busySteerSendPolicy,
-        sessionInactiveResumePolicy: opts.sessionInactiveResumePolicy,
         explicitMode: opts.explicitMode,
         session: opts.session,
         nowMs: opts.nowMs,
@@ -298,16 +297,21 @@ function requestedActionRequiresRuntimeActivation(action: PendingRequestedAction
     return action.kind === 'send_now' || action.kind === 'steer_now';
 }
 
-function shouldAttemptOnlineOnlyResume(
+function selectInactiveSessionResumePolicy(
     opts: SubmitSessionUserMessageOptions,
     decision: SessionMessageDeliveryDecision,
     requestedAction: PendingRequestedActionV1,
-): boolean {
-    return (opts.sessionInactiveResumePolicy ?? DEFAULT_SESSION_INACTIVE_RESUME_POLICY) === 'online_only'
-        && opts.requestedAction === undefined
+): 'when_available' | 'online_only' | null {
+    if (
+        opts.requestedAction === undefined
         && decision.intent === 'default'
         && requestedAction.kind === 'enqueue'
-        && (opts.session.active === false || opts.session.presence !== 'online');
+        && (opts.session.active === false || opts.session.presence !== 'online')
+    ) {
+        const policy = opts.sessionInactiveResumePolicy ?? DEFAULT_SESSION_INACTIVE_RESUME_POLICY;
+        return policy === 'when_available' || policy === 'online_only' ? policy : null;
+    }
+    return null;
 }
 
 async function directSend(
@@ -380,8 +384,8 @@ async function enqueuePending(
     // Freeze the row action before persistence starts. Neither an enqueue delay nor a later
     // readiness refresh may reinterpret the caller's chosen action/command.
     const requestedAction = selectSubmitRequestedAction(opts, decision);
-    const attemptOnlineOnlyResume = shouldAttemptOnlineOnlyResume(opts, decision, requestedAction);
-    const wakeOpts = requestedActionRequiresRuntimeActivation(requestedAction) || attemptOnlineOnlyResume ? getPendingQueueWakeResumeOptions({
+    const inactiveResumePolicy = selectInactiveSessionResumePolicy(opts, decision, requestedAction);
+    const wakeOpts = requestedActionRequiresRuntimeActivation(requestedAction) || inactiveResumePolicy !== null ? getPendingQueueWakeResumeOptions({
         sessionId: opts.sessionId,
         session: opts.session,
         resumeCapabilityOptions: opts.resumeCapabilityOptions,
@@ -393,6 +397,9 @@ async function enqueuePending(
 
     let enqueueResult: PendingMessageSubmitResult;
     try {
+        const wakeFromUiForWhenAvailable = inactiveResumePolicy === 'when_available' && wakeOpts
+            ? await shouldWakePendingInputFromUi(port, opts, wakeOpts.machineId)
+            : null;
         let didMarkOutboundHandoff = false;
         let handoffLocalId: string | undefined;
         const markOutboundHandoff = (localId?: string) => {
@@ -414,6 +421,7 @@ async function enqueuePending(
             {
                 localId: opts.localId,
                 requestedAction,
+                ...(wakeFromUiForWhenAvailable === false ? { resumeWhenAvailable: true as const } : {}),
                 ...(opts.onOutboundHandoff
                     ? { onLocalPendingProjectionCreated: ({ localId }) => markOutboundHandoff(localId) }
                     : {}),
@@ -457,7 +465,7 @@ async function enqueuePending(
                 localId,
             };
         }
-        if (attemptOnlineOnlyResume && port.isMachineReachable?.(wakeOpts.machineId) !== true) {
+        if (inactiveResumePolicy === 'online_only' && port.isMachineReachable?.(wakeOpts.machineId) !== true) {
             return {
                 type: 'wake_pending',
                 persistence: 'pending',
@@ -465,7 +473,11 @@ async function enqueuePending(
                 localId,
             };
         }
-        if (!attemptOnlineOnlyResume && !(await shouldWakePendingInputFromUi(port, opts, wakeOpts.machineId))) {
+        const shouldWakeFromUi = wakeFromUiForWhenAvailable
+            ?? (inactiveResumePolicy === 'online_only'
+                ? true
+                : await shouldWakePendingInputFromUi(port, opts, wakeOpts.machineId));
+        if (!shouldWakeFromUi) {
             return {
                 type: 'success',
                 persistence: 'pending',

@@ -166,6 +166,35 @@ afterEach(() => {
 });
 
 describe('claudePreflightModelsProbeAdapter', () => {
+  it('uses the effective preflight environment for account and installed-runtime discovery', async () => {
+    fetchAnthropicModelsMock.mockResolvedValue([
+      { id: 'claude-opus-9', displayName: 'Opus 9', capabilities: fullEffort() },
+    ]);
+    const processEnv = {
+      ...process.env,
+      ANTHROPIC_API_KEY: 'profile-api-key',
+      HAPPIER_CLAUDE_PATH: '/profile/claude',
+    };
+
+    const raw = await claudePreflightModelsProbeAdapter.probeModelsRaw?.({
+      cwd: '/tmp',
+      timeoutMs: 1_500,
+      backendTarget: undefined,
+      accountSettings: null,
+      processEnv,
+    });
+
+    expect(raw).toEqual(expect.any(Array));
+    expect(fetchAnthropicModelsMock).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'profile-api-key',
+    }));
+    expect(probeClaudeInstalledRuntimeCapabilitiesMock).toHaveBeenCalledWith({
+      cwd: '/tmp',
+      timeoutMs: 1_500,
+      processEnv,
+    });
+  });
+
   it('projects authoritative returned membership with API facts and curated matching-row enrichment', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
     fetchAnthropicModelsMock.mockResolvedValue([
